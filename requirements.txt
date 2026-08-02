@@ -1,0 +1,45 @@
+# TRUST-EDR requirements.txt
+# Python 3.10 이상 필요 (speakeasy-emulator 요구사항)
+# 설치: pip install -r requirements.txt
+
+# --- 데이터 처리 ---
+numpy>=1.26
+pandas>=2.2
+scipy>=1.12
+
+# --- 모델링 ---
+scikit-learn>=1.4
+lightgbm>=4.3
+xgboost>=2.0
+
+# --- 설명가능성(XAI) ---
+shap>=0.45
+
+# --- 실험 관리 ---
+mlflow>=2.12
+
+# --- PE 특징 추출 모듈 ---
+pefile>=2023.2.7
+
+# --- 에뮬레이션 확장안 (D) ---
+speakeasy-emulator==1.5.11
+
+# --- API / 대시보드 ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+streamlit>=1.33
+python-multipart>=0.0.9      # FastAPI 파일 업로드용
+pydantic>=2.6
+
+# --- Alert 출력 ---
+requests>=2.31
+
+# --- 환경 변수 관리 (Slack Webhook URL, AWS 키 등) ---
+python-dotenv>=1.0
+
+# --- 시각화 (EDA용) ---
+matplotlib>=3.8
+seaborn>=0.13
+
+# --- 하이퍼파라미터 튜닝 ---
+optuna>=3.6
