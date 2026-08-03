@@ -3,6 +3,14 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# PE 샘플과 동적 분석 결과
+*.exe
+*.dll
+*.dmp
+artifacts/
+reports/
+data/raw/
+
 # C extensions
 *.so
 
