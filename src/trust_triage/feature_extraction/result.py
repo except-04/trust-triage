@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
+from .api_groups import ApiGroupReport
 from .schema import FeatureSchema
 
 
@@ -36,6 +37,7 @@ class FeatureExtractionResult:
     missing_features: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    api_groups: ApiGroupReport | None = None
 
     @classmethod
     def success(
@@ -44,9 +46,10 @@ class FeatureExtractionResult:
         schema: FeatureSchema,
         sha256: str,
         file_type: str,
-        values: list[float] | np.ndarray,
+        values: Sequence[float] | np.ndarray,
         missing_features: list[str] | None = None,
         warnings: list[str] | None = None,
+        api_groups: ApiGroupReport | None = None,
     ) -> "FeatureExtractionResult":
         vector = schema.validate_vector(values)
         return cls(
@@ -59,6 +62,7 @@ class FeatureExtractionResult:
             features=[float(value) for value in vector],
             missing_features=list(missing_features or []),
             warnings=list(warnings or []),
+            api_groups=api_groups,
         )
 
     @classmethod
@@ -110,9 +114,17 @@ class FeatureExtractionResult:
             "missing_features": list(self.missing_features),
             "warnings": list(self.warnings),
             "errors": list(self.errors),
+            "api_groups": (
+                self.api_groups.to_dict() if self.api_groups is not None else None
+            ),
         }
 
     def to_json(self, *, indent: int | None = 2) -> str:
         """NumPy 전용 자료형 없이 결과를 JSON 문자열로 직렬화한다."""
 
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+        return json.dumps(
+            self.to_dict(),
+            ensure_ascii=False,
+            indent=indent,
+            allow_nan=False,
+        )

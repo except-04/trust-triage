@@ -155,7 +155,7 @@ activemq-data/
 .env
 .envrc
 .venv
-trust-edr-env/
+trust-triage-env/
 env/
 venv/
 ENV/

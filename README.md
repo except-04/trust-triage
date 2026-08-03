@@ -221,7 +221,7 @@ git switch -c feature/calibration
 
 ## Feature extraction MVP
 
-The PE static extractor is documented in
-[`docs/feature-extraction.md`](docs/feature-extraction.md). It reads `.exe`
-and `.dll` files without executing them and returns the versioned
-`pe-static-mvp-v1` result schema.
+PE Feature 추출 방법은
+[`docs/feature-extraction/feature-extraction.md`](docs/feature-extraction/feature-extraction.md)에 정리되어 있습니다.
+공식 EMBER2024 Feature Version 3만 사용하며, `.exe`와 `.dll`을 실행하지 않고
+정적으로 읽어 고정 벡터를 반환합니다.
