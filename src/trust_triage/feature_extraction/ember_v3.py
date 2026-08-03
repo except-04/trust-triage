@@ -17,7 +17,7 @@ import pefile
 
 from .api_groups import classify_imports
 from .result import ExtractionStatus, FeatureExtractionResult
-from .schema import FeatureSchema
+from .schema import FeatureGroup, FeatureSchema
 
 
 DEFAULT_MAX_FILE_SIZE_BYTES: Final[int] = 200 * 1024 * 1024
@@ -156,7 +156,9 @@ def _build_schema(thrember_extractor: _ThremberExtractor) -> FeatureSchema:
 
     feature_names: list[str] = []
     group_signature: list[str] = []
+    feature_groups: list[FeatureGroup] = []
     seen_group_names: set[str] = set()
+    start_index = 0
 
     for feature_group in thrember_extractor.features:
         group_name = str(feature_group.name)
@@ -173,6 +175,14 @@ def _build_schema(thrember_extractor: _ThremberExtractor) -> FeatureSchema:
         feature_names.extend(
             f"{group_name}[{index}]" for index in range(dimension)
         )
+        feature_groups.append(
+            FeatureGroup(
+                name=group_name,
+                start_index=start_index,
+                dimension=dimension,
+            )
+        )
+        start_index += dimension
 
     if not feature_names:
         raise ValueError("the EMBER Feature configuration contains no Feature groups")
@@ -185,6 +195,7 @@ def _build_schema(thrember_extractor: _ThremberExtractor) -> FeatureSchema:
     return FeatureSchema(
         version=f"{EMBER_V3_SCHEMA_PREFIX}-{fingerprint}",
         feature_names=tuple(feature_names),
+        groups=tuple(feature_groups),
     )
 
 
@@ -281,6 +292,7 @@ class EmberV3Extractor:
                 values=vector,
                 warnings=warnings,
                 api_groups=api_groups,
+                is_dotnet=self._is_dotnet(pe),
             )
         except Exception as exc:
             return FeatureExtractionResult.failure(
@@ -304,6 +316,30 @@ class EmberV3Extractor:
         if magic == 0x20B:
             return "PE32+"
         return "UNKNOWN"
+
+    @staticmethod
+    def _is_dotnet(pe: pefile.PE) -> bool:
+        """CLR Runtime Header 디렉터리가 있는지 확인해 .NET 여부를 판별한다."""
+
+        try:
+            directory_index = pefile.DIRECTORY_ENTRY[
+                "IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR"
+            ]
+            directories = getattr(
+                getattr(pe, "OPTIONAL_HEADER", None),
+                "DATA_DIRECTORY",
+                [],
+            )
+            if len(directories) <= directory_index:
+                return False
+
+            clr_directory = directories[directory_index]
+            return bool(
+                int(getattr(clr_directory, "VirtualAddress", 0) or 0)
+                and int(getattr(clr_directory, "Size", 0) or 0)
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return False
 
 
 def extract_file(

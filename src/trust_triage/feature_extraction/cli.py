@@ -17,6 +17,7 @@ def format_summary(result: FeatureExtractionResult) -> str:
         f"상태: {result.status.value}",
         f"SHA-256: {result.sha256 or '-'}",
         f"파일 형식: {result.file_type}",
+        f".NET 여부: {'예' if result.is_dotnet else '아니오'}",
         f"EMBER Schema: {result.schema_version}",
         f"Feature 개수: {result.feature_count}",
     ]
@@ -31,6 +32,12 @@ def format_summary(result: FeatureExtractionResult) -> str:
                 "API 그룹:",
             ]
         )
+        if report.ordinal_imports:
+            lines.append("Ordinal 상세:")
+            lines.extend(
+                f"  - {item.dll} ordinal {item.ordinal}"
+                for item in report.ordinal_imports
+            )
         for group_name, match in report.groups.items():
             status = "발견" if match.matched else "미발견"
             api_text = ", ".join(match.apis) or "-"

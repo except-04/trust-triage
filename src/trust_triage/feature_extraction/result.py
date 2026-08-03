@@ -38,6 +38,7 @@ class FeatureExtractionResult:
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     api_groups: ApiGroupReport | None = None
+    is_dotnet: bool = False
 
     @classmethod
     def success(
@@ -50,6 +51,7 @@ class FeatureExtractionResult:
         missing_features: list[str] | None = None,
         warnings: list[str] | None = None,
         api_groups: ApiGroupReport | None = None,
+        is_dotnet: bool = False,
     ) -> "FeatureExtractionResult":
         vector = schema.validate_vector(values)
         return cls(
@@ -63,6 +65,7 @@ class FeatureExtractionResult:
             missing_features=list(missing_features or []),
             warnings=list(warnings or []),
             api_groups=api_groups,
+            is_dotnet=is_dotnet,
         )
 
     @classmethod
@@ -107,6 +110,7 @@ class FeatureExtractionResult:
             "schema_version": self.schema_version,
             "sha256": self.sha256,
             "file_type": self.file_type,
+            "is_dotnet": self.is_dotnet,
             "status": self.status.value,
             "feature_count": self.feature_count,
             "feature_names": list(self.feature_names),

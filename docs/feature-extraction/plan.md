@@ -13,8 +13,6 @@
 2. 파일 식별과 상태 확인을 위한 메타데이터
 3. 사람이 이해할 수 있는 Import API 그룹 정보
 
-EMBER Feature 벡터와 API 그룹 정보는 목적이 다르다.
-
 ```text
 PE 파일
  ├─ EMBER2024 v3 → 2568차원 모델 입력
@@ -28,35 +26,51 @@ PE 파일
 - [x] 원본 PE를 실행하지 않는 정적 분석
 - [x] SHA-256 계산
 - [x] PE32·PE32+ 형식 판별
+- [x] .NET 여부 판별
 - [x] 잘못된 파일과 파싱 실패 상태 구분
 - [x] 파일 크기 제한
 - [x] EMBER2024 v3 `thrember` 추출기 연동
 - [x] EMBER Feature Schema와 Feature 순서 고정
+- [x] 그룹별 시작·끝 인덱스가 포함된 Schema manifest 작성
 - [x] 기본 설정에서 2568차원 `float32` 벡터 생성
 - [x] 반복 추출 결과의 결정성 테스트
 - [x] Import Table의 API_GROUPS 분류
+- [x] API_GROUPS 결과에 DLL과 API의 정확한 연결 정보 포함
+- [x] Ordinal Import의 DLL·ordinal 상세 정보 보존
 - [x] JSON 전체 출력 CLI
 - [x] 핵심 정보만 출력하는 `--summary` CLI
+- [x] 모델팀 연동 문서 작성
 - [x] pytest 테스트 작성
 
-현재 테스트 결과는 `13 passed`다.
+현재 테스트 결과는 `19 passed`다.
 
 ### 현재 API_GROUPS
 
-현재 `api-groups-mvp-v1`에는 다음 세 그룹이 있다.
+현재 `api-groups-mvp-v2`에는 다음 세 그룹이 있다.
 
 - `registry`: 레지스트리 관련 API
 - `injection`: 프로세스 메모리 조작·인젝션 관련 API
 - `network`: 네트워크 통신 관련 API
 
 API_GROUPS는 원본 PE의 정적 Import Table에 이름으로 기록된 API를 분류한다.
-따라서 API를 Import했다고 실제로 실행했다는 뜻은 아니다.
+이름이 없는 Import는 DLL 이름과 ordinal 번호를 별도로 보존한다.
 
-또한 동적 API 로딩, 난독화, ordinal Import는 놓칠 수 있다. 그러므로 현재
-API_GROUPS 결과는 악성 확정값이 아니라 설명, Evidence 또는 JRR 위험 신호로만
-사용한다.
+따라서 API를 Import했다고 실제로 실행했다는 뜻은 아니다. 동적 API 로딩,
+난독화된 API, Export 정보를 확보하지 못한 ordinal API는 정확한 의미를 알 수 없다.
+현재 결과는 악성 확정값이 아니라 설명, Evidence 또는 JRR 위험 신호로 사용한다.
 
-## 3. 사용 방법
+## 3. 주요 파일
+
+- `src/trust_triage/feature_extraction/ember_v3.py`: EMBER v3 추출과 .NET 판별
+- `src/trust_triage/feature_extraction/api_groups.py`: Import API 그룹 분류
+- `src/trust_triage/feature_extraction/schema.py`: Feature Schema와 그룹 범위
+- `src/trust_triage/feature_extraction/result.py`: 공통 JSON 결과 구조
+- `src/trust_triage/feature_extraction/cli.py`: JSON·요약 CLI
+- `docs/feature-extraction/feature-extraction.md`: 사용법과 인터페이스
+- `docs/feature-extraction/ember-v3-schema.json`: EMBER v3 Schema manifest
+- `tests/test_feature_extraction.py`: 단위 테스트
+
+## 4. 사용 방법
 
 저장소 루트에서 실행한다.
 
@@ -71,6 +85,7 @@ JSON에는 다음 정보가 포함된다.
 - `schema_version`
 - `sha256`
 - `file_type`
+- `is_dotnet`
 - `status`
 - `feature_count`
 - `feature_names`
@@ -91,14 +106,15 @@ JSON에는 다음 정보가 포함된다.
 
 - 분석 상태
 - SHA-256
-- PE 형식
+- PE 형식과 .NET 여부
 - EMBER Schema 버전
 - Feature 개수
 - 이름이 있는 Import와 Ordinal Import 개수
+- Ordinal Import의 DLL·번호
 - API_GROUPS별 매칭 결과
 - 경고·오류
 
-## 4. 다른 모듈과 연결하는 방법
+## 5. 다른 모듈과 연결하는 방법
 
 ### Baseline 모델
 
@@ -122,167 +138,39 @@ if result.status.value == "SUCCESS":
 - 자료형
 - EMBER Feature 그룹 구성
 
-### API_GROUPS 사용
+### Schema manifest
+
+`ember-v3-schema.json`에는 모델팀이 확인해야 할 다음 정보가 들어 있다.
+
+- Schema 버전
+- 자료형
+- 전체 Feature 개수
+- 그룹별 시작 인덱스와 끝 인덱스
+- 그룹별 차원
+- Feature 이름 생성 규칙
+
+실제 Python Schema 객체는 전체 Feature 이름 목록도 제공한다.
+
+### API_GROUPS와 Ordinal Import
 
 `result.api_groups`는 모델 Feature 벡터와 분리된 메타데이터다.
 
-JRR에서 사용할 경우 예를 들어 다음과 같이 위험 신호로 전달할 수 있다.
+JRR에서 사용할 경우 다음 정보를 위험 신호 또는 Evidence로 전달할 수 있다.
 
-```text
-registry 매칭 여부
-injection 매칭 여부
-network 매칭 여부
-매칭된 API 이름과 DLL 이름
-```
+- `registry`, `injection`, `network` 매칭 여부
+- 매칭된 API 이름과 DLL 이름
+- 각 API와 해당 API를 제공하는 DLL의 정확한 연결 정보
+- 이름을 확인하지 못한 ordinal Import의 DLL과 번호
 
-단, Import 존재만으로 악성 행위나 실제 실행을 확정하지 않는다.
+Import 존재만으로 악성 행위나 실제 실행을 확정하지 않는다.
 
-## 5. 아직 결정하지 않은 사항
+## 6. 아직 결정하지 않은 사항
 
-### 5.1 2568개 전체 사용 여부
+### 6.1 2568개 전체 사용 여부
 
 현재 추출기는 EMBER2024 v3의 2568개 전체를 출력한다. 그러나 최종 모델이
 2568개를 모두 사용할지, 중요도가 높은 일부 Feature만 사용할지는 아직 확정하지
-않았다.# EMBER2024 Feature Version 3 추출
-
-이 모듈은 공식 EMBER2024 Feature Version 3(`thrember`) 구현을 사용해 PE
-파일의 정적 Feature 벡터를 추출합니다. 입력 파일을 실행하거나 DLL을
-로드하지 않습니다.
-
-구현 진행 상황과 추후 작업은 [plan.md](plan.md)에서 관리합니다.
-
-## 설치
-
-저장소 루트에서 다음 명령어를 실행합니다.
-
-```powershell
-.\trust-triage-env\Scripts\python.exe -m pip install -r requirements.txt
-.\trust-triage-env\Scripts\python.exe -m pip install -e . --no-deps --no-build-isolation
-```
-
-공식 EMBER2024 저장소는 커밋을 고정해 설치합니다. `signify`는 공식
-`thrember` 코드가 사용하는 API와 호환되는 버전으로 고정되어 있습니다.
-
-## CLI 실행
-
-```powershell
-.\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli .\path\to\sample.exe
-```
-
-성공하면 다음 정보를 포함한 JSON을 출력합니다.
-
-- 공식 EMBER2024 v3 Schema 버전
-- SHA-256
-- PE32 또는 PE32+
-- 고정된 `float32` Feature 벡터
-- Feature 개수와 각 원소 이름
-- 파싱 오류와 경고
-
-현재 공식 PE Feature 그룹 전체를 사용하면 2,568차원 벡터가 생성됩니다.
-Schema 버전의 뒤쪽 지문은 사용한 Feature 그룹과 차원을 식별합니다.
-
-JSON 출력을 한 줄로 보려면 `--compact`를 추가합니다.
-
-```powershell
-.\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli .\path\to\sample.exe --compact
-```
-
-공식 구현에서 특정 Feature 그룹만 선택한 JSON 설정을 사용할 수도 있습니다.
-팀원이 사용할 최종 Feature 목록 MD를 받으면 이 방식으로 구성을 맞추고
-학습 데이터와 실제 추출 결과의 차원을 검증합니다.
-
-```powershell
-.\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli .\path\to\sample.exe --features-file .\path\to\features.json
-```
-
-## 요약 출력
-
-전체 Feature 벡터를 JSON으로 출력하지 않고 핵심 정보만 확인하려면
-`--summary` 옵션을 사용합니다.
-
-```powershell
-.\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli .\path\to\sample.exe --summary
-```
-
-다음 정보를 표시합니다.
-
-- 분석 상태, SHA-256, 파일 형식, EMBER Schema
-- Feature 개수와 Schema 버전
-- Import 개수와 API_GROUPS 매칭 결과
-- 누락 Feature, 경고, 오류
-
-## API_GROUPS 분류 결과
-
-추출 결과에는 EMBER 모델 입력과 별도로 `api_groups` 필드가 포함됩니다. 이 필드는
-원본 PE의 Import Table에 선언된 API 이름을 팀에서 정한 그룹으로 분류한 정보입니다.
-
-현재 기본 그룹은 다음과 같습니다.
-
-- `registry`: 레지스트리 관련 API
-- `injection`: 프로세스 메모리 조작·인젝션 관련 API
-- `network`: 네트워크 통신 관련 API
-
-예시:
-
-```json
-{
-  "api_groups": {
-    "schema_version": "api-groups-mvp-v1",
-    "source": "PE_IMPORT_TABLE",
-    "named_import_count": 120,
-    "ordinal_import_count": 0,
-    "groups": {
-      "injection": {
-        "matched": true,
-        "match_count": 1,
-        "apis": ["WriteProcessMemory"],
-        "dlls": ["kernel32.dll"]
-      }
-    }
-  }
-}
-```
-
-`api_groups`는 EMBER v3의 2568개 모델 Feature를 대체하지 않습니다. 원본 Import
-목록에 선언된 API를 기준으로 하므로, 동적 API 로딩·난독화·ordinal Import는 놓칠 수
-있습니다. 따라서 이 결과는 악성 확정값이 아니라 설명, Evidence 또는 JRR 위험 신호로
-사용해야 합니다.
-
-## Python API
-
-```python
-from trust_triage.feature_extraction import EmberV3Extractor, extract_file
-
-extractor = EmberV3Extractor()
-result = extractor.extract("sample.exe")
-
-if result.status.value == "SUCCESS":
-    vector = result.to_float32(extractor.schema)
-
-# 기본 진입점도 EMBER v3만 사용합니다.
-result = extract_file("sample.exe")
-```
-
-## 처리 상태
-
-```text
-SUCCESS
-INVALID_PE
-PARSE_ERROR
-UNSUPPORTED
-FILE_TOO_LARGE
-```
-
-실패한 파일을 0으로 채워 성공한 것처럼 처리하지 않습니다. PE가 아니거나
-파싱에 실패하면 상태와 오류 메시지를 함께 반환합니다.
-
-## 다른 팀 모듈과 연결할 때
-
-Baseline 모델은 `status == "SUCCESS"`인 결과만 사용해야 합니다. 모델 학습에
-사용한 EMBER2024 Feature 그룹, 순서, 차원, `thrember` 커밋이 실제 추출기와
-같아야 합니다. 모델 학습과 실제 파일 추출에 서로 다른 Feature 구성을
-사용하면 안 됩니다.
-
+않았다.
 
 권장 실험 순서는 다음과 같다.
 
@@ -296,7 +184,7 @@ Baseline 모델은 `status == "SUCCESS"`인 결과만 사용해야 합니다. �
 이름·인덱스·순서를 별도 목록으로 고정하고, 모델 학습과 실제 추출에서 동일하게
 적용해야 한다.
 
-### 5.2 API_GROUPS의 최종 용도
+### 6.2 API_GROUPS의 최종 용도
 
 다음 중 어떤 용도로 사용할지 팀 합의가 필요하다.
 
@@ -309,7 +197,7 @@ API_GROUPS를 모델 학습 입력으로 사용하면 EMBER 2568개 모델과는
 Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·Evidence·JRR 보조
 정보로 사용하는 방향이다.
 
-## 6. 추후 추가 작업
+## 7. 추후 추가 작업
 
 ### 우선순위 높음
 
@@ -330,12 +218,12 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 
 ### 우선순위 낮음
 
+- [ ] 동일 버전 DLL Export Table을 이용한 ordinal 이름 보완
 - [ ] 동적 API 로딩 탐지 보조
-- [ ] Import가 없는 파일에 대한 별도 설명 필드
 - [ ] YARA·Deep Static 등 추가 분석 결과와 Evidence 연결
 - [ ] 모델 Feature Importance를 그룹 단위로 집계하는 리포트
 
-## 7. 구현하지 않는 범위
+## 8. 구현하지 않는 범위
 
 - PE 파일 실행
 - DLL 로딩 또는 함수 호출
@@ -344,7 +232,7 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 - Feature Extraction 브랜치에서 Baseline·Calibration·JRR 전체 구현
 - 원본 악성 PE나 대용량 학습 데이터를 저장소에 포함
 
-## 8. 변경 기록
+## 9. 변경 기록
 
 ### 2026-08-03
 
@@ -352,4 +240,9 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 - API_GROUPS MVP(`registry`, `injection`, `network`) 추가
 - JSON 출력에 `api_groups` 필드 추가
 - `--summary` 요약 CLI 추가
+- Feature Schema manifest와 그룹 범위 문서 추가
+- .NET PE 판별 필드 추가
+- Ordinal Import DLL·번호 상세 정보 추가
+- PE32·PE32+·실제 .NET 정상 파일 테스트 추가
+- API_GROUPS에 DLL·API 정확한 연결 정보와 v2 Schema 추가
 - Feature Extraction 문서를 전용 폴더로 정리

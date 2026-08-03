@@ -13,7 +13,7 @@ from typing import Iterable, Mapping
 import pefile
 
 
-API_GROUPS_SCHEMA_VERSION = "api-groups-mvp-v1"
+API_GROUPS_SCHEMA_VERSION = "api-groups-mvp-v2"
 
 # API 이름은 대소문자를 구분하지 않고 비교한다.
 # 목록은 팀에서 제안한 초기 MVP 목록이며, 이후 근거를 확인해 확장할 수 있다.
@@ -62,6 +62,22 @@ def _normalize_name(value: str) -> str:
 
 
 @dataclass(frozen=True)
+class ApiImportMatch:
+    """API와 해당 API를 제공하는 DLL의 정확한 연결 정보를 표현한다."""
+
+    dll: str
+    api: str
+
+    def to_dict(self) -> dict[str, str]:
+        """JSON 출력에 사용할 사전으로 변환한다."""
+
+        return {
+            "dll": self.dll,
+            "api": self.api,
+        }
+
+
+@dataclass(frozen=True)
 class ApiGroupMatch:
     """하나의 API 그룹에서 발견된 Import 정보를 표현한다."""
 
@@ -69,6 +85,7 @@ class ApiGroupMatch:
     match_count: int
     apis: tuple[str, ...]
     dlls: tuple[str, ...]
+    matches: tuple[ApiImportMatch, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """JSON 출력에 사용할 사전으로 변환한다."""
@@ -78,6 +95,24 @@ class ApiGroupMatch:
             "match_count": self.match_count,
             "apis": list(self.apis),
             "dlls": list(self.dlls),
+            "matches": [match.to_dict() for match in self.matches],
+        }
+
+
+@dataclass(frozen=True)
+class OrdinalImport:
+    """이름 대신 숫자로 기록된 Import를 표현한다."""
+
+    dll: str
+    ordinal: int | None
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON 출력에 사용할 사전으로 변환한다."""
+
+        return {
+            "dll": self.dll,
+            "ordinal": self.ordinal,
+            "resolved": False,
         }
 
 
@@ -89,6 +124,7 @@ class ApiGroupReport:
     source: str
     named_import_count: int
     ordinal_import_count: int
+    ordinal_imports: tuple[OrdinalImport, ...]
     groups: dict[str, ApiGroupMatch]
 
     def to_dict(self) -> dict[str, object]:
@@ -99,6 +135,9 @@ class ApiGroupReport:
             "source": self.source,
             "named_import_count": self.named_import_count,
             "ordinal_import_count": self.ordinal_import_count,
+            "ordinal_imports": [
+                ordinal_import.to_dict() for ordinal_import in self.ordinal_imports
+            ],
             "groups": {
                 name: match.to_dict() for name, match in self.groups.items()
             },
@@ -146,6 +185,7 @@ def classify_imports(
 
     named_import_count = 0
     ordinal_import_count = 0
+    ordinal_imports: list[OrdinalImport] = []
     import_entries = getattr(pe, "DIRECTORY_ENTRY_IMPORT", []) or []
 
     for import_entry in import_entries:
@@ -154,6 +194,14 @@ def classify_imports(
             api_name = _decode_import_name(getattr(imported, "name", None))
             if not api_name:
                 ordinal_import_count += 1
+                raw_ordinal = getattr(imported, "ordinal", None)
+                try:
+                    ordinal = int(raw_ordinal) if raw_ordinal is not None else None
+                except (TypeError, ValueError):
+                    ordinal = None
+                ordinal_imports.append(
+                    OrdinalImport(dll=dll_name, ordinal=ordinal)
+                )
                 continue
 
             named_import_count += 1
@@ -176,6 +224,10 @@ def classify_imports(
             match_count=len(pairs),
             apis=api_names,
             dlls=dll_names,
+            matches=tuple(
+                ApiImportMatch(dll=dll_name, api=api_name)
+                for dll_name, api_name in pairs
+            ),
         )
 
     return ApiGroupReport(
@@ -183,5 +235,6 @@ def classify_imports(
         source="PE_IMPORT_TABLE",
         named_import_count=named_import_count,
         ordinal_import_count=ordinal_import_count,
+        ordinal_imports=tuple(ordinal_imports),
         groups=group_results,
     )

@@ -5,6 +5,8 @@
 로드하지 않습니다.
 
 구현 진행 상황과 추후 작업은 [plan.md](plan.md)에서 관리합니다.
+EMBER v3 고정 Schema manifest는 [ember-v3-schema.json](ember-v3-schema.json)에서
+확인할 수 있습니다.
 
 ## 설치
 
@@ -29,6 +31,7 @@
 - 공식 EMBER2024 v3 Schema 버전
 - SHA-256
 - PE32 또는 PE32+
+- .NET 여부
 - 고정된 `float32` Feature 벡터
 - Feature 개수와 각 원소 이름
 - 파싱 오류와 경고
@@ -82,7 +85,7 @@ JSON 출력을 한 줄로 보려면 `--compact`를 추가합니다.
 ```json
 {
   "api_groups": {
-    "schema_version": "api-groups-mvp-v1",
+    "schema_version": "api-groups-mvp-v2",
     "source": "PE_IMPORT_TABLE",
     "named_import_count": 120,
     "ordinal_import_count": 0,
@@ -91,7 +94,13 @@ JSON 출력을 한 줄로 보려면 `--compact`를 추가합니다.
         "matched": true,
         "match_count": 1,
         "apis": ["WriteProcessMemory"],
-        "dlls": ["kernel32.dll"]
+        "dlls": ["kernel32.dll"],
+        "matches": [
+          {
+            "dll": "kernel32.dll",
+            "api": "WriteProcessMemory"
+          }
+        ]
       }
     }
   }
@@ -99,9 +108,10 @@ JSON 출력을 한 줄로 보려면 `--compact`를 추가합니다.
 ```
 
 `api_groups`는 EMBER v3의 2568개 모델 Feature를 대체하지 않습니다. 원본 Import
-목록에 선언된 API를 기준으로 하므로, 동적 API 로딩·난독화·ordinal Import는 놓칠 수
-있습니다. 따라서 이 결과는 악성 확정값이 아니라 설명, Evidence 또는 JRR 위험 신호로
-사용해야 합니다.
+목록에 선언된 API를 기준으로 하므로, 동적 API 로딩과 난독화된 API는 놓칠 수 있습니다.
+이름이 없는 ordinal Import는 `dll`, `ordinal`, `resolved: false` 형태로 별도 보존합니다.
+따라서 이 결과는 악성 확정값이 아니라 설명, Evidence 또는 JRR 위험 신호로 사용해야
+합니다.
 
 ## Python API
 

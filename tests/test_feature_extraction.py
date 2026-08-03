@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 
 from trust_triage.feature_extraction.cli import main as cli_main
 from trust_triage.feature_extraction import (
+    ApiImportMatch,
     EmberV3Extractor,
     ExtractionStatus,
     FeatureSchema,
@@ -31,6 +33,97 @@ def benign_pe_fixture(tmp_path: Path) -> Path:
     return target
 
 
+def _copy_matching_system_binary(
+    tmp_path: Path,
+    candidates: list[Path],
+    *,
+    expected_file_types: set[str],
+    expected_dotnet: bool,
+    target_name: str,
+) -> Path:
+    """시스템에 있는 정상 PE를 조건에 맞을 때만 테스트 fixture로 복사한다."""
+
+    for source in candidates:
+        if not source.is_file():
+            continue
+
+        target = tmp_path / target_name
+        shutil.copy2(source, target)
+        result = EmberV3Extractor().extract(target)
+        if (
+            result.status is ExtractionStatus.SUCCESS
+            and result.file_type in expected_file_types
+            and result.is_dotnet is expected_dotnet
+        ):
+            return target
+
+    pytest.skip(
+        "no matching system PE fixture: "
+        f"{sorted(expected_file_types)}, dotnet={expected_dotnet}"
+    )
+
+
+@pytest.fixture
+def benign_pe32_fixture(tmp_path: Path) -> Path:
+    """Windows의 정상 32비트 실행 파일을 임시 fixture로 사용한다."""
+
+    windir_text = os.environ.get("WINDIR")
+    if not windir_text:
+        pytest.skip("WINDIR is unavailable")
+
+    windir = Path(windir_text)
+    return _copy_matching_system_binary(
+        tmp_path,
+        [
+            windir / "SysWOW64" / "notepad.exe",
+            windir / "SysWOW64" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+        ],
+        expected_file_types={"PE32"},
+        expected_dotnet=False,
+        target_name="benign-pe32.exe",
+    )
+
+
+@pytest.fixture
+def benign_pe32_plus_fixture(tmp_path: Path) -> Path:
+    """정상 64비트 실행 파일을 임시 fixture로 사용한다."""
+
+    windir_text = os.environ.get("WINDIR")
+    candidates = [Path(sys.executable)]
+    if windir_text:
+        windir = Path(windir_text)
+        candidates.append(windir / "System32" / "notepad.exe")
+
+    return _copy_matching_system_binary(
+        tmp_path,
+        candidates,
+        expected_file_types={"PE32+"},
+        expected_dotnet=False,
+        target_name="benign-pe32-plus.exe",
+    )
+
+
+@pytest.fixture
+def benign_dotnet_fixture(tmp_path: Path) -> Path:
+    """Windows에 설치된 정상 .NET Framework 실행 파일을 임시 fixture로 사용한다."""
+
+    windir_text = os.environ.get("WINDIR")
+    if not windir_text:
+        pytest.skip("WINDIR is unavailable")
+
+    windir = Path(windir_text)
+    return _copy_matching_system_binary(
+        tmp_path,
+        [
+            windir / "Microsoft.NET" / "Framework" / "v4.0.30319" / "RegAsm.exe",
+            windir / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "RegAsm.exe",
+        ],
+        expected_file_types={"PE32", "PE32+"},
+        expected_dotnet=True,
+        target_name="benign-dotnet.exe",
+    )
+
+
 def test_extracts_official_ember_v3_float32_vector(
     benign_pe_fixture: Path,
 ) -> None:
@@ -42,14 +135,47 @@ def test_extracts_official_ember_v3_float32_vector(
     assert result.schema_version.startswith("ember2024-v3-pe-")
     assert result.feature_count == 2568
     assert len(result.features) == 2568
+    assert result.is_dotnet is False
+    assert extractor.schema.groups[0].name == "general"
+    assert extractor.schema.groups[0].start_index == 0
+    assert extractor.schema.groups[-1].end_index_exclusive == 2568
+    assert extractor.schema.to_dict()["feature_count"] == 2568
 
     vector = result.to_float32(extractor.schema)
     assert vector.dtype == np.float32
     assert np.isfinite(vector).all()
     assert len(result.sha256) == 64
     assert result.api_groups is not None
-    assert result.api_groups.schema_version == "api-groups-mvp-v1"
+    assert result.api_groups.schema_version == "api-groups-mvp-v2"
     assert set(result.api_groups.groups) == {"registry", "injection", "network"}
+
+
+def test_extracts_real_pe32_file(benign_pe32_fixture: Path) -> None:
+    result = EmberV3Extractor().extract(benign_pe32_fixture)
+
+    assert result.status is ExtractionStatus.SUCCESS
+    assert result.file_type == "PE32"
+    assert result.is_dotnet is False
+    assert result.feature_count == 2568
+    assert len(result.to_float32(EmberV3Extractor().schema)) == 2568
+
+
+def test_extracts_real_pe32_plus_file(benign_pe32_plus_fixture: Path) -> None:
+    result = EmberV3Extractor().extract(benign_pe32_plus_fixture)
+
+    assert result.status is ExtractionStatus.SUCCESS
+    assert result.file_type == "PE32+"
+    assert result.is_dotnet is False
+    assert result.feature_count == 2568
+
+
+def test_extracts_real_dotnet_file(benign_dotnet_fixture: Path) -> None:
+    result = EmberV3Extractor().extract(benign_dotnet_fixture)
+
+    assert result.status is ExtractionStatus.SUCCESS
+    assert result.file_type == "PE32"
+    assert result.is_dotnet is True
+    assert result.feature_count == 2568
 
 
 def test_classifies_imports_into_api_groups() -> None:
@@ -77,11 +203,76 @@ def test_classifies_imports_into_api_groups() -> None:
 
     assert report.named_import_count == 3
     assert report.ordinal_import_count == 1
+    assert report.ordinal_imports[0].dll == "Advapi32.dll"
+    assert report.ordinal_imports[0].ordinal == 1
+    assert report.to_dict()["ordinal_imports"] == [
+        {"dll": "Advapi32.dll", "ordinal": 1, "resolved": False}
+    ]
     assert report.groups["registry"].matched is True
     assert report.groups["registry"].apis == ("RegSetValueExW",)
     assert report.groups["registry"].dlls == ("Advapi32.dll",)
+    assert report.groups["registry"].matches == (
+        ApiImportMatch(dll="Advapi32.dll", api="RegSetValueExW"),
+    )
     assert report.groups["injection"].match_count == 1
     assert report.groups["network"].apis == ("CONNECT",)
+    assert report.to_dict()["groups"]["registry"]["matches"] == [
+        {"dll": "Advapi32.dll", "api": "RegSetValueExW"}
+    ]
+
+
+def test_classifies_pe_without_import_table() -> None:
+    report = classify_imports(SimpleNamespace())
+
+    assert report.named_import_count == 0
+    assert report.ordinal_import_count == 0
+    assert report.ordinal_imports == ()
+    assert all(not group.matched for group in report.groups.values())
+
+
+def test_detects_dotnet_com_descriptor_directory() -> None:
+    directories = [
+        SimpleNamespace(VirtualAddress=0, Size=0) for _ in range(15)
+    ]
+    directories[14] = SimpleNamespace(VirtualAddress=0x2000, Size=72)
+    dotnet_pe = SimpleNamespace(
+        OPTIONAL_HEADER=SimpleNamespace(DATA_DIRECTORY=directories)
+    )
+
+    assert EmberV3Extractor._is_dotnet(dotnet_pe) is True
+
+    directories[14] = SimpleNamespace(VirtualAddress=0, Size=0)
+    native_pe = SimpleNamespace(
+        OPTIONAL_HEADER=SimpleNamespace(DATA_DIRECTORY=directories)
+    )
+    assert EmberV3Extractor._is_dotnet(native_pe) is False
+
+
+def test_documented_ember_schema_matches_runtime_schema() -> None:
+    manifest_path = (
+        Path(__file__).parents[1]
+        / "docs"
+        / "feature-extraction"
+        / "ember-v3-schema.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    runtime_schema = EmberV3Extractor().schema.to_dict()
+
+    assert manifest["schema_version"] == runtime_schema["schema_version"]
+    assert manifest["feature_count"] == runtime_schema["feature_count"]
+    assert [
+        {
+            key: group[key]
+            for key in ("name", "start_index", "end_index_exclusive", "dimension")
+        }
+        for group in manifest["groups"]
+    ] == [
+        {
+            key: group[key]
+            for key in ("name", "start_index", "end_index_exclusive", "dimension")
+        }
+        for group in runtime_schema["groups"]
+    ]
 
 
 def test_api_group_report_is_serialized_with_feature_result(
