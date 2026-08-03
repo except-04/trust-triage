@@ -218,3 +218,10 @@ git switch -c feature/baseline-model
 git switch -c feature/feature-extraction
 git switch -c feature/calibration
 ```
+
+## Feature extraction MVP
+
+The PE static extractor is documented in
+[`docs/feature-extraction.md`](docs/feature-extraction.md). It reads `.exe`
+and `.dll` files without executing them and returns the versioned
+`pe-static-mvp-v1` result schema.
