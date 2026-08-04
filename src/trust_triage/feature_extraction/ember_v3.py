@@ -8,9 +8,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
+import multiprocessing
+import queue
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
-from typing import Final, Protocol, Sequence
+from time import perf_counter
+from typing import Any, Final, Protocol, Sequence
 
 import numpy as np
 import pefile
@@ -21,7 +27,15 @@ from .schema import FeatureGroup, FeatureSchema
 
 
 DEFAULT_MAX_FILE_SIZE_BYTES: Final[int] = 200 * 1024 * 1024
+DEFAULT_TIMEOUT_SECONDS: Final[float] = 30.0
 EMBER_V3_SCHEMA_PREFIX: Final[str] = "ember2024-v3-pe"
+EMBER_V3_SOURCE_PACKAGE: Final[str] = "thrember"
+EMBER_V3_SOURCE_REPOSITORY: Final[str] = (
+    "https://github.com/FutureComputing4AI/EMBER2024"
+)
+EMBER_V3_SOURCE_COMMIT: Final[str] = (
+    "0ef753e81d98bf209f71b03cd331dfc190b5b54d"
+)
 
 
 class _FeatureGroup(Protocol):
@@ -38,6 +52,82 @@ class _ThremberExtractor(Protocol):
 
     def feature_vector(self, bytez: bytes) -> np.ndarray:
         """PE 바이트를 고정 길이 벡터로 변환한다."""
+
+
+def _normalize_repository_url(value: str) -> str:
+    """저장소 URL의 마지막 슬래시와 .git 차이를 제거한다."""
+
+    return value.rstrip("/").removesuffix(".git").casefold()
+
+
+def _load_thrember_source_metadata(*, verify_source: bool) -> dict[str, object]:
+    """설치된 thrember의 VCS 출처를 읽고 고정 커밋과 비교한다.
+
+    requirements.txt는 EMBER2024 저장소 커밋을 고정한다. 설치된 패키지가
+    다른 커밋인데도 같은 그룹 차원만 우연히 유지하면 모델 입력 계약이
+    깨질 수 있으므로, PEP 610의 direct_url.json을 이용해 출처를 확인한다.
+    """
+
+    try:
+        package_distribution = distribution(EMBER_V3_SOURCE_PACKAGE)
+    except PackageNotFoundError as exc:
+        raise RuntimeError(
+            "설치된 thrember 배포판의 출처를 확인할 수 없습니다. "
+            "requirements.txt를 다시 설치하세요."
+        ) from exc
+
+    observed_repository = ""
+    observed_commit = ""
+    source_error = ""
+    try:
+        direct_url_text = package_distribution.read_text("direct_url.json")
+    except (OSError, UnicodeError) as exc:
+        direct_url_text = None
+        source_error = (
+            "could not read direct_url.json: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    if direct_url_text and not source_error:
+        try:
+            direct_url = json.loads(direct_url_text)
+            if not isinstance(direct_url, dict):
+                raise TypeError("direct_url.json must contain a JSON object")
+
+            observed_repository = str(direct_url.get("url", ""))
+            vcs_info = direct_url.get("vcs_info", {})
+            if not isinstance(vcs_info, dict):
+                raise TypeError("direct_url.json vcs_info must be an object")
+            observed_commit = str(vcs_info.get("commit_id", ""))
+        except (json.JSONDecodeError, TypeError) as exc:
+            source_error = f"invalid direct_url.json: {type(exc).__name__}: {exc}"
+    elif not source_error:
+        source_error = "direct_url.json is missing"
+
+    verified = (
+        not source_error
+        and _normalize_repository_url(observed_repository)
+        == _normalize_repository_url(EMBER_V3_SOURCE_REPOSITORY)
+        and observed_commit == EMBER_V3_SOURCE_COMMIT
+    )
+    if verify_source and not verified:
+        raise RuntimeError(
+            "thrember 출처 검증에 실패했습니다. "
+            f"expected={EMBER_V3_SOURCE_REPOSITORY}@{EMBER_V3_SOURCE_COMMIT}, "
+            f"observed={observed_repository or 'unknown'}@{observed_commit or 'unknown'}"
+            + (f" ({source_error})" if source_error else "")
+        )
+
+    return {
+        "package": EMBER_V3_SOURCE_PACKAGE,
+        "version": package_distribution.version,
+        "repository": observed_repository or None,
+        "commit": observed_commit or None,
+        "expected_repository": EMBER_V3_SOURCE_REPOSITORY,
+        "expected_commit": EMBER_V3_SOURCE_COMMIT,
+        "source_verified": verified,
+        "source_verification_error": source_error or None,
+    }
 
 
 @dataclass(frozen=True)
@@ -112,6 +202,7 @@ def _read_failure(
     *,
     schema_version: str,
     read_result: _FileReadResult,
+    metadata: dict[str, object] | None = None,
 ) -> FeatureExtractionResult:
     """파일 읽기 실패를 공통 결과 객체로 변환한다."""
 
@@ -121,7 +212,44 @@ def _read_failure(
         schema_version=schema_version,
         status=read_result.status,
         errors=[read_result.error],
+        metadata=metadata,
     )
+
+
+def _run_extraction_worker(
+    sample_path: str,
+    max_file_size_bytes: int,
+    features_file: str | None,
+    verify_source: bool,
+    result_queue: Any,
+) -> None:
+    """별도 프로세스에서 Feature 추출을 실행하고 결과를 전달한다."""
+
+    try:
+        extractor = EmberV3Extractor(
+            max_file_size_bytes=max_file_size_bytes,
+            features_file=features_file,
+            verify_source=verify_source,
+        )
+        result_queue.put(extractor.extract(sample_path))
+    except Exception as exc:
+        result_queue.put(
+            {
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+
+
+def _stop_process(process: multiprocessing.Process) -> None:
+    """분석 프로세스를 terminate 후 필요하면 kill한다."""
+
+    if not process.is_alive():
+        return
+    process.terminate()
+    process.join(2)
+    if process.is_alive():
+        process.kill()
+        process.join(2)
 
 
 def _load_thrember_extractor(
@@ -206,6 +334,7 @@ class EmberV3Extractor:
         self,
         max_file_size_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES,
         features_file: str | Path | None = None,
+        verify_source: bool = True,
     ) -> None:
         if max_file_size_bytes <= 0:
             raise ValueError("max_file_size_bytes must be positive")
@@ -217,7 +346,12 @@ class EmberV3Extractor:
             )
 
         self.max_file_size_bytes = max_file_size_bytes
+        self.features_file = config_path
+        self.verify_source = verify_source
         self._thrember = _load_thrember_extractor(config_path)
+        self.source_metadata = _load_thrember_source_metadata(
+            verify_source=verify_source
+        )
         self.schema = _build_schema(self._thrember)
 
     @staticmethod
@@ -234,6 +368,7 @@ class EmberV3Extractor:
             return _read_failure(
                 schema_version=self.schema.version,
                 read_result=read_result,
+                metadata=self.source_metadata,
             )
         assert read_result.data is not None
         return self._extract_bytes(read_result.data, read_result.sha256)
@@ -251,6 +386,7 @@ class EmberV3Extractor:
                 status=ExtractionStatus.UNSUPPORTED,
                 sha256=sha256,
                 errors=["only PE files with a DOS MZ signature are supported"],
+                metadata=self.source_metadata,
             )
 
         try:
@@ -261,6 +397,7 @@ class EmberV3Extractor:
                 status=ExtractionStatus.INVALID_PE,
                 sha256=sha256,
                 errors=[f"pefile rejected the input: {exc}"],
+                metadata=self.source_metadata,
             )
         except Exception as exc:
             return FeatureExtractionResult.failure(
@@ -268,6 +405,7 @@ class EmberV3Extractor:
                 status=ExtractionStatus.PARSE_ERROR,
                 sha256=sha256,
                 errors=[f"PE parsing failed: {type(exc).__name__}: {exc}"],
+                metadata=self.source_metadata,
             )
 
         try:
@@ -293,6 +431,7 @@ class EmberV3Extractor:
                 warnings=warnings,
                 api_groups=api_groups,
                 is_dotnet=self._is_dotnet(pe),
+                metadata=self.source_metadata,
             )
         except Exception as exc:
             return FeatureExtractionResult.failure(
@@ -302,6 +441,7 @@ class EmberV3Extractor:
                 errors=[
                     f"EMBER Feature extraction failed: {type(exc).__name__}: {exc}"
                 ],
+                metadata=self.source_metadata,
             )
         finally:
             pe.close()
@@ -341,21 +481,193 @@ class EmberV3Extractor:
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
 
+    def extract_with_timeout(
+        self,
+        path: str | Path,
+        timeout_seconds: float,
+    ) -> FeatureExtractionResult:
+        """별도 프로세스에서 추출하고 제한 시간을 넘기면 종료한다.
+
+        일반 ``extract``는 데이터 처리 파이프라인에서 반복 호출하기 쉽도록
+        현재 프로세스에서 실행한다. 외부 파일을 받는 CLI·API는 이 메서드나
+        ``extract_file(..., timeout_seconds=...)``를 사용해야 한다.
+        """
+
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        return _extract_with_timeout(self, Path(path), timeout_seconds)
+
+
+def _close_result_queue(result_queue: Any) -> None:
+    """별도 프로세스 결과 Queue를 안전하게 닫는다."""
+
+    try:
+        result_queue.close()
+    finally:
+        result_queue.join_thread()
+
+
+def _extract_with_timeout(
+    extractor: EmberV3Extractor,
+    path: Path,
+    timeout_seconds: float,
+) -> FeatureExtractionResult:
+    """추출 작업을 별도 프로세스에서 실행하고 결과를 회수한다."""
+
+    read_result = _read_file(path, extractor.max_file_size_bytes)
+    if read_result.error is not None:
+        return _read_failure(
+            schema_version=extractor.schema.version,
+            read_result=read_result,
+            metadata={
+                **extractor.source_metadata,
+                "execution_mode": "separate_process",
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+
+    # 부모 프로세스에서는 사전 검증과 SHA-256 확인만 수행한다. 전체 바이트를
+    # 계속 들고 있지 않아 자식 프로세스와 메모리를 불필요하게 중복하지 않는다.
+    expected_sha256 = read_result.sha256
+    del read_result
+
+    metadata = {
+        **extractor.source_metadata,
+        "execution_mode": "separate_process",
+        "timeout_seconds": timeout_seconds,
+    }
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue(maxsize=1)
+    process = context.Process(
+        target=_run_extraction_worker,
+        args=(
+            str(path),
+            extractor.max_file_size_bytes,
+            str(extractor.features_file) if extractor.features_file else None,
+            extractor.verify_source,
+            result_queue,
+        ),
+    )
+    started = perf_counter()
+
+    try:
+        process.start()
+    except Exception as exc:
+        _close_result_queue(result_queue)
+        return FeatureExtractionResult.failure(
+            schema_version=extractor.schema.version,
+            sha256=expected_sha256,
+            status=ExtractionStatus.TOOL_ERROR,
+            errors=[f"timed extraction process failed to start: {exc}"],
+            metadata=metadata,
+        )
+
+    payload: object | None = None
+    received = False
+    while not received:
+        remaining = timeout_seconds - (perf_counter() - started)
+        if remaining <= 0:
+            break
+        try:
+            payload = result_queue.get(timeout=min(0.1, remaining))
+            received = True
+        except queue.Empty:
+            if not process.is_alive():
+                break
+
+    elapsed_ms = int((perf_counter() - started) * 1000)
+    if not received:
+        process_was_alive = process.is_alive()
+        if process_was_alive:
+            _stop_process(process)
+            status = ExtractionStatus.TIMEOUT
+            summary = "정적 Feature 추출이 제한 시간 안에 끝나지 않았습니다."
+            error = (
+                f"timeout_seconds={timeout_seconds}, "
+                f"process_exit_code={process.exitcode}"
+            )
+        else:
+            process.join(1)
+            status = ExtractionStatus.TOOL_ERROR
+            summary = "정적 Feature 추출 프로세스가 결과를 반환하지 않았습니다."
+            error = f"process_exit_code={process.exitcode}"
+        _close_result_queue(result_queue)
+        return FeatureExtractionResult.failure(
+            schema_version=extractor.schema.version,
+            sha256=expected_sha256,
+            status=status,
+            errors=[error],
+            warnings=[summary],
+            metadata={
+                **metadata,
+                "analysis_time_ms": elapsed_ms,
+            },
+        )
+
+    # Queue에서 결과를 받았지만 자식 프로세스가 정리되지 않는 경우도
+    # 부모가 계속 기다리지 않도록 종료한다.
+    if process.is_alive():
+        _stop_process(process)
+    else:
+        process.join(1)
+    _close_result_queue(result_queue)
+
+    if not isinstance(payload, FeatureExtractionResult):
+        error = (
+            payload.get("error", "unknown worker error")
+            if isinstance(payload, dict)
+            else "worker returned an invalid result"
+        )
+        return FeatureExtractionResult.failure(
+            schema_version=extractor.schema.version,
+            sha256=expected_sha256,
+            status=ExtractionStatus.TOOL_ERROR,
+            errors=[str(error)],
+            metadata={
+                **metadata,
+                "analysis_time_ms": elapsed_ms,
+            },
+        )
+
+    if payload.sha256 != expected_sha256:
+        return FeatureExtractionResult.failure(
+            schema_version=extractor.schema.version,
+            sha256=expected_sha256,
+            status=ExtractionStatus.PARSE_ERROR,
+            errors=["input file changed while timed extraction was running"],
+            metadata={
+                **metadata,
+                "analysis_time_ms": elapsed_ms,
+            },
+        )
+
+    payload.metadata = {
+        **payload.metadata,
+        "execution_mode": "separate_process",
+        "timeout_seconds": timeout_seconds,
+        "analysis_time_ms": elapsed_ms,
+    }
+    return payload
+
 
 def extract_file(
     path: str | Path,
     *,
     features_file: str | Path | None = None,
+    timeout_seconds: float | None = None,
+    verify_source: bool = True,
 ) -> FeatureExtractionResult:
-    """프로젝트의 유일한 추출기인 EMBER v3 방식으로 파일을 처리한다."""
+    """프로젝트의 유일한 추출기인 EMBER v3 방식으로 파일을 처리한다.
 
-    extractor = EmberV3Extractor(features_file=features_file)
-    read_result = _read_file(Path(path), extractor.max_file_size_bytes)
-    if read_result.error is not None:
-        return _read_failure(
-            schema_version=extractor.schema.version,
-            read_result=read_result,
-        )
-    assert read_result.data is not None
+    ``timeout_seconds``를 지정하면 추출 작업 전체를 별도 프로세스에서
+    실행한다. 지정하지 않으면 반복적인 데이터 처리에 적합한 현재 프로세스
+    실행 경로를 사용한다.
+    """
 
-    return extractor._extract_bytes(read_result.data, read_result.sha256)
+    extractor = EmberV3Extractor(
+        features_file=features_file,
+        verify_source=verify_source,
+    )
+    if timeout_seconds is None:
+        return extractor.extract(path)
+    return extractor.extract_with_timeout(path, timeout_seconds)

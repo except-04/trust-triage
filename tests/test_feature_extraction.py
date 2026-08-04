@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import trust_triage.feature_extraction.ember_v3 as ember_v3_module
 from trust_triage.feature_extraction.cli import main as cli_main
 from trust_triage.feature_extraction import (
     ApiImportMatch,
@@ -151,6 +152,8 @@ def test_extracts_official_ember_v3_float32_vector(
     assert result.api_groups is not None
     assert result.api_groups.schema_version == "api-groups-mvp-v2"
     assert set(result.api_groups.groups) == {"registry", "injection", "network"}
+    assert result.metadata["source_verified"] is True
+    assert result.metadata["commit"] == ember_v3_module.EMBER_V3_SOURCE_COMMIT
 
 
 def test_extracts_real_pe32_file(benign_pe32_fixture: Path) -> None:
@@ -263,6 +266,9 @@ def test_documented_ember_schema_matches_runtime_schema() -> None:
 
     assert manifest["schema_version"] == runtime_schema["schema_version"]
     assert manifest["feature_count"] == runtime_schema["feature_count"]
+    assert manifest["source"]["package"] == ember_v3_module.EMBER_V3_SOURCE_PACKAGE
+    assert manifest["source"]["repository"] == ember_v3_module.EMBER_V3_SOURCE_REPOSITORY
+    assert manifest["source"]["commit"] == ember_v3_module.EMBER_V3_SOURCE_COMMIT
     assert [
         {
             key: group[key]
@@ -365,6 +371,37 @@ def test_file_size_limit_is_explicit(tmp_path: Path) -> None:
     assert result.status is ExtractionStatus.FILE_TOO_LARGE
     assert result.features == []
     assert result.errors
+
+
+def test_timed_extraction_returns_explicit_timeout(benign_pe_fixture: Path) -> None:
+    result = extract_file(benign_pe_fixture, timeout_seconds=0.001)
+
+    assert result.status is ExtractionStatus.TIMEOUT
+    assert len(result.sha256) == 64
+    assert result.metadata["execution_mode"] == "separate_process"
+    assert result.errors
+
+
+def test_thrember_source_verification_rejects_wrong_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeDistribution:
+        version = "0.1.0"
+
+        @staticmethod
+        def read_text(name: str) -> str:
+            assert name == "direct_url.json"
+            return json.dumps(
+                {
+                    "url": "https://github.com/FutureComputing4AI/EMBER2024.git",
+                    "vcs_info": {"commit_id": "wrong-commit", "vcs": "git"},
+                }
+            )
+
+    monkeypatch.setattr(ember_v3_module, "distribution", lambda _: FakeDistribution())
+
+    with pytest.raises(RuntimeError, match="출처 검증"):
+        ember_v3_module._load_thrember_source_metadata(verify_source=True)
 
 
 def test_ember_feature_group_configuration_changes_schema(

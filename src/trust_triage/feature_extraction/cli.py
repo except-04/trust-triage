@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 
 import numpy as np
 
-from .ember_v3 import EmberV3Extractor, extract_file
+from .ember_v3 import DEFAULT_TIMEOUT_SECONDS, EmberV3Extractor, extract_file
 from .result import FeatureExtractionResult
 from .selection import FeatureSelector
 
@@ -101,7 +102,20 @@ def build_selected_payload(
         "feature_count": selector.feature_count,
         "feature_names": list(selector.selected_feature_names),
         "features": [float(value) for value in selected_vector],
+        "metadata": dict(result.metadata),
     }
+
+
+def _positive_float(value: str) -> float:
+    """CLI에서 0보다 큰 실수 제한 시간을 받는다."""
+
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("양수인 숫자를 입력하세요.") from exc
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("timeout은 0보다 커야 합니다.")
+    return number
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,6 +123,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="PE 파일에서 재현 가능한 정적 Feature를 추출합니다."
     )
     parser.add_argument("path", help="분석할 .exe 또는 .dll 파일 경로")
+    parser.add_argument(
+        "--timeout",
+        type=_positive_float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=f"정적 Feature 추출 제한 시간(초), 기본값: {DEFAULT_TIMEOUT_SECONDS:g}",
+    )
     parser.add_argument(
         "--features-file",
         help="EMBER Feature 그룹 선택 JSON 경로(thrember 사용 시에만 적용)",
@@ -130,13 +150,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.selection_file:
-        # 선택 manifest는 실제로 사용한 extractor Schema에 대해 검증해야
-        # 하므로, 이 경우에는 extractor 객체를 직접 유지한다.
-        extractor = EmberV3Extractor(features_file=args.features_file)
-        result = extractor.extract(args.path)
-    else:
-        result = extract_file(args.path, features_file=args.features_file)
+    try:
+        if args.selection_file:
+            # 선택 manifest는 실제로 사용한 extractor Schema에 대해 검증해야
+            # 하므로, 이 경우에는 extractor 객체를 직접 유지한다.
+            extractor = EmberV3Extractor(features_file=args.features_file)
+            result = extractor.extract_with_timeout(args.path, args.timeout)
+        else:
+            result = extract_file(
+                args.path,
+                features_file=args.features_file,
+                timeout_seconds=args.timeout,
+            )
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        print(f"Feature extraction setup error: {exc}", file=sys.stderr)
+        return 2
 
     if args.selection_file and result.status.value == "SUCCESS":
         try:

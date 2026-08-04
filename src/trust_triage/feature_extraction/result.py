@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -22,6 +22,8 @@ class ExtractionStatus(str, Enum):
     PARSE_ERROR = "PARSE_ERROR"
     UNSUPPORTED = "UNSUPPORTED"
     FILE_TOO_LARGE = "FILE_TOO_LARGE"
+    TIMEOUT = "TIMEOUT"
+    TOOL_ERROR = "TOOL_ERROR"
 
 
 @dataclass
@@ -40,6 +42,7 @@ class FeatureExtractionResult:
     errors: list[str] = field(default_factory=list)
     api_groups: ApiGroupReport | None = None
     is_dotnet: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def success(
@@ -53,6 +56,7 @@ class FeatureExtractionResult:
         warnings: list[str] | None = None,
         api_groups: ApiGroupReport | None = None,
         is_dotnet: bool = False,
+        metadata: Mapping[str, Any] | None = None,
     ) -> "FeatureExtractionResult":
         vector = schema.validate_vector(values)
         return cls(
@@ -67,6 +71,7 @@ class FeatureExtractionResult:
             warnings=list(warnings or []),
             api_groups=api_groups,
             is_dotnet=is_dotnet,
+            metadata=dict(metadata or {}),
         )
 
     @classmethod
@@ -79,6 +84,7 @@ class FeatureExtractionResult:
         file_type: str = "UNKNOWN",
         errors: list[str] | None = None,
         warnings: list[str] | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> "FeatureExtractionResult":
         return cls(
             schema_version=schema_version,
@@ -88,6 +94,7 @@ class FeatureExtractionResult:
             feature_count=0,
             warnings=list(warnings or []),
             errors=list(errors or []),
+            metadata=dict(metadata or {}),
         )
 
     def to_float32(self, schema: FeatureSchema | None = None) -> np.ndarray:
@@ -133,6 +140,7 @@ class FeatureExtractionResult:
             "missing_features": list(self.missing_features),
             "warnings": list(self.warnings),
             "errors": list(self.errors),
+            "metadata": dict(self.metadata),
             "api_groups": (
                 self.api_groups.to_dict() if self.api_groups is not None else None
             ),

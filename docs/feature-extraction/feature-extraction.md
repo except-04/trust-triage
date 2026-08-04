@@ -7,6 +7,8 @@
 구현 진행 상황과 추후 작업은 [plan.md](plan.md)에서 관리합니다.
 EMBER v3 고정 Schema manifest는 [ember-v3-schema.json](ember-v3-schema.json)에서
 확인할 수 있습니다.
+모델 입력 Feature를 전체 또는 부분집합으로 선택하는 방법은
+[feature-selection.md](feature-selection.md)에서 확인할 수 있습니다.
 
 ## 설치
 
@@ -35,9 +37,18 @@ EMBER v3 고정 Schema manifest는 [ember-v3-schema.json](ember-v3-schema.json)�
 - 고정된 `float32` Feature 벡터
 - Feature 개수와 각 원소 이름
 - 파싱 오류와 경고
+- `thrember` 출처와 실행 방식이 담긴 `metadata`
 
 현재 공식 PE Feature 그룹 전체를 사용하면 2,568차원 벡터가 생성됩니다.
 Schema 버전의 뒤쪽 지문은 사용한 Feature 그룹과 차원을 식별합니다.
+
+CLI는 기본적으로 정적 추출을 별도 프로세스에서 실행하고 30초 제한 시간을
+적용합니다. 제한 시간을 바꾸려면 `--timeout`을 사용합니다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli `
+  .\path\to\sample.exe --timeout 60
+```
 
 JSON 출력을 한 줄로 보려면 `--compact`를 추가합니다.
 
@@ -45,12 +56,21 @@ JSON 출력을 한 줄로 보려면 `--compact`를 추가합니다.
 .\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli .\path\to\sample.exe --compact
 ```
 
-공식 구현에서 특정 Feature 그룹만 선택한 JSON 설정을 사용할 수도 있습니다.
-팀원이 사용할 최종 Feature 목록 MD를 받으면 이 방식으로 구성을 맞추고
-학습 데이터와 실제 추출 결과의 차원을 검증합니다.
+공식 `thrember` Feature 그룹 자체를 바꾸고 싶을 때는 `--features-file`을
+사용합니다. 이 옵션은 모델팀이 정한 최종 Feature 목록을 지정하는 옵션과
+다릅니다. 모델 입력 Feature의 부분집합은 `--selection-file`과 별도 manifest로
+관리합니다.
 
 ```powershell
 .\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli .\path\to\sample.exe --features-file .\path\to\features.json
+```
+
+모델팀의 선택 목록을 적용하는 예시는 다음과 같습니다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli `
+  .\path\to\sample.exe `
+  --selection-file .\docs\feature-extraction\feature-selection.example.json
 ```
 
 ## 요약 출력
@@ -124,6 +144,9 @@ result = extractor.extract("sample.exe")
 if result.status.value == "SUCCESS":
     vector = result.to_float32(extractor.schema)
 
+# 외부 파일을 받는 CLI/API에서는 제한 시간을 강제할 수 있다.
+timed_result = extractor.extract_with_timeout("sample.exe", timeout_seconds=30)
+
 # 기본 진입점도 EMBER v3만 사용합니다.
 result = extract_file("sample.exe")
 ```
@@ -136,6 +159,8 @@ INVALID_PE
 PARSE_ERROR
 UNSUPPORTED
 FILE_TOO_LARGE
+TIMEOUT
+TOOL_ERROR
 ```
 
 실패한 파일을 0으로 채워 성공한 것처럼 처리하지 않습니다. PE가 아니거나

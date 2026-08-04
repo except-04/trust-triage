@@ -1,6 +1,6 @@
 # Feature Extraction 진행 계획
 
-최종 수정일: 2026-08-03
+최종 수정일: 2026-08-04
 
 이 문서는 TRUST-TRIAGE의 Feature 추출 모듈 진행 상황과 팀 협의가 필요한 사항,
 추후 확장 작업을 한 곳에서 관리하기 위한 문서다.
@@ -40,9 +40,12 @@ PE 파일
 - [x] JSON 전체 출력 CLI
 - [x] 핵심 정보만 출력하는 `--summary` CLI
 - [x] 모델팀 연동 문서 작성
+- [x] 모델 입력 Feature 선택·Schema 검증 및 `--selection-file` CLI
+- [x] EMBER `thrember` 출처 커밋 검증과 결과 metadata 기록
+- [x] 정적 Feature 추출 별도 프로세스 timeout
 - [x] pytest 테스트 작성
 
-현재 테스트 결과는 `19 passed`다.
+현재 테스트 결과는 `26 passed`다.
 
 ### 현재 API_GROUPS
 
@@ -65,8 +68,10 @@ API_GROUPS는 원본 PE의 정적 Import Table에 이름으로 기록된 API를 
 - `src/trust_triage/feature_extraction/api_groups.py`: Import API 그룹 분류
 - `src/trust_triage/feature_extraction/schema.py`: Feature Schema와 그룹 범위
 - `src/trust_triage/feature_extraction/result.py`: 공통 JSON 결과 구조
-- `src/trust_triage/feature_extraction/cli.py`: JSON·요약 CLI
+- `src/trust_triage/feature_extraction/selection.py`: 모델 입력 Feature 선택·검증
+- `src/trust_triage/feature_extraction/cli.py`: JSON·요약·timeout·선택 CLI
 - `docs/feature-extraction/feature-extraction.md`: 사용법과 인터페이스
+- `docs/feature-extraction/feature-selection.md`: 선택 manifest와 모델 입력 계약
 - `docs/feature-extraction/ember-v3-schema.json`: EMBER v3 Schema manifest
 - `tests/test_feature_extraction.py`: 단위 테스트
 
@@ -93,6 +98,7 @@ JSON에는 다음 정보가 포함된다.
 - `api_groups`
 - `warnings`
 - `errors`
+- `metadata`
 
 ### 핵심 정보 요약
 
@@ -114,6 +120,13 @@ JSON에는 다음 정보가 포함된다.
 - API_GROUPS별 매칭 결과
 - 경고·오류
 
+CLI는 기본적으로 30초 timeout을 사용한다. 제한 시간을 바꾸려면 다음처럼
+`--timeout`을 지정한다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli .\Notepad.exe --timeout 60
+```
+
 ## 5. 다른 모듈과 연결하는 방법
 
 ### Baseline 모델
@@ -129,6 +142,9 @@ result = extractor.extract("sample.exe")
 if result.status.value == "SUCCESS":
     vector = result.to_float32(extractor.schema)
 ```
+
+모델 입력 Feature 일부만 사용하는 경우에는 `FeatureSelector`와 선택 manifest를
+사용한다. 자세한 규칙은 `feature-selection.md`를 따른다.
 
 모델 학습 데이터와 실제 PE 추출 결과는 다음 항목이 같아야 한다.
 
@@ -204,6 +220,8 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 - [ ] 팀에서 최종 모델 Feature 사용 범위 결정
 - [ ] EMBER 학습 데이터의 Feature Schema와 실제 추출 Schema 대조
 - [ ] 모델 학습 결과에 맞는 Feature 이름·인덱스 목록 문서화
+- [ ] 모델팀의 최종 Feature 목록으로 selection manifest 확정
+- [ ] 모델 학습·추론 파이프라인과 `FeatureSelector` 통합 테스트
 - [ ] API_GROUPS를 JRR에 전달할 공통 필드 확정
 - [ ] API_GROUPS 결과의 근거와 한계 문서화
 
@@ -246,3 +264,11 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 - PE32·PE32+·실제 .NET 정상 파일 테스트 추가
 - API_GROUPS에 DLL·API 정확한 연결 정보와 v2 Schema 추가
 - Feature Extraction 문서를 전용 폴더로 정리
+
+### 2026-08-04
+
+- 모델 입력 Feature 선택·검증과 `--selection-file` CLI 추가
+- thrember 설치 출처와 고정 커밋 검증 추가
+- 추출 결과에 provenance metadata 추가
+- 별도 프로세스 기반 정적 Feature extraction timeout 추가
+- 관련 문서와 테스트 수 최신화
