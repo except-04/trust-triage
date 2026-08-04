@@ -12,6 +12,11 @@ from .api_groups import (
 from .ember_v3 import EmberV3Extractor, extract_file
 from .result import ExtractionStatus, FeatureExtractionResult
 from .schema import FeatureGroup, FeatureSchema
+from .selection import (
+    FEATURE_SELECTION_SCHEMA_VERSION,
+    FeatureSelectionError,
+    FeatureSelector,
+)
 
 __all__ = [
     "EmberV3Extractor",
@@ -25,6 +30,9 @@ __all__ = [
     "FeatureGroup",
     "FeatureSchema",
     "FeatureExtractionResult",
+    "FEATURE_SELECTION_SCHEMA_VERSION",
+    "FeatureSelectionError",
+    "FeatureSelector",
     "classify_imports",
     "extract_file",
 ]

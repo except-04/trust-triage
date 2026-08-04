@@ -11,6 +11,7 @@ import numpy as np
 
 from .api_groups import ApiGroupReport
 from .schema import FeatureSchema
+from .selection import FeatureSelector
 
 
 class ExtractionStatus(str, Enum):
@@ -102,6 +103,20 @@ class FeatureExtractionResult:
                 f"requested={schema.version}"
             )
         return schema.validate_vector(self.features)
+
+    def to_model_input(self, selector: FeatureSelector) -> np.ndarray:
+        """선택 규칙을 검증한 뒤 모델에 전달할 Feature 벡터를 반환한다.
+
+        추출 결과의 Feature 개수만 확인하지 않고, 원본 Schema 버전과
+        Feature 이름·순서도 함께 확인한다. 이를 통해 다른 버전의 벡터나
+        열 순서가 바뀐 데이터를 실수로 모델에 전달하는 것을 막는다.
+        """
+
+        if self.status is not ExtractionStatus.SUCCESS:
+            raise ValueError(f"cannot convert unsuccessful result: {self.status}")
+
+        selector.validate_source_metadata(self.schema_version, self.feature_names)
+        return selector.select_vector(self.features)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON으로 직렬화할 수 있는 공통 딕셔너리를 반환한다."""

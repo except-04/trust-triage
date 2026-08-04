@@ -58,10 +58,17 @@ class FeatureSchema:
 
         if not self.version:
             raise ValueError("schema version must not be empty")
-        if any(not name for name in self.feature_names):
-            raise ValueError("feature names must not be empty")
-        if len(set(self.feature_names)) != len(self.feature_names):
+        if isinstance(self.feature_names, (str, bytes)):
+            raise ValueError("feature names must be a sequence, not a string")
+        try:
+            normalized_names = tuple(self.feature_names)
+        except TypeError as exc:
+            raise ValueError("feature names must be a sequence") from exc
+        if any(not isinstance(name, str) or not name for name in normalized_names):
+            raise ValueError("feature names must be non-empty strings")
+        if len(set(normalized_names)) != len(normalized_names):
             raise ValueError("feature names must be unique")
+        object.__setattr__(self, "feature_names", normalized_names)
         if self.groups:
             expected_start = 0
             seen_group_names: set[str] = set()
@@ -86,6 +93,47 @@ class FeatureSchema:
     @property
     def feature_count(self) -> int:
         return len(self.feature_names)
+
+    def validate_feature_names(self, feature_names: Sequence[str]) -> tuple[str, ...]:
+        """Feature 이름과 순서가 Schema와 정확히 같은지 검증한다.
+
+        모델 입력 벡터는 숫자의 개수만 맞는다고 안전한 입력이 되지 않는다.
+        같은 차원이라도 Feature 순서가 바뀌면 전혀 다른 모델 입력이 되므로,
+        학습·추론에 사용하는 이름 목록을 Schema와 순서까지 비교한다.
+        """
+
+        if isinstance(feature_names, (str, bytes)):
+            raise ValueError("feature names must be a sequence, not a string")
+
+        try:
+            actual_names = tuple(feature_names)
+        except TypeError as exc:
+            raise ValueError("feature names must be a sequence") from exc
+
+        if any(not isinstance(name, str) or not name for name in actual_names):
+            raise ValueError("feature names must be non-empty strings")
+
+        expected_names = self.feature_names
+        if actual_names == expected_names:
+            return actual_names
+
+        if len(actual_names) != len(expected_names):
+            raise ValueError(
+                f"expected {len(expected_names)} feature names for {self.version}, "
+                f"got {len(actual_names)}"
+            )
+
+        for index, (expected, actual) in enumerate(
+            zip(expected_names, actual_names)
+        ):
+            if expected != actual:
+                raise ValueError(
+                    f"feature name/order mismatch at index {index}: "
+                    f"expected {expected!r}, got {actual!r}"
+                )
+
+        # 위에서 길이와 모든 위치를 확인했으므로 이 분기는 방어적으로 둔다.
+        raise ValueError("feature names do not match the schema")
 
     def to_dict(self) -> dict[str, object]:
         """모델팀이 사용할 수 있는 Schema manifest로 변환한다."""
@@ -113,3 +161,21 @@ class FeatureSchema:
         if not np.all(np.isfinite(vector)):
             raise ValueError("feature vector contains NaN or infinite values")
         return vector
+
+    def validate_matrix(
+        self,
+        values: Sequence[Sequence[float]] | np.ndarray,
+    ) -> np.ndarray:
+        """행마다 같은 Schema를 사용하는 2차원 Feature 행렬을 검증한다."""
+
+        matrix = np.asarray(values, dtype=np.dtype(self.dtype))
+        if matrix.ndim != 2:
+            raise ValueError("feature matrix must be two-dimensional")
+        if matrix.shape[1] != self.feature_count:
+            raise ValueError(
+                f"expected {self.feature_count} features per row for {self.version}, "
+                f"got {matrix.shape[1]}"
+            )
+        if not np.all(np.isfinite(matrix)):
+            raise ValueError("feature matrix contains NaN or infinite values")
+        return matrix

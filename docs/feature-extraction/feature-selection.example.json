@@ -1,0 +1,8 @@
+{
+  "selection_schema_version": "feature-selection-v1",
+  "source_schema_version": "ember2024-v3-pe-873e612248d4",
+  "selection_id": "ember-v3-all-example",
+  "mode": "all",
+  "dtype": "float32",
+  "feature_names": []
+}

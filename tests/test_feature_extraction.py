@@ -15,7 +15,10 @@ from trust_triage.feature_extraction import (
     ApiImportMatch,
     EmberV3Extractor,
     ExtractionStatus,
+    FeatureExtractionResult,
+    FeatureSelectionError,
     FeatureSchema,
+    FeatureSelector,
     classify_imports,
     extract_file,
 )
@@ -394,6 +397,139 @@ def test_ember_feature_group_configuration_changes_schema(
 def test_schema_rejects_duplicate_feature_names() -> None:
     with pytest.raises(ValueError, match="feature names must be unique"):
         FeatureSchema(version="test-v1", feature_names=("duplicate", "duplicate"))
+
+
+def test_schema_validates_feature_names_and_matrix() -> None:
+    schema = FeatureSchema(
+        version="test-v1",
+        feature_names=("first", "second", "third"),
+    )
+
+    assert schema.validate_feature_names(["first", "second", "third"]) == (
+        "first",
+        "second",
+        "third",
+    )
+    matrix = schema.validate_matrix([[1, 2, 3], [4, 5, 6]])
+    assert matrix.shape == (2, 3)
+    assert matrix.dtype == np.float32
+
+    with pytest.raises(ValueError, match="feature name/order mismatch"):
+        schema.validate_feature_names(["second", "first", "third"])
+    with pytest.raises(ValueError, match="expected 3 features per row"):
+        schema.validate_matrix([[1, 2]])
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        schema.validate_matrix([[1, np.nan, 3]])
+
+
+def test_feature_selector_preserves_explicit_order_and_round_trips_manifest() -> None:
+    schema = FeatureSchema(
+        version="test-v1",
+        feature_names=("first", "second", "third"),
+    )
+    selector = FeatureSelector.from_feature_names(
+        schema,
+        ["third", "first"],
+        selection_id="demo-subset",
+    )
+
+    vector = selector.select_vector(
+        [1, 2, 3],
+        schema_version="test-v1",
+        feature_names=["first", "second", "third"],
+    )
+    assert vector.tolist() == [3.0, 1.0]
+    assert vector.dtype == np.float32
+    assert selector.source_indices == (2, 0)
+    assert selector.output_schema.feature_names == ("third", "first")
+    assert selector.is_all is False
+
+    restored = FeatureSelector.from_manifest(schema, selector.to_dict())
+    assert restored.output_schema.version == selector.output_schema.version
+    assert restored.select_vector([1, 2, 3]).tolist() == [3.0, 1.0]
+
+
+def test_feature_selector_rejects_incompatible_selection_inputs() -> None:
+    schema = FeatureSchema(version="test-v1", feature_names=("first", "second"))
+
+    with pytest.raises(FeatureSelectionError, match="must be unique"):
+        FeatureSelector.from_feature_names(schema, ["first", "first"])
+    with pytest.raises(FeatureSelectionError, match="not present"):
+        FeatureSelector.from_feature_names(schema, ["missing"])
+    with pytest.raises(FeatureSelectionError, match="fewer than all"):
+        FeatureSelector.from_manifest(
+            schema,
+            {
+                "selection_schema_version": "feature-selection-v1",
+                "source_schema_version": "test-v1",
+                "selection_id": "reordered-all",
+                "mode": "subset",
+                "feature_names": ["second", "first"],
+            },
+        )
+
+    selector = FeatureSelector.from_feature_names(schema, ["second"])
+    with pytest.raises(FeatureSelectionError, match="version mismatch"):
+        selector.select_vector([1, 2], schema_version="other-v1")
+    with pytest.raises(FeatureSelectionError, match="name/order"):
+        selector.select_vector(
+            [1, 2],
+            schema_version="test-v1",
+            feature_names=["second", "first"],
+        )
+    with pytest.raises(FeatureSelectionError, match="must be float32"):
+        FeatureSelector.from_feature_names(schema, ["first"], dtype="float64")
+
+
+def test_feature_extraction_result_builds_valid_model_input() -> None:
+    schema = FeatureSchema(version="test-v1", feature_names=("first", "second"))
+    result = FeatureExtractionResult.success(
+        schema=schema,
+        sha256="a" * 64,
+        file_type="PE32",
+        values=[1, 2],
+    )
+    selector = FeatureSelector.all(schema, selection_id="all-features")
+
+    model_input = result.to_model_input(selector)
+
+    assert model_input.dtype == np.float32
+    assert model_input.tolist() == [1.0, 2.0]
+
+
+def test_cli_selection_outputs_only_selected_model_input(
+    benign_pe_fixture: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    schema = EmberV3Extractor().schema
+    selection_path = tmp_path / "selection.json"
+    selection_path.write_text(
+        json.dumps(
+            {
+                "selection_schema_version": "feature-selection-v1",
+                "source_schema_version": schema.version,
+                "selection_id": "cli-subset",
+                "mode": "subset",
+                "dtype": "float32",
+                "feature_names": list(schema.feature_names[:3]),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli_main(
+        [str(benign_pe_fixture), "--selection-file", str(selection_path)]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["selection_id"] == "cli-subset"
+    assert payload["source_schema_version"] == schema.version
+    assert payload["dtype"] == "float32"
+    assert payload["feature_count"] == 3
+    assert payload["feature_names"] == list(schema.feature_names[:3])
+    assert len(payload["features"]) == 3
 
 
 def test_missing_feature_configuration_is_explicit(tmp_path: Path) -> None:

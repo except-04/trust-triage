@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
-from .ember_v3 import extract_file
+import numpy as np
+
+from .ember_v3 import EmberV3Extractor, extract_file
 from .result import FeatureExtractionResult
+from .selection import FeatureSelector
 
 
 def format_summary(result: FeatureExtractionResult) -> str:
@@ -59,6 +63,47 @@ def format_summary(result: FeatureExtractionResult) -> str:
     return "\n".join(lines)
 
 
+def format_selection_summary(
+    selector: FeatureSelector,
+    selected_feature_count: int,
+) -> str:
+    """선택된 모델 입력 Schema의 핵심 정보만 출력한다."""
+
+    return "\n".join(
+        [
+            "[모델 입력 Feature 선택 요약]",
+            f"선택 ID: {selector.selection_id}",
+            f"선택 방식: {'전체' if selector.is_all else '부분집합'}",
+            f"모델 입력 Schema: {selector.output_schema.version}",
+            f"모델 입력 Feature 개수: {selected_feature_count}",
+            f"자료형: {selector.dtype}",
+        ]
+    )
+
+
+def build_selected_payload(
+    result: FeatureExtractionResult,
+    selector: FeatureSelector,
+    selected_vector: np.ndarray,
+) -> dict[str, object]:
+    """추출 결과에서 선택된 모델 입력 벡터만 JSON으로 만든다."""
+
+    # selected_vector는 FeatureSelector가 검증한 1차원 NumPy 배열이다.
+    return {
+        "source_schema_version": result.schema_version,
+        "schema_version": selector.output_schema.version,
+        "selection_id": selector.selection_id,
+        "mode": "all" if selector.is_all else "subset",
+        "dtype": selector.dtype,
+        "sha256": result.sha256,
+        "file_type": result.file_type,
+        "is_dotnet": result.is_dotnet,
+        "feature_count": selector.feature_count,
+        "feature_names": list(selector.selected_feature_names),
+        "features": [float(value) for value in selected_vector],
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="PE 파일에서 재현 가능한 정적 Feature를 추출합니다."
@@ -76,12 +121,50 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="JSON 대신 핵심 분석 정보와 API 그룹 결과를 요약해서 출력합니다",
     )
+    parser.add_argument(
+        "--selection-file",
+        help="모델 입력 Feature 선택 manifest JSON 경로",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    result = extract_file(args.path, features_file=args.features_file)
+    if args.selection_file:
+        # 선택 manifest는 실제로 사용한 extractor Schema에 대해 검증해야
+        # 하므로, 이 경우에는 extractor 객체를 직접 유지한다.
+        extractor = EmberV3Extractor(features_file=args.features_file)
+        result = extractor.extract(args.path)
+    else:
+        result = extract_file(args.path, features_file=args.features_file)
+
+    if args.selection_file and result.status.value == "SUCCESS":
+        try:
+            selector = FeatureSelector.from_json_file(
+                extractor.schema,
+                args.selection_file,
+            )
+            selected_vector = result.to_model_input(selector)
+        except (OSError, ValueError) as exc:
+            print(f"Feature selection error: {exc}", file=sys.stderr)
+            return 2
+
+        if args.summary:
+            print(format_summary(result))
+            print()
+            print(format_selection_summary(selector, selector.feature_count))
+            return 0
+
+        indent = None if args.compact else 2
+        print(
+            json.dumps(
+                build_selected_payload(result, selector, selected_vector),
+                ensure_ascii=False,
+                indent=indent,
+                allow_nan=False,
+            )
+        )
+        return 0
     if args.summary:
         print(format_summary(result))
         return 0 if result.status.value == "SUCCESS" else 1
