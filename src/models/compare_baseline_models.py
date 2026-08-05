@@ -106,7 +106,7 @@ params = {
     "metric": ["auc"], 
     "num_leaves":31, 
     "learning_rate": 0.05,
-    "min_child_sample":30,
+    "min_child_samples":30,
     "subsample":0.8,
     "colsample_bytree":0.8,
     "random_state":42,
@@ -131,7 +131,7 @@ with mlflow.start_run(run_name="week_baseline_full_v1"):
     mlflow.log_metric("tpr_at_fpr", metrics_full["tpr_at_fpr"])
     mlflow.log_metric("threshold", metrics_full["threshold"])
     mlflow.log_metric("target_fpr", TARGET_FPR)
-    mlflow.sklearn.log_model(model_full, "model")
+    mlflow.lightgbm.log_model(model_full, "model")
     
     for code, name in [(0, "win32"), (1, "win64")]:
         result = evaluate_by_arch(
@@ -156,7 +156,7 @@ feature_importance = model_full.feature_importances_
 # 개수별로 여러 개 돌려서 몇 개부터 성능이 꺾이는지 시각적으로 확인하고,
 # 그 지점을 기준으로 최종 개수를 정한다. 
 # ==============================================================
-TOP_N_LIST = [50, 100]
+TOP_N_LIST = [100]
 
 importance_df = pd.DataFrame(
     {"index": range(len(feature_importance)), "importance":feature_importance}
@@ -190,7 +190,7 @@ def train_and_evaluate_reduced(top_n):
         mlflow.log_metric("roc_auc", metrics_r["roc_auc"])
         mlflow.log_metric("tpr_at_fpr", metrics_r["tpr_at_fpr"])
         mlflow.log_metric("threshold", metrics_r["threshold"])
-        mlflow.sklearn.log_model(model_r, "model")
+        mlflow.lightgbm.log_model(model_r, "model")
         
         print(
             f"Reduced({top_n}) model ㅡ ROC_AUC: {metrics_r['roc_auc']:.4f}, "

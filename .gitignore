@@ -243,3 +243,7 @@ mlartifacts/
 
 # folder
 data/
+
+# file
+*.csv
+*.npy
