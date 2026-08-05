@@ -62,7 +62,25 @@ def tpr_at_threshold(y_true, scores, threshold):
     fn = ((pred == 0) & (y_true == 1)).sum()    # False Negative: 실제 악성을 정상이라고 미판
     
     return tp / (tp + fn) if (tp + fn) > 0 else float("nan")
-#def evaluate(model, X_calib, y_calib, X_eval, y_eval, target_fpr = TARGET_FPR)
+
+
+def evaluate(model, X_calib, y_calib, X_eval, y_eval, target_fpr = TARGET_FPR):
+    """
+    모델 하나를 평가한다. threshold 산출과 성능 확인에 서로 다른 데이터를 쓰는 게 핵심이다.
+    같은 데이터로 하면 "내가 정한 기준으로 나를 채점"하는 셈이라 성능이 실제보다 좋게 나올 수 있다.(누수)   
+    """
+    
+    # 1) threshold는 반드시 calibration 세트에서만 산출
+    calib_scores = model.predict_proba(X_calib)[:, 1]
+    threshold = find_threshold_at_fpr(y_calib, calib_scores, target_fpr)
+    # 2) 위에서 정한 threshold를 다른 데이터(eval)에 적용해 성능 확인
+    eval_scores = model.predict_proba(X_eval)[:, 1]
+    roc_auc = roc_auc_score(y_eval, eval_scores)    # threshold 무관, 종합 구분 능력
+    tpr = tpr_at_threshold(y_eval, eval_scores, threshold)
+    
+    return {"roc_auc":roc_auc, "tpr_at_fpr":tpr, "threshold":threshold}
+
+    
 #def evaluate_bt_arch(model, X_eval, y_eval, arch_eval, threshold, arch_code, arch_name)
 # ==============================================================
 # 3. 모델 1 - 전체 특징(2568)
