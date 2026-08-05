@@ -243,6 +243,7 @@ mlartifacts/
 
 # folder
 data/
+EMBER2024/
 
 # file
 *.csv
