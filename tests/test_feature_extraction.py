@@ -298,6 +298,10 @@ def test_api_group_report_is_serialized_with_feature_result(
         "injection",
         "network",
     }
+    # API_GROUPS는 모델 입력 Feature가 아니라 별도 분석 정보다.
+    assert payload["feature_count"] == 2568
+    assert len(payload["features"]) == 2568
+    assert "api_registry_group" not in payload["feature_names"]
 
 
 def test_cli_summary_prints_core_information_without_full_vector(
@@ -572,3 +576,25 @@ def test_cli_selection_outputs_only_selected_model_input(
 def test_missing_feature_configuration_is_explicit(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="configuration does not exist"):
         EmberV3Extractor(features_file=tmp_path / "missing.json")
+
+
+def test_top500_selection_manifest_matches_runtime_schema(
+    benign_pe_fixture: Path,
+) -> None:
+    manifest_path = (
+        Path(__file__).parents[1]
+        / "docs"
+        / "feature-extraction"
+        / "feature-selection-ember-v3-top500.json"
+    )
+    extractor = EmberV3Extractor()
+    selector = FeatureSelector.from_json_file(extractor.schema, manifest_path)
+    result = extractor.extract(benign_pe_fixture)
+
+    model_input = result.to_model_input(selector)
+
+    assert selector.selection_id == "ember-v3-top500"
+    assert selector.feature_count == 500
+    assert len(selector.source_indices) == 500
+    assert model_input.dtype == np.float32
+    assert model_input.shape == (500,)

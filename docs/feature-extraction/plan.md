@@ -219,9 +219,9 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 
 - [ ] 팀에서 최종 모델 Feature 사용 범위 결정
 - [ ] EMBER 학습 데이터의 Feature Schema와 실제 추출 Schema 대조
-- [ ] 모델 학습 결과에 맞는 Feature 이름·인덱스 목록 문서화
-- [ ] 모델팀의 최종 Feature 목록으로 selection manifest 확정
-- [ ] 모델 학습·추론 파이프라인과 `FeatureSelector` 통합 테스트
+- [x] 모델 학습 결과에 맞는 Feature 이름·인덱스 목록 문서화
+- [x] 모델팀의 top500 목록으로 selection manifest 작성
+- [x] 모델 학습·추론 입력과 `FeatureSelector` 통합 테스트
 - [ ] API_GROUPS를 JRR에 전달할 공통 필드 확정
 - [ ] API_GROUPS 결과의 근거와 한계 문서화
 

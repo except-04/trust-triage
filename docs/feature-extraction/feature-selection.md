@@ -44,7 +44,8 @@ Feature를 삭제하거나 순서를 바꾸면 학습 데이터와 실제 PE 추
 ### 일부 Feature 사용
 
 목록의 순서가 그대로 모델 입력 열의 순서가 된다. 아래 예시는 설명을 위한
-형식이며, 실제 목록은 모델팀이 확정한 목록으로 교체해야 한다.
+형식이다. 현재 모델팀이 전달한 실제 상위 500개 목록은
+`feature-selection-ember-v3-top500.json` manifest로 관리한다.
 
 ```json
 {
@@ -60,6 +61,10 @@ Feature를 삭제하거나 순서를 바꾸면 학습 데이터와 실제 PE 추
   ]
 }
 ```
+
+현재 상위 500개 선택 manifest:
+
+`feature-selection-ember-v3-top500.json`
 
 `source_schema_version`은 실행 중인 `EmberV3Extractor`의 Schema 버전과 정확히
 같아야 한다. 모델을 다시 학습하거나 Feature 규격이 바뀌면 새
