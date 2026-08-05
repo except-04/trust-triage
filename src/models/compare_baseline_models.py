@@ -3,6 +3,7 @@ import pandas as pd
 import lightgbm as lgb
 import mlflow
 from sklearn.metrics import roc_auc_score, roc_curve
+import os
 
 DATA_DIR = "D:\KISIA_laptop\out\dev"
 TARGET_FPR = 0.001 # 0.1%
@@ -99,55 +100,61 @@ def evaluate_by_arch(model, X_eval, y_eval, arch_eval, threshold, arch_code, arc
 # ==============================================================
 # 3. 모델 1 - 전체 특징(2568)
 # ==============================================================
-mlflow.set_experiment("trust-triage-baseline")
+if os.path.exists("feature_importance_full.npy"):
+    feature_importance = np.load("feature_importance_full.npy")
+    
+    
+else:
+    mlflow.set_experiment("trust-triage-baseline")
 
-params = {
-    "objective":"binary",
-    "metric": ["auc"], 
-    "num_leaves":31, 
-    "learning_rate": 0.05,
-    "min_child_samples":30,
-    "subsample":0.8,
-    "colsample_bytree":0.8,
-    "random_state":42,
-}
+    params = {
+        "objective":"binary",
+        "metric": ["auc"], 
+        "num_leaves":31, 
+        "learning_rate": 0.05,
+        "min_child_samples":30,
+        "subsample":0.8,
+        "colsample_bytree":0.8,
+        "random_state":42,
+    }
 
-with mlflow.start_run(run_name="week_baseline_full_v1"):
-    mlflow.set_tag("dataset_source", "EMBER2024_association_processed")
-    mlflow.set_tag("feature_set", "full")
-    mlflow.set_tag("split_type", "temporal_week_id")
-    
-    model_full = lgb.LGBMClassifier(**params, n_estimators=500)
-    # NaN 그대로 전달
-    model_full.fit(
-        X_tr, y_tr,
-        eval_set=[(X_calib, y_calib)],
-        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
-    )
-    
-    metrics_full = evaluate(model_full, X_calib, y_calib, X_eval, y_eval)
-    mlflow.log_params(params)
-    mlflow.log_metric("roc_auc", metrics_full["roc_auc"])
-    mlflow.log_metric("tpr_at_fpr", metrics_full["tpr_at_fpr"])
-    mlflow.log_metric("threshold", metrics_full["threshold"])
-    mlflow.log_metric("target_fpr", TARGET_FPR)
-    mlflow.lightgbm.log_model(model_full, "model")
-    
-    for code, name in [(0, "win32"), (1, "win64")]:
-        result = evaluate_by_arch(
-            model_full, X_eval, y_eval, arch_eval, metrics_full["threshold"], code, name
+    with mlflow.start_run(run_name="week_baseline_full_v1"):
+        mlflow.set_tag("dataset_source", "EMBER2024_association_processed")
+        mlflow.set_tag("feature_set", "full")
+        mlflow.set_tag("split_type", "temporal_week_id")
+        
+        model_full = lgb.LGBMClassifier(**params, n_estimators=500)
+        # NaN 그대로 전달
+        model_full.fit(
+            X_tr, y_tr,
+            eval_set=[(X_calib, y_calib)],
+            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=100)],
         )
         
-        if result:
-            mlflow.log_metric(f"tpr_at_fpr_{name}", result["tpr_at_fpr"])
-            print(f"[{name}] n = {result['n']}, TPR@FPR={result['tpr_at_fpr']:.4f}")
-    
-    print(
-        f"Full model ㅡ ROC-AUC: {metrics_full['roc_auc']:.4f}"
-        f"TPR@FPR{TARGET_FPR:.1%}: {metrics_full['tpr_at_fpr']:.4f}"
-    )
-    
-feature_importance = model_full.feature_importances_
+        metrics_full = evaluate(model_full, X_calib, y_calib, X_eval, y_eval)
+        mlflow.log_params(params)
+        mlflow.log_metric("roc_auc", metrics_full["roc_auc"])
+        mlflow.log_metric("tpr_at_fpr", metrics_full["tpr_at_fpr"])
+        mlflow.log_metric("threshold", metrics_full["threshold"])
+        mlflow.log_metric("target_fpr", TARGET_FPR)
+        mlflow.lightgbm.log_model(model_full, "model")
+        
+        for code, name in [(0, "win32"), (1, "win64")]:
+            result = evaluate_by_arch(
+                model_full, X_eval, y_eval, arch_eval, metrics_full["threshold"], code, name
+            )
+            
+            if result:
+                mlflow.log_metric(f"tpr_at_fpr_{name}", result["tpr_at_fpr"])
+                print(f"[{name}] n = {result['n']}, TPR@FPR={result['tpr_at_fpr']:.4f}")
+        
+        print(
+            f"Full model ㅡ ROC-AUC: {metrics_full['roc_auc']:.4f}, "
+            f"TPR@FPR{TARGET_FPR:.1%}: {metrics_full['tpr_at_fpr']:.4f}"
+        )
+        
+    feature_importance = model_full.feature_importances_
+    np.save("feature_importance_full.npy", feature_importance)
 
 # ==============================================================
 # 4. 모델 2 - 상위 N개 특징을 여러 값으로 확인
@@ -156,7 +163,7 @@ feature_importance = model_full.feature_importances_
 # 개수별로 여러 개 돌려서 몇 개부터 성능이 꺾이는지 시각적으로 확인하고,
 # 그 지점을 기준으로 최종 개수를 정한다. 
 # ==============================================================
-TOP_N_LIST = [100]
+TOP_N_LIST = [100, 500, 1000]
 
 importance_df = pd.DataFrame(
     {"index": range(len(feature_importance)), "importance":feature_importance}
@@ -166,6 +173,7 @@ def train_and_evaluate_reduced(top_n):
     """ 상위 top_n개 특징만으로 모델을 학습, 평가하고 결과를 반환한다."""
 
     top_indices = importance_df.head(top_n)["index"].values
+    top_indices = np.sort(top_indices)
     np.save(f"top_feature_indices_{top_n}.npy", top_indices)
     
     X_tr_r = X_tr[:, top_indices]
@@ -182,7 +190,7 @@ def train_and_evaluate_reduced(top_n):
         model_r.fit(
             X_tr_r, y_tr,
             eval_set=[(X_calib_r, y_calib)],
-            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=100)],
         )
         
         metrics_r = evaluate(model_r, X_calib_r, y_calib, X_eval_r, y_eval)
@@ -194,13 +202,15 @@ def train_and_evaluate_reduced(top_n):
         
         print(
             f"Reduced({top_n}) model ㅡ ROC_AUC: {metrics_r['roc_auc']:.4f}, "
-            f"TPR@FPR{TARGET_FPR:.1f}: {metrics_r['tpr_at_fpr']:.4f}"
+            f"TPR@FPR{TARGET_FPR:.1%}: {metrics_r['tpr_at_fpr']:.4f}"
         )
         
     return {"top_n": top_n, **metrics_r}
 
 results = [{"top_n":X_tr.shape[1], **metrics_full}]     # 전체 특징(2568)도 같은 표에 포함
+
 for n in TOP_N_LIST:
+    print(f"-> TOP {n}개 시작")
     results.append(train_and_evaluate_reduced(n))
 
 # ==============================================================
