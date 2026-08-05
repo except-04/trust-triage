@@ -150,8 +150,59 @@ with mlflow.start_run(run_name="week_baseline_full_v1"):
 feature_importance = model_full.feature_importances_
 
 # ==============================================================
-# 4. 모델 2 - 상위 N개 특징(100)
+# 4. 모델 2 - 상위 N개 특징을 여러 값으로 확인
+#
+# TOP_N 하나만 정해서 비교하면 왜 하필 이 개수인지 근거가 약함.
+# 개수별로 여러 개 돌려서 몇 개부터 성능이 꺾이는지 시각적으로 확인하고,
+# 그 지점을 기준으로 최종 개수를 정한다. 
 # ==============================================================
+TOP_N_LIST = [50, 100, 500, 1000, 1500, 2000]
+
+importance_df = pd.DataFrame(
+    {"index": range(len(feature_importance)), "importance":feature_importance}
+).sort_values("importance", ascending=False)
+
+def train_and_evaluate_reduced(top_n):
+    """ 상위 top_n개 특징만으로 모델을 학습, 평가하고 결과를 반환한다."""
+
+    top_indices = importance_df.head(top_n)["index"].values
+    np.save(f"top_feature_indices_{top_n}.npy", top_indices)
+    
+    X_tr_r = X_tr[:, top_indices]
+    X_calib_r = X_calib[:, top_indices]
+    X_eval_r = X_eval[:, top_indices]
+    
+    with mlflow.start_run(run_name=f"week_baseline_recuced_top{top_n}_v1"):
+        mlflow.set_tag("dataset_source", "EMBER2024_association_processed")
+        mlflow.set_tag("feature_set", "reduced")
+        mlflow.set_tag("top_n", str(top_n))
+        mlflow.set_tag("split_type", "temporal_week_id")
+        
+        model_r = lgb.LGBMClassifier(**params, n_estimators=500)
+        model_r.fit(
+            X_tr_r, y_tr,
+            eval_set=[(X_calib_r, y_calib)],
+            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+        )
+        
+        metrics_r = evaluate(model_r, X_calib_r, y_calib, X_eval_r, y_eval)
+        mlflow.log_params(params)
+        mlflow.log_metric("roc_auc", metrics_r["roc_auc"])
+        mlflow.log_metric("tpr_at_fpr", metrics_r["tpr_at_fpr"])
+        mlflow.log_metric("threshold", metrics_r["threshold"])
+        mlflow.sklearn.log_model(model_r, "model")
+        
+        print(
+            f"Reduced({top_n}) model ㅡ ROC_AUC: {metrics_r['roc_auc']:.4f}, "
+            f"TPR@FPR{TARGET_FPR:.1f}: {metrics_r['tpr_at_fpr']:.4f}"
+        )
+        
+    return {"top_n": top_n, **metrics_r}
+
+results = [{"top_n":X_tr.shape[1], **metrics_full}]     # 전체 특징(2568)도 같은 표에 포함
+for n in TOP_N_LIST:
+    results.append(train_and_evaluate_reduced(n))
+
 # ==============================================================
 # 5. 요약
 # ==============================================================
