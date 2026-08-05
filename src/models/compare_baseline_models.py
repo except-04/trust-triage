@@ -54,7 +54,14 @@ def find_threshold_at_fpr(y_true, scores, target_fpr):
     
     return threshold[idx]
 
-#def tpr_at_threshold(y_true, scores, threshold)
+def tpr_at_threshold(y_true, scores, threshold):
+    """주어진 threshold를 적용했을 때 TPR을 계산한다."""
+    
+    pred = (scores >= threshold).astype(int)
+    tp = ((pred == 1) & (y_true == 1)).sum()    # True Positive: 실제 악성을 악성이라고 맞힘
+    fn = ((pred == 0) & (y_true == 1)).sum()    # False Negative: 실제 악성을 정상이라고 미판
+    
+    return tp / (tp + fn) if (tp + fn) > 0 else float("nan")
 #def evaluate(model, X_calib, y_calib, X_eval, y_eval, target_fpr = TARGET_FPR)
 #def evaluate_bt_arch(model, X_eval, y_eval, arch_eval, threshold, arch_code, arch_name)
 # ==============================================================
