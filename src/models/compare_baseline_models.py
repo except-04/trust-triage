@@ -81,7 +81,21 @@ def evaluate(model, X_calib, y_calib, X_eval, y_eval, target_fpr = TARGET_FPR):
     return {"roc_auc":roc_auc, "tpr_at_fpr":tpr, "threshold":threshold}
 
     
-#def evaluate_bt_arch(model, X_eval, y_eval, arch_eval, threshold, arch_code, arch_name)
+def evaluate_by_arch(model, X_eval, y_eval, arch_eval, threshold, arch_code, arch_name):
+    """
+    Win32/Win64를 따로 떼어 같은 threshold로 TPR을 재확인한다.
+    Win32:Win64 비율이 약 3:1이라, 전체 집계 지표만 보면 사실상 Win32 성능만 반영되어 
+    Win 64 에서만 성능이 나쁜 경우를 놓칠 수 있다. 
+    """
+    
+    mask = arch_eval == arch_code
+    if mask.sum() == 0:
+        return None
+    
+    scores = model.predict_proba(X_eval[mask])[:, 1]
+    tpr = tpr_at_threshold(y_eval[mask], scores, threshold)
+    
+    return {"arch": arch_name, "n": int(mask.sum()), "tpr_at_fpr":tpr}
 # ==============================================================
 # 3. 모델 1 - 전체 특징(2568)
 # ==============================================================
