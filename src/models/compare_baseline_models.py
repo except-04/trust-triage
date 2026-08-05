@@ -156,7 +156,7 @@ feature_importance = model_full.feature_importances_
 # 개수별로 여러 개 돌려서 몇 개부터 성능이 꺾이는지 시각적으로 확인하고,
 # 그 지점을 기준으로 최종 개수를 정한다. 
 # ==============================================================
-TOP_N_LIST = [50, 100, 500, 1000, 1500, 2000]
+TOP_N_LIST = [50, 100]
 
 importance_df = pd.DataFrame(
     {"index": range(len(feature_importance)), "importance":feature_importance}
@@ -204,5 +204,12 @@ for n in TOP_N_LIST:
     results.append(train_and_evaluate_reduced(n))
 
 # ==============================================================
-# 5. 요약
+# 5. 요약 ㅡ 전체 vs 여러 TOP_N을 한 표로 비교
 # ==============================================================
+
+results_df = pd.DataFrame(results)[["top_n", "roc_auc", "tpr_at_fpr", "threshold"]]
+results_df = results_df.rename(columns={"top_n":"feature_count"})
+results_df.to_csv("baseline_comparision_results.csv", index=False)
+
+print(f"\n === 비교 결과 (목표 FPR : {TARGET_FPR:.1f}) ===")
+print(results_df.to_string(index=False))
