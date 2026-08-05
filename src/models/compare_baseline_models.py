@@ -99,6 +99,56 @@ def evaluate_by_arch(model, X_eval, y_eval, arch_eval, threshold, arch_code, arc
 # ==============================================================
 # 3. 모델 1 - 전체 특징(2568)
 # ==============================================================
+mlflow.set_experiment("trust-triage-baseline")
+
+params = {
+    "objective":"binary",
+    "metric": ["auc"], 
+    "num_leaves":31, 
+    "learning_rate": 0.05,
+    "min_child_sample":30,
+    "subsample":0.8,
+    "colsample_bytree":0.8,
+    "random_state":42,
+}
+
+with mlflow.start_run(run_name="week_baseline_full_v1"):
+    mlflow.set_tag("dataset_source", "EMBER2024_association_processed")
+    mlflow.set_tag("feature_set", "full")
+    mlflow.set_tag("split_type", "temporal_week_id")
+    
+    model_full = lgb.LGBMClassifier(**params, n_estimators=500)
+    # NaN 그대로 전달
+    model_full.fit(
+        X_tr, y_tr,
+        eval_set=[(X_calib, y_calib)],
+        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+    )
+    
+    metrics_full = evaluate(model_full, X_calib, y_calib, X_eval, y_eval)
+    mlflow.log_params(params)
+    mlflow.log_metric("roc_auc", metrics_full["roc_auc"])
+    mlflow.log_metric("tpr_at_fpr", metrics_full["tpr_at_fpr"])
+    mlflow.log_metric("threshold", metrics_full["threshold"])
+    mlflow.log_metric("target_fpr", TARGET_FPR)
+    mlflow.sklearn.log_model(model_full, "model")
+    
+    for code, name in [(0, "win32"), (1, "win64")]:
+        result = evaluate_by_arch(
+            model_full, X_eval, y_eval, arch_eval, metrics_full["threshold"], code, name
+        )
+        
+        if result:
+            mlflow.log_metric(f"tpr_at_fpr_{name}", result["tpr_at_fpr"])
+            print(f"[{name}] n = {result['n']}, TPR@FPR={result['tpr_at_fpr']:.4f}")
+    
+    print(
+        f"Full model ㅡ ROC-AUC: {metrics_full['roc_auc']:.4f}"
+        f"TPR@FPR{TARGET_FPR:.1%}: {metrics_full['tpr_at_fpr']:.4f}"
+    )
+    
+feature_importance = model_full.feature_importances_
+
 # ==============================================================
 # 4. 모델 2 - 상위 N개 특징(100)
 # ==============================================================
