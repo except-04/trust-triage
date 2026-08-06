@@ -1,0 +1,86 @@
+{
+  "schema_version": "ember2024-v3-pe-873e612248d4",
+  "dtype": "float32",
+  "feature_count": 2568,
+  "feature_name_pattern": "{group}[{index}]",
+  "feature_names_are_ordered": true,
+  "source": {
+    "package": "thrember",
+    "repository": "https://github.com/FutureComputing4AI/EMBER2024",
+    "commit": "0ef753e81d98bf209f71b03cd331dfc190b5b54d"
+  },
+  "groups": [
+    {
+      "name": "general",
+      "start_index": 0,
+      "end_index_exclusive": 7,
+      "dimension": 7
+    },
+    {
+      "name": "histogram",
+      "start_index": 7,
+      "end_index_exclusive": 263,
+      "dimension": 256
+    },
+    {
+      "name": "byteentropy",
+      "start_index": 263,
+      "end_index_exclusive": 519,
+      "dimension": 256
+    },
+    {
+      "name": "strings",
+      "start_index": 519,
+      "end_index_exclusive": 696,
+      "dimension": 177
+    },
+    {
+      "name": "header",
+      "start_index": 696,
+      "end_index_exclusive": 770,
+      "dimension": 74
+    },
+    {
+      "name": "section",
+      "start_index": 770,
+      "end_index_exclusive": 994,
+      "dimension": 224
+    },
+    {
+      "name": "imports",
+      "start_index": 994,
+      "end_index_exclusive": 2276,
+      "dimension": 1282
+    },
+    {
+      "name": "exports",
+      "start_index": 2276,
+      "end_index_exclusive": 2405,
+      "dimension": 129
+    },
+    {
+      "name": "datadirectories",
+      "start_index": 2405,
+      "end_index_exclusive": 2439,
+      "dimension": 34
+    },
+    {
+      "name": "richheader",
+      "start_index": 2439,
+      "end_index_exclusive": 2472,
+      "dimension": 33
+    },
+    {
+      "name": "authenticode",
+      "start_index": 2472,
+      "end_index_exclusive": 2480,
+      "dimension": 8
+    },
+    {
+      "name": "pefilewarnings",
+      "start_index": 2480,
+      "end_index_exclusive": 2568,
+      "dimension": 88
+    }
+  ]
+}
