@@ -31,9 +31,11 @@ from sklearn.metrics import roc_curve
 # 환경 설정
 # --------------------------------------------------------------------------
 
-Y_TRUE_PATH = "y_calib.npy" 
-Y_PRED_PATH = "y_pred_proba.npy"
-TARGET_FPR = 0.001  # 수행계획서 목표 (FPR 0.1%)
+#구글 드라이브(out.zip)에서 다운로드한 y_calib.npy 및 y_pred_proba.npy 파일은
+# 프로젝트 최상위의 'data/' 폴더 아래에 위치시켜야 함
+Y_TRUE_PATH = "data/y_calib.npy" #40~45주차 Calibration 정답지 (실제 정상/악성 라벨)
+Y_PRED_PATH = "data/y_pred_proba.npy" #Baseline 모델이 추론한 원시 예측 확률값
+TARGET_FPR = 0.001  # 계획상 목표 (FPR 0.1%)
 
 
 # --------------------------------------------------------------------------
