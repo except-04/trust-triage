@@ -27,12 +27,12 @@ with mlflow.start_run(run_name="xgboost_500_v1"):
         max_depth=6,
         learning_rate=0.05,
         random_state=42,
-        tree_methon='hist'
+        tree_methon='hist',
+        early_stopping_rounds=50
     )
     model_xgb.fit(
         X_tr_500, y_tr,
         eval_set=[(X_calib_500, y_calib)],
-        early_stopping_rounds=50,
         verbose=50
     )
 
