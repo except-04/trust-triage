@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
@@ -12,6 +13,35 @@ import numpy as np
 from .api_groups import ApiGroupReport
 from .schema import FeatureSchema
 from .selection import FeatureSelector
+
+
+def feature_values_to_json(
+    values: Sequence[float] | np.ndarray,
+) -> list[float | None]:
+    """Feature 값을 표준 JSON에서 안전한 숫자 또는 ``null``로 바꾼다.
+
+    JSON 표준에는 NaN 표현이 없으므로 내부 NumPy 벡터의 NaN을 ``null``로
+    직렬화한다. 무한대는 Feature Schema에서 금지되며, 방어적으로 여기서도
+    거부해 비표준 JSON이나 잘못된 모델 입력이 생성되지 않게 한다.
+    """
+
+    serialized: list[float | None] = []
+    for value in values:
+        number = float(value)
+        if math.isnan(number):
+            serialized.append(None)
+        elif math.isinf(number):
+            raise ValueError("feature values contain infinite values")
+        else:
+            serialized.append(number)
+    return serialized
+
+
+def _nan_feature_indices(values: Sequence[float] | np.ndarray) -> list[int]:
+    """벡터에서 NaN인 원소의 인덱스를 JSON용 정수 목록으로 반환한다."""
+
+    vector = np.asarray(values, dtype=np.float32)
+    return [int(index) for index in np.flatnonzero(np.isnan(vector))]
 
 
 class ExtractionStatus(str, Enum):
@@ -59,6 +89,11 @@ class FeatureExtractionResult:
         metadata: Mapping[str, Any] | None = None,
     ) -> "FeatureExtractionResult":
         vector = schema.validate_vector(values)
+        nan_indices = _nan_feature_indices(vector)
+        inferred_missing = [schema.feature_names[index] for index in nan_indices]
+        all_missing = list(
+            dict.fromkeys([*(missing_features or []), *inferred_missing])
+        )
         return cls(
             schema_version=schema.version,
             sha256=sha256,
@@ -67,7 +102,7 @@ class FeatureExtractionResult:
             feature_count=schema.feature_count,
             feature_names=list(schema.feature_names),
             features=[float(value) for value in vector],
-            missing_features=list(missing_features or []),
+            missing_features=all_missing,
             warnings=list(warnings or []),
             api_groups=api_groups,
             is_dotnet=is_dotnet,
@@ -128,6 +163,7 @@ class FeatureExtractionResult:
     def to_dict(self) -> dict[str, Any]:
         """JSON으로 직렬화할 수 있는 공통 딕셔너리를 반환한다."""
 
+        nan_indices = _nan_feature_indices(self.features)
         return {
             "schema_version": self.schema_version,
             "sha256": self.sha256,
@@ -136,7 +172,11 @@ class FeatureExtractionResult:
             "status": self.status.value,
             "feature_count": self.feature_count,
             "feature_names": list(self.feature_names),
-            "features": [float(value) for value in self.features],
+            # 내부 모델 입력에서는 NaN을 보존하지만 표준 JSON에는 NaN이
+            # 없으므로 null로 표현하고 원래 위치를 별도 필드에 기록한다.
+            "features": feature_values_to_json(self.features),
+            "nan_feature_count": len(nan_indices),
+            "nan_feature_indices": nan_indices,
             "missing_features": list(self.missing_features),
             "warnings": list(self.warnings),
             "errors": list(self.errors),

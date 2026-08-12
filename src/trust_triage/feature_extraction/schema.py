@@ -142,6 +142,11 @@ class FeatureSchema:
             "schema_version": self.version,
             "dtype": str(np.dtype(self.dtype)),
             "feature_count": self.feature_count,
+            # LightGBM 모델은 NaN을 결측값으로 처리한다. 학습 데이터와 실제
+            # PE 추론의 계약을 같게 유지하기 위해 NaN은 허용하되, 의미가
+            # 불명확한 양·음의 무한대는 모델 입력에서 거부한다.
+            "allow_nan": True,
+            "allow_infinity": False,
             "feature_name_pattern": "{group}[{index}]",
             "groups": [group.to_dict() for group in self.groups],
             "feature_names": list(self.feature_names),
@@ -158,8 +163,8 @@ class FeatureSchema:
                 f"expected {self.feature_count} features for {self.version}, "
                 f"got {vector.shape[0]}"
             )
-        if not np.all(np.isfinite(vector)):
-            raise ValueError("feature vector contains NaN or infinite values")
+        if np.any(np.isinf(vector)):
+            raise ValueError("feature vector contains infinite values")
         return vector
 
     def validate_matrix(
@@ -176,6 +181,6 @@ class FeatureSchema:
                 f"expected {self.feature_count} features per row for {self.version}, "
                 f"got {matrix.shape[1]}"
             )
-        if not np.all(np.isfinite(matrix)):
-            raise ValueError("feature matrix contains NaN or infinite values")
+        if np.any(np.isinf(matrix)):
+            raise ValueError("feature matrix contains infinite values")
         return matrix

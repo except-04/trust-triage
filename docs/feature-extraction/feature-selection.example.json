@@ -4,5 +4,7 @@
   "selection_id": "ember-v3-all-example",
   "mode": "all",
   "dtype": "float32",
+  "allow_nan": true,
+  "allow_infinity": false,
   "feature_names": []
 }

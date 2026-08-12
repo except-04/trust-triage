@@ -10,7 +10,7 @@ import sys
 import numpy as np
 
 from .ember_v3 import DEFAULT_TIMEOUT_SECONDS, EmberV3Extractor, extract_file
-from .result import FeatureExtractionResult
+from .result import FeatureExtractionResult, feature_values_to_json
 from .selection import FeatureSelector
 
 
@@ -67,6 +67,7 @@ def format_summary(result: FeatureExtractionResult) -> str:
 def format_selection_summary(
     selector: FeatureSelector,
     selected_feature_count: int,
+    nan_feature_count: int = 0,
 ) -> str:
     """선택된 모델 입력 Schema의 핵심 정보만 출력한다."""
 
@@ -77,6 +78,7 @@ def format_selection_summary(
             f"선택 방식: {'전체' if selector.is_all else '부분집합'}",
             f"모델 입력 Schema: {selector.output_schema.version}",
             f"모델 입력 Feature 개수: {selected_feature_count}",
+            f"결측 Feature: {nan_feature_count}",
             f"자료형: {selector.dtype}",
         ]
     )
@@ -90,6 +92,9 @@ def build_selected_payload(
     """추출 결과에서 선택된 모델 입력 벡터만 JSON으로 만든다."""
 
     # selected_vector는 FeatureSelector가 검증한 1차원 NumPy 배열이다.
+    nan_indices = [
+        int(index) for index in np.flatnonzero(np.isnan(selected_vector))
+    ]
     return {
         "source_schema_version": result.schema_version,
         "schema_version": selector.output_schema.version,
@@ -101,7 +106,9 @@ def build_selected_payload(
         "is_dotnet": result.is_dotnet,
         "feature_count": selector.feature_count,
         "feature_names": list(selector.selected_feature_names),
-        "features": [float(value) for value in selected_vector],
+        "features": feature_values_to_json(selected_vector),
+        "nan_feature_count": len(nan_indices),
+        "nan_feature_indices": nan_indices,
         "metadata": dict(result.metadata),
     }
 
@@ -180,7 +187,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.summary:
             print(format_summary(result))
             print()
-            print(format_selection_summary(selector, selector.feature_count))
+            print(
+                format_selection_summary(
+                    selector,
+                    selector.feature_count,
+                    int(np.isnan(selected_vector).sum()),
+                )
+            )
             return 0
 
         indent = None if args.compact else 2

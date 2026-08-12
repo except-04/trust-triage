@@ -184,6 +184,16 @@ class FeatureSelector:
             )
 
         dtype = manifest.get("dtype", "float32")
+        allow_nan = manifest.get("allow_nan", True)
+        allow_infinity = manifest.get("allow_infinity", False)
+        if allow_nan is not True:
+            raise FeatureSelectionError(
+                "selection manifest must preserve NaN model inputs"
+            )
+        if allow_infinity is not False:
+            raise FeatureSelectionError(
+                "selection manifest must reject infinite model inputs"
+            )
         feature_names_value = manifest.get("feature_names")
 
         if mode == "all":
@@ -378,6 +388,8 @@ class FeatureSelector:
             "selection_id": self.selection_id,
             "mode": "all" if self.is_all else "subset",
             "dtype": self.dtype,
+            "allow_nan": True,
+            "allow_infinity": False,
             "feature_count": self.feature_count,
             "feature_names": list(self.selected_feature_names),
             "source_indices": list(self.source_indices),

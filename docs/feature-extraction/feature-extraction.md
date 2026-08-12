@@ -36,11 +36,17 @@ EMBER v3 고정 Schema manifest는 [ember-v3-schema.json](ember-v3-schema.json)�
 - .NET 여부
 - 고정된 `float32` Feature 벡터
 - Feature 개수와 각 원소 이름
+- NaN 결측값의 개수와 위치
 - 파싱 오류와 경고
 - `thrember` 출처와 실행 방식이 담긴 `metadata`
 
 현재 공식 PE Feature 그룹 전체를 사용하면 2,568차원 벡터가 생성됩니다.
 Schema 버전의 뒤쪽 지문은 사용한 Feature 그룹과 차원을 식별합니다.
+
+내부 NumPy 모델 입력에서는 NaN을 결측값으로 보존합니다. JSON 표준에는 NaN
+표현이 없으므로 `features` 배열에서는 `null`로 출력하고,
+`nan_feature_count`와 `nan_feature_indices`에 개수와 위치를 기록합니다.
+양의 무한대와 음의 무한대는 잘못된 모델 입력으로 처리합니다.
 
 CLI는 기본적으로 정적 추출을 별도 프로세스에서 실행하고 30초 제한 시간을
 적용합니다. 제한 시간을 바꾸려면 `--timeout`을 사용합니다.

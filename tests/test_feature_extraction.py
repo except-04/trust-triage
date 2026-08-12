@@ -11,7 +11,10 @@ import numpy as np
 import pytest
 
 import trust_triage.feature_extraction.ember_v3 as ember_v3_module
-from trust_triage.feature_extraction.cli import main as cli_main
+from trust_triage.feature_extraction.cli import (
+    build_selected_payload,
+    main as cli_main,
+)
 from trust_triage.feature_extraction import (
     ApiImportMatch,
     EmberV3Extractor,
@@ -266,6 +269,10 @@ def test_documented_ember_schema_matches_runtime_schema() -> None:
 
     assert manifest["schema_version"] == runtime_schema["schema_version"]
     assert manifest["feature_count"] == runtime_schema["feature_count"]
+    assert manifest["allow_nan"] is True
+    assert manifest["allow_infinity"] is False
+    assert runtime_schema["allow_nan"] is True
+    assert runtime_schema["allow_infinity"] is False
     assert manifest["source"]["package"] == ember_v3_module.EMBER_V3_SOURCE_PACKAGE
     assert manifest["source"]["repository"] == ember_v3_module.EMBER_V3_SOURCE_REPOSITORY
     assert manifest["source"]["commit"] == ember_v3_module.EMBER_V3_SOURCE_COMMIT
@@ -459,8 +466,45 @@ def test_schema_validates_feature_names_and_matrix() -> None:
         schema.validate_feature_names(["second", "first", "third"])
     with pytest.raises(ValueError, match="expected 3 features per row"):
         schema.validate_matrix([[1, 2]])
-    with pytest.raises(ValueError, match="NaN or infinite"):
-        schema.validate_matrix([[1, np.nan, 3]])
+    matrix_with_nan = schema.validate_matrix([[1, np.nan, 3]])
+    assert np.isnan(matrix_with_nan[0, 1])
+
+    with pytest.raises(ValueError, match="infinite"):
+        schema.validate_matrix([[1, np.inf, 3]])
+    with pytest.raises(ValueError, match="infinite"):
+        schema.validate_vector([1, -np.inf, 3])
+
+
+def test_nan_is_preserved_for_model_input_and_serialized_as_json_null() -> None:
+    schema = FeatureSchema(
+        version="test-v1",
+        feature_names=("first", "second", "third"),
+    )
+    result = FeatureExtractionResult.success(
+        schema=schema,
+        sha256="a" * 64,
+        file_type="PE32",
+        values=[1, np.nan, 3],
+    )
+    selector = FeatureSelector.from_feature_names(
+        schema,
+        ["second", "third"],
+        selection_id="nan-subset",
+    )
+
+    model_input = result.to_model_input(selector)
+    payload = result.to_dict()
+    selected_payload = build_selected_payload(result, selector, model_input)
+
+    assert np.isnan(result.to_float32(schema)[1])
+    assert np.isnan(model_input[0])
+    assert result.missing_features == ["second"]
+    assert payload["features"] == [1.0, None, 3.0]
+    assert payload["nan_feature_count"] == 1
+    assert payload["nan_feature_indices"] == [1]
+    assert selected_payload["features"] == [None, 3.0]
+    assert selected_payload["nan_feature_indices"] == [0]
+    assert json.loads(result.to_json())["features"] == [1.0, None, 3.0]
 
 
 def test_feature_selector_preserves_explicit_order_and_round_trips_manifest() -> None:
@@ -486,6 +530,8 @@ def test_feature_selector_preserves_explicit_order_and_round_trips_manifest() ->
     assert selector.is_all is False
 
     restored = FeatureSelector.from_manifest(schema, selector.to_dict())
+    assert selector.to_dict()["allow_nan"] is True
+    assert selector.to_dict()["allow_infinity"] is False
     assert restored.output_schema.version == selector.output_schema.version
     assert restored.select_vector([1, 2, 3]).tolist() == [3.0, 1.0]
 
@@ -506,6 +552,30 @@ def test_feature_selector_rejects_incompatible_selection_inputs() -> None:
                 "selection_id": "reordered-all",
                 "mode": "subset",
                 "feature_names": ["second", "first"],
+            },
+        )
+    with pytest.raises(FeatureSelectionError, match="preserve NaN"):
+        FeatureSelector.from_manifest(
+            schema,
+            {
+                "selection_schema_version": "feature-selection-v1",
+                "source_schema_version": "test-v1",
+                "selection_id": "wrong-nan-policy",
+                "mode": "subset",
+                "feature_names": ["first"],
+                "allow_nan": False,
+            },
+        )
+    with pytest.raises(FeatureSelectionError, match="reject infinite"):
+        FeatureSelector.from_manifest(
+            schema,
+            {
+                "selection_schema_version": "feature-selection-v1",
+                "source_schema_version": "test-v1",
+                "selection_id": "wrong-infinity-policy",
+                "mode": "subset",
+                "feature_names": ["first"],
+                "allow_infinity": True,
             },
         )
 

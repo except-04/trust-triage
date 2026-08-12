@@ -161,6 +161,7 @@ if result.status.value == "SUCCESS":
 - Schema 버전
 - 자료형
 - 전체 Feature 개수
+- NaN 허용 및 무한대 금지 정책
 - 그룹별 시작 인덱스와 끝 인덱스
 - 그룹별 차원
 - Feature 이름 생성 규칙
