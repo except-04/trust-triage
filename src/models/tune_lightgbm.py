@@ -18,7 +18,7 @@ from sklearn.metrics import roc_curve
 
 DATA_DIR = r"D:\KISIA_laptop\out\dev"
 TARGET_FPR = 0.001  # 0.1%
-N_TRIALS = 10
+N_TRIALS = 5
 TUNING_N_ESTIMATORS = 200
 FINAL_N_ESTIMATORS = 500
 CHUNK = 20_000  # common.py의 DEFAULT_CHUNK와 동일
@@ -101,7 +101,8 @@ def objective(trial):
     params = {
         "objective": "binary",
         "metric": ["auc"],
-        "num_leaves": trial.suggest_int("num_leaves", 15, 255),
+        #"num_leaves": trial.suggest_int("num_leaves", 15, 255),    # trial 1
+        "num_leaves": trial.suggest_int("num_leaves", 130, 220),    # trial 2
         "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
         "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
