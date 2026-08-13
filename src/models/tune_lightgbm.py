@@ -102,8 +102,10 @@ def objective(trial):
         "objective": "binary",
         "metric": ["auc"],
         #"num_leaves": trial.suggest_int("num_leaves", 15, 255),    # trial 1
-        "num_leaves": trial.suggest_int("num_leaves", 130, 220),    # trial 2
-        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+        #"num_leaves": trial.suggest_int("num_leaves", 130, 220),    # trial 2
+        "num_leaves": trial.suggest_int("num_leaves", 160, 220),    # trial 3
+        #"learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),    # trial 1, 2
+        "learning_rate": trial.suggest_float("learning_rate", 0.12, 0.25, log=True),     # trial 3
         "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
