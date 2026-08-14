@@ -18,9 +18,10 @@ from sklearn.metrics import roc_curve
 
 DATA_DIR = r"D:\KISIA_laptop\out\dev"
 TARGET_FPR = 0.001  # 0.1%
-N_TRIALS = 5
-TUNING_N_ESTIMATORS = 200
-FINAL_N_ESTIMATORS = 500
+N_TRIALS = 20
+#TUNING_N_ESTIMATORS = 200      # trial 1, 2, 3
+TUNING_N_ESTIMATORS = 1000      # trial 4
+#FINAL_N_ESTIMATORS = 500       # trial 1, 2, 3
 CHUNK = 20_000  # common.py의 DEFAULT_CHUNK와 동일
 
 
@@ -103,13 +104,20 @@ def objective(trial):
         "metric": ["auc"],
         #"num_leaves": trial.suggest_int("num_leaves", 15, 255),    # trial 1
         #"num_leaves": trial.suggest_int("num_leaves", 130, 220),    # trial 2
-        "num_leaves": trial.suggest_int("num_leaves", 160, 220),    # trial 3
-        #"learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),    # trial 1, 2
-        "learning_rate": trial.suggest_float("learning_rate", 0.12, 0.25, log=True),     # trial 3
-        "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
-        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        #"num_leaves": trial.suggest_int("num_leaves", 160, 220),    # trial 3
+        "num_leaves": trial.suggest_int("num_leaves", 100, 350),    # trial 4
+        #"learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),        # trial 1, 2
+        #"learning_rate": trial.suggest_float("learning_rate", 0.12, 0.25, log=True),        # trial 3
+        "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.15, log=True),        # trial 4
+        #"min_child_samples": trial.suggest_int("min_child_samples", 5, 100),               # trial 1, 2, 3
+        "min_child_samples": trial.suggest_int("min_child_samples", 50, 3000, log=True),        # trial 4
+        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+        "subsample_freq": 1,
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
         "random_state": 42,
+        "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),            # trial 4
+        "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),          # trial 4
+        "force_col_wise": True,
     }
 
     with mlflow.start_run(run_name=f"lightgbm_tuning_trial{trial.number}"):
@@ -122,10 +130,13 @@ def objective(trial):
         model = lgb.LGBMClassifier(**params, n_estimators=TUNING_N_ESTIMATORS)
         model.fit(
             X_tr_500, y_tr,
-            eval_set=[(X_calib_500, y_calib)],
-            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+            eval_X=X_calib_500,
+            eval_y=y_calib,
+            callbacks=[lgb.early_stopping(stopping_rounds=100, verbose=False)],
         )
-
+        
+        trial.set_user_attr("best_iteration", int(model.best_iteration_))
+        
         metrics = evaluate(model, X_calib_500, y_calib, X_eval_500, y_eval)
 
         mlflow.log_params(params)
@@ -133,6 +144,7 @@ def objective(trial):
         mlflow.log_metric("tpr_at_fpr", metrics["tpr_at_fpr"])
         mlflow.log_metric("threshold", metrics["threshold"])
         mlflow.log_metric("target_fpr", TARGET_FPR)
+        mlflow.log_metric("best_iteration", model.best_iteration_)
 
         print(
             f"[trial {trial.number}] tpr_at_fpr={metrics['tpr_at_fpr']:.4f} "
@@ -145,13 +157,23 @@ def objective(trial):
 # ==============================================================
 # 4. 튜닝 실행
 # ==============================================================
-study = optuna.create_study(direction="maximize", study_name="lightgbm_top500_tuning")
+sampler = optuna.samplers.TPESampler(seed=42)
+
+study = optuna.create_study(
+    direction="maximize",
+    sampler=sampler,
+    study_name="lightgbm_top500_tuning_v4"
+)
 study.optimize(objective, n_trials=N_TRIALS)
 
 print("\n=== 튜닝 완료 ===")
 print(f"Best tpr_at_fpr: {study.best_value:.4f}")
 print(f"Best params: {study.best_params}")
+best_n_estimators = int(
+    study.best_trial.user_attrs["best_iteration"]
+)
 
+print(f"Best iteration: {best_n_estimators}")
 
 # ==============================================================
 # 5. best_params로 최종 모델 학습 (n_estimators=500)
@@ -160,6 +182,8 @@ final_params = {
     "objective": "binary",
     "metric": ["auc"],
     "random_state": 42,
+    "subsample_freq": 1,
+    "force_col_wise": True,
     **study.best_params,
 }
 
@@ -170,17 +194,15 @@ with mlflow.start_run(run_name="lightgbm_tuned_500_final"):
     mlflow.set_tag("split_type", "temporal_week_id")
     mlflow.set_tag("optuna_final", "true")
 
-    final_model = lgb.LGBMClassifier(**final_params, n_estimators=FINAL_N_ESTIMATORS)
+    final_model = lgb.LGBMClassifier(**final_params, n_estimators=best_n_estimators)
     final_model.fit(
         X_tr_500, y_tr,
-        eval_set=[(X_calib_500, y_calib)],
-        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=100)],
     )
 
     final_metrics = evaluate(final_model, X_calib_500, y_calib, X_eval_500, y_eval)
 
     mlflow.log_params(final_params)
-    mlflow.log_param("n_estimators", FINAL_N_ESTIMATORS)
+    mlflow.log_param("n_estimators", best_n_estimators)
     mlflow.log_metric("tpr_at_fpr", final_metrics["tpr_at_fpr"])
     mlflow.log_metric("threshold", final_metrics["threshold"])
     mlflow.log_metric("target_fpr", TARGET_FPR)
