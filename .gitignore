@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# PE binaries and local analysis inputs
+*.exe
+*.dll
+
 # C extensions
 *.so
 
@@ -151,6 +155,7 @@ activemq-data/
 .env
 .envrc
 .venv
+trust-triage-env/
 env/
 venv/
 ENV/

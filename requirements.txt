@@ -1,4 +1,4 @@
-# TRUST-EDR requirements.txt
+# TRUST-TRIAGE requirements.txt
 # Python 3.10 이상 필요 (speakeasy-emulator 요구사항)
 # 설치: pip install -r requirements.txt
 
@@ -18,8 +18,11 @@ shap>=0.45
 # --- 실험 관리 ---
 mlflow>=2.12
 
-# --- PE 특징 추출 모듈 ---
-pefile>=2023.2.7
+# --- EMBER2024 Feature Version 3 ---
+pefile>=2024.8.26
+thrember @ git+https://github.com/FutureComputing4AI/EMBER2024.git@0ef753e81d98bf209f71b03cd331dfc190b5b54d
+# 공식 thrember 코드가 사용하는 SignedPEFile API와의 호환성 고정
+signify==0.7.1
 
 # --- 에뮬레이션 확장안 (D) ---
 speakeasy-emulator==1.5.11
