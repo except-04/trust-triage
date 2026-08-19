@@ -9,7 +9,9 @@ TRUST-TRIAGE (트러스트 트리아지) is a confidence-based malware triage sy
 The repo is currently mid-build across three tracks that share a common feature contract (`docs/feature_schema.md`):
 1. **Feature extraction** (`src/trust_triage/feature_extraction/`) — static EMBER2024 v3 feature extraction from PE files.
 2. **Data pipeline / baseline model** (`src/preprocessing/`, `src/models/`) — builds the EMBER2024 Win32/Win64 train/calibration/eval/lockbox split and trains a LightGBM baseline.
-3. **Calibration / Joint Risk Router / API-dashboard** — designed in `docs/` but not yet implemented in `src/`.
+3. **Calibration / Joint Risk Router / API-dashboard**
+   — Calibration and risk-signal components are currently being implemented in `src/jrr/`.
+   Joint Risk Router and API/dashboard are still in progress.
 
 ## Environment setup
 
@@ -79,3 +81,22 @@ Standalone scripts (not a package) that train/compare LightGBM baselines against
 
 - `tests/test_feature_extraction.py` is the only test module; it exercises real PE fixtures copied from the local Windows install (`sys.executable`, `notepad.exe`, `RegAsm.exe`) and skips gracefully when a fixture isn't available on the machine (e.g. non-Windows, missing `WINDIR`) — don't "fix" a skip by hardcoding a path.
 - Some tests assert the checked-in schema/selection JSON docs (`docs/feature-extraction/ember-v3-schema.json`, `feature-selection-ember-v3-top500.json`) match the *runtime* schema produced by the installed `thrember` version — if you change feature groups or the pinned thrember commit, update these JSON files too or the tests will fail by design.
+
+## Source of truth
+
+For cross-module pipeline interfaces, follow:
+
+- `docs/pipeline_architecture.md`
+- `docs/feature_schema.md`
+- `docs/docs_eval_lockbox_policy.md`
+
+If code and these documents conflict, do not silently change the interface.
+Report the conflict first.
+
+## Team development rules
+
+Team members work on separate branches and modules.
+
+- Do not modify another module just to make the current task easier.
+- If another module's interface needs to change, report the required change first.
+- Cross-module interface changes must be reflected in `docs/pipeline_architecture.md`. 
