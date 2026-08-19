@@ -63,11 +63,11 @@ def main():
     with mlflow.start_run(run_name="Threshold_Simulation"):
         try:
             # 1. 평가용 실제 데이터 및 07_train_calibrator.py 산출물 로드
-            y_true = np.load("../../data/y_eval.npy") 
-            y_prob = np.load("../../data/jrr_calibrated_proba.npy") 
+            y_true = np.load("data/y_eval.npy") 
+            y_prob = np.load("data/jrr_calibrated_proba.npy") 
             
             # 07번 파이프라인에서 생성된 부품 로드 (FPR 0.1% 고정 임계값 추출)
-            calibrator_pack = joblib.load("../../src/models/jrr_calibrator.pkl")
+            calibrator_pack = joblib.load("data/jrr_calibrator.pkl")
             fixed_upper_bound = calibrator_pack['threshold']
             
         except FileNotFoundError as e:
@@ -94,7 +94,7 @@ def main():
         print(f" - [예상] 일일 심층분석 큐 인입량: {final_deep_count}건")
         print(f" - [예상] 분석가 검토 가성비(Yield): {max_yield:.2f}%")
         print("==================================================")
-        print("[안내] 산출된 하한선 값을 09_jrr_router.py 모듈의 라우팅 분기 조건에 업데이트 해주세요.")
+        print("[안내] 산출된 하한선 값을 10_jrr_router.py 모듈의 라우팅 분기 조건에 업데이트 해주세요.")
 
 if __name__ == "__main__":
     main()
