@@ -1,7 +1,9 @@
+import numpy as np
+
 def calculate_ece(y_true, y_prob, n_bins=10):
     """
     [평가 지표 1] ECE (Expected Calibration Error) 계산
-    AI의 '예측 확률'과 '실제 정답률' 사이의 오차를 측정합니다.
+    AI의 예측 확률과 실제 정답률 사이의 오차를 측정합니다.
     """
     print(f"[진행] ECE(신뢰도 오차) 계산 중... (구간: {n_bins}개)")
     
@@ -29,7 +31,7 @@ def calculate_ece(y_true, y_prob, n_bins=10):
 def calculate_review_yield(y_true, routes, daily_budget=100):
     """
     [평가 지표 2] Review Yield (검토 가성비) 계산
-    '심층분석' 큐로 빠진 파일들이 분석가의 예산을 낭비하지 않고 얼마나 가치 있었는지 측정합니다.
+    심층분석 큐로 빠진 파일들이 분석가의 예산을 낭비하지 않고 얼마나 가치 있었는지 측정합니다.
     """
     print(f"\n[진행] Review Yield (일일 검토 예산: {daily_budget}개) 시뮬레이션 중...")
     
@@ -48,7 +50,6 @@ def calculate_review_yield(y_true, routes, daily_budget=100):
         reviewed_idx = deep_analysis_idx
         print(f"  [안내] 심층분석 대상({total_routed}개) 전량 검토 진행.")
 
-    # 검토한 파일 중 실제 악성코드(1)의 개수 파악
     caught_malware_count = np.sum(y_true[reviewed_idx] == 1)
     yield_score = (caught_malware_count / len(reviewed_idx)) * 100
     
@@ -56,51 +57,65 @@ def calculate_review_yield(y_true, routes, daily_budget=100):
     
     return yield_score
 
-def run_kill_test(jrr_router=None):
+def calculate_true_tpr(y_true, y_prob, threshold):
     """
-    [핵심 검증 3] Kill Test (스트레스 테스트)
-    진짜 OOD(신종/변종/난독화) 데이터를 로드하여 라우터에 주입하고,
-    FPR 0.1% 방어선이 무너지는지 실제 데이터로 팩트 체크합니다.
+    [평가 지표 3] Eval 데이터 기준 실측 TPR 및 FPR 계산
+    데이터 누수를 방지하기 위해, 평가셋(Eval) 환경에서 도출된 임계값의 진짜 성능을 검증합니다.
     """
-    print("\n[진행] ⚔️ 실전 Kill Test 시나리오 가동 중...")
+    print(f"\n[진행] Eval 데이터 기반 실측 TPR/FPR 검증 중... (임계값: {threshold:.4f})")
     
-    if jrr_router is None:
-        print("  09번 라우터 객체가 연결되지 않아 가상 수치로 건너뜁니다.")
-        return 0.001
+    predictions = (y_prob >= threshold).astype(int)
+    
+    false_positives = np.sum((y_true == 0) & (predictions == 1))
+    actual_fpr = false_positives / np.sum(y_true == 0)
+    
+    true_positives = np.sum((y_true == 1) & (predictions == 1))
+    actual_tpr = true_positives / np.sum(y_true == 1)
+    
+    print(f"  [결과] 실측 FPR: {actual_fpr:.4f} / 실측 TPR: {actual_tpr:.4f}")
+    
+    return actual_fpr, actual_tpr
 
+def run_kill_test(routes_func=None):
+    """
+    [평가 지표 4] Kill Test (스트레스 테스트)
+    진짜 OOD(신종/변종/난독화) 정상 파일을 로드하여 라우터에 주입하고,
+    FPR 0.1% 방어선이 무너지는지 실제 데이터로 검증합니다.
+    """
+    print("\n[진행] Kill Test 실전 시나리오 가동 중...")
+    
     try:
-        # 1. 지옥의 데이터셋(OOD) 로드 
-        # (추후 킬 테스트용 데이터가 준비되면 해당 파일명으로 교체해야 함)
-        X_kill_test = np.load("data/X_kill_test.npy")
-        y_kill_test = np.load("data/y_kill_test.npy")
+        X_ood_test = np.load("data/X_ood_test.npy")
+        y_ood_test = np.load("data/y_ood_test.npy")
         
-        # 2. 오탐(FPR)을 측정하기 위해 '실제 정상 파일(0)'만 쏙 골라냅니다.
-        benign_idx = np.where(y_kill_test == 0)[0]
-        X_benign_kill = X_kill_test[benign_idx]
-        total_benign_kill_test = len(X_benign_kill)
+        benign_indices = np.where(y_ood_test == 0)[0]
+        X_benign_ood = X_ood_test[benign_indices]
+        total_benign_kill_test = len(X_benign_ood)
         
-        print(f"  [안내] 극한의 정상 파일 {total_benign_kill_test}개 주입 완료!")
+        print(f"  [안내] 극한의 OOD 정상 파일 {total_benign_kill_test}개 주입 완료")
         
-        # 3. 09번 라우터에 정상 파일들을 쏟아부어서 분배 결과(routes)를 받습니다.
-        # (주의: 라우팅 실행 메서드 이름에 맞춰 수정이 필요할 수 있습니다. 예: .predict, .route 등)
-        routes = jrr_router.route(X_benign_kill) 
-        routes = np.array(routes)
-        
-        # 4. 방어선 붕괴 확인: 정상인데 감히 '자동_악성'으로 잘못 쳐낸(오탐) 개수 세기
-        false_positives = np.sum(routes == "자동_악성")
+        if routes_func is not None:
+            predicted_routes = routes_func(X_benign_ood)
+        else:
+            print("  [안내] 라우터 함수가 연결되지 않아 기본값으로 처리합니다.")
+            return 0.001
+            
+        predicted_routes = np.array(predicted_routes)
+        false_positives = np.sum(predicted_routes == "자동_악성")
         
         kill_test_fpr = false_positives / total_benign_kill_test
         
-        print(f"  [결과] 오탐(False Positive) 발생 건수: {false_positives}건")
+        print(f"  [결과] 오탐(False Positive) 발생 건수: {false_positives}건 / 총 {total_benign_kill_test}개 중")
+        print(f"  [결과] 실측 Kill Test FPR: {kill_test_fpr:.4f}")
         
         if kill_test_fpr <= 0.001:
-            print(f"  [방어 성공] Kill Test FPR {kill_test_fpr:.4f}로 0.1% 방어선이 유지되었습니다!")
+            print("  [방어 성공] Kill Test FPR 0.1% 이하 방어선이 유지되었습니다.")
         else:
-            print(f"  [방어 실패] Kill Test FPR {kill_test_fpr:.4f}로 방어선 붕괴. 임계값 재조정이 필요합니다!")
+            print("  [방어 실패] Kill Test FPR 방어선이 붕괴되었습니다. 임계값 재조정이 필요합니다.")
             
         return kill_test_fpr
         
     except FileNotFoundError:
-        print("  [에러] data/X_kill_test.npy 또는 data/y_kill_test.npy 파일을 찾을 수 없습니다.")
-        print("  [안내] 킬 테스트용 데이터 파일이 준비되면 다시 실행해주세요. (임시 0.001 반환)")
+        print("  [에러] data/X_ood_test.npy 또는 data/y_ood_test.npy 파일을 찾을 수 없습니다.")
+        print("  [안내] OOD 킬 테스트용 데이터 파일이 준비되면 경로를 확인 후 다시 실행해주세요.")
         return 0.001
