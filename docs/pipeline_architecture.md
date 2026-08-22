@@ -53,9 +53,13 @@
 {
   "file_id": "string",
   "sha256": "string",
-  "route": "자동_정상 | 자동_악성 | 심층분석 | 분석가_검토",
-  "model_verdict": "정상 | 악성",
-  "raw_probability": 0.0, 
+
+  "initial_verdict": "정상 | 악성 | 고위험_불확실",
+  "final_verdict": "정상 | 악성 | null",
+  "verdict_diff": "일치 | 불일치 | null",
+
+  "route": "자동_정상 | 자동_악성 | 고위험_불확실 | 분석가_검토",
+  "raw_probability": 0.0,
   "calibrated_probability": 0.0,
   "risk_signals": {
     "disagreement": 0.0,
@@ -64,13 +68,21 @@
   },
   "risk_score": 0.0,
   "priority_rank": null,
+
   "top_features": [
     {"name": "string", "contribution": 0.0, "direction": "정상 | 악성"}
   ],
-  "behavior_flags": {
-    "malicious_behavior": [],
-    "sensitive_file_access": []
+
+  "evidence": [
+    {"technique_id": "string", "name": "string", "source": "string", "confidence": "string"}
+  ],
+
+  "deep_analysis_status": {
+    "capa": "COMPLETE | NOT_REQUIRED | FAILED",
+    "speakeasy": "COMPLETE | NOT_REQUIRED | FAILED",
+    "cape": "COMPLETE | NOT_REQUIRED | PENDING"
   },
+
   "review_status": "N/A | 대기중 | 완료",
   "analyst_final_verdict": null,
   "created_at": "ISO8601"
