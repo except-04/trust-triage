@@ -92,7 +92,7 @@ def main() -> int:
         print("[4] MLflow 서버 기록 및 라우터 연동용 로컬 파일 저장 중...")
         mlflow.sklearn.log_model(ood_model, "08_ood_isolation_forest")
         
-        joblib.dump(risk_signal_components, 'jrr_risk_signals.pkl')
+        joblib.dump(risk_signal_components, 'data/jrr_risk_signals.pkl')
         
         print("\n[08_train_risk_signals] 무사히 완료되었습니다. (jrr_risk_signals.pkl 생성)")
         

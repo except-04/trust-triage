@@ -2,19 +2,19 @@ import os
 import numpy as np
 
 # 1. 데이터 경로 설정
-DATA_DEV_DIR = os.path.join("data", "out", "dev")
+DATA_DIR = os.path.join("data")
 
-print(f"데이터 폴더: {DATA_DEV_DIR}")
+print(f"데이터 폴더: {DATA_DIR}")
 
 # 2. 파일 로드
 # 뽑아둔 예측 확률 및 실제 라벨
-xgb_prob_path = os.path.join(DATA_DEV_DIR, "y_pred_proba.npy")
-y_eval_path = os.path.join(DATA_DEV_DIR, "y_eval.npy")
+xgb_prob_path = os.path.join(DATA_DIR, "y_pred_proba.npy")
+y_eval_path = os.path.join(DATA_DIR, "y_eval.npy")
 
 # 기존 LightGBM 보정 확률 파일 탐색 (data 폴더 또는 dev 폴더)
 lgb_candidates = [
-    os.path.join("data", "y_pred_proba_calib.npy"),
-    os.path.join(DATA_DEV_DIR, "y_pred_proba_calib.npy"),
+    os.path.join("data", "jrr_calibrated_proba.npy"),
+    os.path.join(DATA_DIR, "jrr_calibrated_proba.npy"),
     os.path.join("data", "y_pred_proba_lgb.npy")
 ]
 
@@ -54,8 +54,8 @@ if lgb_prob_path:
     print("="*45)
     
     # 불일치도 저장
-    out_disagree = os.path.join(DATA_DEV_DIR, "model_disagreement.npy")
+    out_disagree = os.path.join(DATA_DIR, "model_disagreement.npy")
     np.save(out_disagree, disagreement)
     print(f"Disagreement 파일 저장 완료: {out_disagree}")
 else:
-    print("LightGBM 보정 확률 파일이 아직 dev 폴더에 없습니다. (XGBoost 단독 확률 정상 로드 확인됨)")
+    print("LightGBM 보정 확률 파일이 아직 data 폴더에 없습니다. (XGBoost 단독 확률 정상 로드 확인됨)")

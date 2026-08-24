@@ -38,6 +38,15 @@ Y_PRED_PATH = "data/y_pred_proba.npy" #Baseline 모델이 추론한 원시 예�
 TARGET_FPR = 0.001  # 계획상 목표 (FPR 0.1%)
 
 
+#파일을 생성하려면 다음 4개의 파일이 프로젝트 폴더 내부에 있어야 합니다. 경로에 맞게 파일들이 존재하는지 확인해 주십시오.
+#data/X_eval.npy (평가용 원본 데이터)
+#data/top_feature_indices_500.npy (500개 피처 인덱스)
+#baseline_model_lightgbm_tuned_500_v4_9120.pkl (학습된 1차 모델)
+#jrr_calibrator.pkl (07_train_calibrator.py를 실행하여 만든 보정기 모델)
+X_EVAL_PATH = "data/X_eval.npy"
+TOP_N_PATH = "data/top_feature_indices_500.npy"
+MODEL_PATH = "data/baseline_model_lightgbm_tuned_500_v4_9120.pkl"
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
@@ -69,7 +78,6 @@ def main() -> int:
         # 3. 신뢰도 보정 및 최적 임계값 도출
         print("\n수행계획서 FPR 0.1% 정책 적용 및 최적 임계값 도출 중...")
         calibrated_probs = calibrator.predict(y_pred_proba)
-        
         fpr, tpr, thresholds = roc_curve(y_calib, calibrated_probs)
         
         # FPR이 목표치(0.001) 이하인 구간 중 가장 성적이 좋은(탐지율이 높은) 위치 탐색
@@ -84,7 +92,21 @@ def main() -> int:
         print(f"보정 후 악성 탐지율(TPR): {tpr_at_fpr*100:.2f}%")
         print(f"보정 후 정상 오탐률(FPR): {fpr_at_fpr*100:.4f}%")
         print("===================\n")
-        
+        # ------------------------------------------------------------------
+        # [파트 2] 평가 데이터(48만 건) 로드 및 최종 보정 확률(jrr_calibrated_proba.npy) 생성
+        # ------------------------------------------------------------------
+        print("\n48만 건 평가 데이터 대상 최종 보정 확률 산출 중...")
+        X_eval = np.load(X_EVAL_PATH, mmap_mode="r")
+        top_indices = np.load(TOP_N_PATH)
+        model = joblib.load(MODEL_PATH)
+
+        X_eval_500 = X_eval[:, top_indices]
+        raw_eval_proba = model.predict_proba(X_eval_500)[:, 1]
+        final_calibrated_probs = calibrator.predict(raw_eval_proba)
+
+        np.save("data/jrr_calibrated_proba.npy", final_calibrated_probs)
+        print("  -> [저장 완료] data/jrr_calibrated_proba.npy 생성 성공!")
+
         # 4. MLflow 기록
         print("MLflow 서버에 결과 및 보정기 모델 기록 중...")
         mlflow.log_param("step", "07_calibration")
@@ -95,7 +117,7 @@ def main() -> int:
         
         # 5. 로컬 파일 저장
         print("라우터 연동용 로컬 파일(jrr_calibrator.pkl) 저장 중...")
-        joblib.dump({'model': calibrator, 'threshold': optimal_threshold}, 'jrr_calibrator.pkl')
+        joblib.dump({'model': calibrator, 'threshold': optimal_threshold}, 'data/jrr_calibrator.pkl')
         
         print("\n[07_train_calibrator] 완료되었습니다.")
         
