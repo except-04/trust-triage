@@ -6,7 +6,7 @@ class JointRiskRouter:
     TRUST-Triage 핵심 엔진: Joint Risk Router (10_jrr_router.py)
     확률값과 Model Disagreement를 바탕으로 3가지 큐로 분기합니다.
     """
-    def __init__(self, tau_low=0.00, tau_high=0.9, tau_disagree=0.3):
+    def __init__(self, tau_low=0.95, tau_high=0.976190, tau_disagree=0.3):
         self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_PASS)
         self.tau_high = tau_high        # 악성 확신 커트라인 (AUTO_QUARANTINE)
         self.tau_disagree = tau_disagree # 모델 불일치 허용 기준
@@ -17,6 +17,14 @@ class JointRiskRouter:
 
     def route_sample(self, p_calib: float, disagreement: float) -> dict:
         """단일 파일에 대한 3-Way 분기 판정"""
+        
+        if np.isnan(p_calib) or np.isnan(disagreement):
+            return {
+                "decision": "HIGH_RISK_UNCERTAIN",
+                "calibrated_prob": -1.0,
+                "disagreement": -1.0,
+                "reason": "System Error: NaN values detected (Fail-Closed)"
+            }
         # 1. 불일치도가 크면 고확신 오판 방지를 위해 심층 분석으로 격상
         if disagreement >= self.tau_disagree:
             decision = "HIGH_RISK_UNCERTAIN"
@@ -50,7 +58,7 @@ if __name__ == "__main__":
     DATA_DIR = os.path.join("data")
     
     # 1. 데이터 로드
-    p_lgb = np.load(os.path.join(DATA_DIR, "y_pred_proba_calib.npy"))
+    p_lgb = np.load(os.path.join(DATA_DIR, "jrr_calibrated_proba.npy"))
     disagreement = np.load(os.path.join(DATA_DIR, "model_disagreement.npy"))
     
     if p_lgb.ndim == 2:
@@ -61,7 +69,7 @@ if __name__ == "__main__":
     print("="*60)
 
     # 2. 라우터 동작
-    router = JointRiskRouter(tau_low=0.00, tau_high=0.9, tau_disagree=0.3)
+    router = JointRiskRouter(tau_low=0.95, tau_high=0.976190, tau_disagree=0.3)
     routed = router.route_batch(p_lgb, disagreement)
 
     decisions = [r["decision"] for r in routed]

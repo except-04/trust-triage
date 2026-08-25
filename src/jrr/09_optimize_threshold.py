@@ -14,11 +14,11 @@ def simulate_routing(y_prob, lower_bound, upper_bound):
     routes = np.empty(len(y_prob), dtype=object)
     
     # 1. 자동 악성 (절대 차단선 이상)
-    routes[y_prob >= upper_bound] = "자동_악성"
+    routes[y_prob >= upper_bound] = "AUTO_MALICIOUS"
     # 2. 자동 정상 (하한선 미만)
-    routes[y_prob < lower_bound] = "자동_정상"
+    routes[y_prob < lower_bound] = "AUTO_BENIGN"
     # 3. 심층 분석 (하한선 이상 ~ 절대 차단선 미만)
-    routes[(y_prob >= lower_bound) & (y_prob < upper_bound)] = "심층분석"
+    routes[(y_prob >= lower_bound) & (y_prob < upper_bound)] = "HIGH_RISK_UNCERTAIN"
     
     return routes
 
@@ -40,7 +40,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
     for lb in test_bounds:
         # 가상 라우팅 실행
         simulated_routes = simulate_routing(y_prob, lb, upper_bound)
-        deep_count = np.sum(simulated_routes == "심층분석")
+        deep_count = np.sum(simulated_routes == "HIGH_RISK_UNCERTAIN")
         
         # 10_evaluate_jrr.py의 가성비 계산 함수 호출
         current_yield = calculate_review_yield(y_true, simulated_routes, daily_budget)

@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import joblib 
 
 # 1. 데이터 경로 설정
 DATA_DIR = os.path.join("data")
@@ -33,6 +34,19 @@ if p_xgb.ndim == 2:
 
 print(f"XGBoost 예측 샘플 수: {len(p_xgb):,}개")
 print(f"실제 라벨 샘플 수: {len(y_true):,}개 (악성 비율: {y_true.mean()*100:.2f}%)")
+
+# ========== [신규 추가: XGBoost 확률 스케일 보정] ==========
+print("\n[진행] XGBoost 원시 확률(Raw)에 보정기 적용 중...")
+try:
+    calibrator_pack = joblib.load(os.path.join(DATA_DIR, "jrr_calibrator.pkl"))
+    calibrator = calibrator_pack['model']
+    # LightGBM과 스케일을 맞추기 위해 XGBoost도 보정(Calibrated) 처리
+    p_xgb = calibrator.predict(p_xgb) 
+    print("  -> XGBoost 예측 확률 보정 완료!")
+except FileNotFoundError:
+    print("  [에러] data/jrr_calibrator.pkl 파일을 찾을 수 없습니다.")
+    raise
+# =========================================================
 
 # LightGBM 파일이 있는 경우 불일치도 계산
 if lgb_prob_path:
