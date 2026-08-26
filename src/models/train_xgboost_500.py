@@ -56,6 +56,7 @@ def main() -> None:
             learning_rate=0.05,
             random_state=42,
             tree_method="hist",
+            eval_metric="auc",
             early_stopping_rounds=50,
         )
         model.fit(
