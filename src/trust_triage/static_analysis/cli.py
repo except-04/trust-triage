@@ -7,7 +7,7 @@ import math
 import sys
 from pathlib import Path
 
-from .attack_mapping import normalize_attack_labels, technique_display_name
+from ..attack_mapping import normalize_attack_labels, technique_display_name
 from .capa_analyzer import DEFAULT_TIMEOUT_SECONDS, CapaAnalyzer, CapaConfig
 from .models import CapaBackend, CapaStatus
 

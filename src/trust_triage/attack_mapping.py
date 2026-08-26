@@ -1,10 +1,4 @@
-"""Conservative CAPA-to-MITRE ATT&CK label normalization.
-
-CAPA rule metadata is not guaranteed to use one spelling.  This module keeps
-the original label and applies a small, explicit catalogue for the labels
-used by the MVP.  It intentionally does not guess an ATT&CK ID for an
-unknown label.
-"""
+"""Conservative CAPA/Speakeasy-to-MITRE ATT&CK label normalization."""
 
 from __future__ import annotations
 
@@ -12,7 +6,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from .models import AttackTechnique
+from .evidence import AttackTechnique
 
 
 _TECHNIQUE_ID_PATTERN = re.compile(
@@ -20,8 +14,6 @@ _TECHNIQUE_ID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# The catalogue is deliberately small and explicit.  It can grow from a
-# versioned ATT&CK export later without changing the Evidence contract.
 _TECHNIQUE_CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "T1027": ("Obfuscated Files or Information", ("Defense Evasion",)),
     "T1053": ("Scheduled Task/Job", ("Execution", "Persistence")),
@@ -52,7 +44,6 @@ _TECHNIQUE_CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "T1620": ("Reflective Code Loading", ("Defense Evasion",)),
 }
 
-# Values are normalized with ``_normalize_for_match`` before comparison.
 _LABEL_ALIASES: tuple[tuple[str, str], ...] = (
     ("process hollowing", "T1055.012"),
     ("process injection", "T1055"),
@@ -73,7 +64,7 @@ _LABEL_ALIASES: tuple[tuple[str, str], ...] = (
 
 
 def normalize_attack_label(label: Any) -> AttackTechnique:
-    """Normalize one CAPA/behavior label without dropping unknown values."""
+    """Normalize one label without dropping unknown values."""
 
     raw_label = "" if label is None else str(label).strip()
     if not raw_label:

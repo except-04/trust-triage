@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
+from ..evidence import Evidence, EvidenceStatus
+
 
 class CapaBackend(str, Enum):
     """Feature-extraction backend used by CAPA."""
@@ -30,38 +32,6 @@ class CapaStatus(str, Enum):
     UNSUPPORTED = "UNSUPPORTED"
     UNSUPPORTED_API = "UNSUPPORTED_API"
     TOOL_ERROR = "TOOL_ERROR"
-
-
-class EvidenceStatus(str, Enum):
-    """Observation state for an evidence item."""
-
-    OBSERVED = "OBSERVED"
-    CANDIDATE = "CANDIDATE"
-
-
-@dataclass(frozen=True)
-class AttackTechnique:
-    """Canonical MITRE ATT&CK reference attached to an Evidence item.
-
-    ``technique_id`` is optional because an unknown tool label must not be
-    discarded.  Unknown labels remain visible with ``mapping_status`` set to
-    ``UNMAPPED`` until the project mapping catalogue is extended.
-    """
-
-    technique_id: str | None
-    technique_name: str
-    tactics: tuple[str, ...] = ()
-    source_label: str = ""
-    mapping_status: str = "MAPPED"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "technique_id": self.technique_id,
-            "technique_name": self.technique_name,
-            "tactics": list(self.tactics),
-            "source_label": self.source_label,
-            "mapping_status": self.mapping_status,
-        }
 
 
 @dataclass(frozen=True)
@@ -88,53 +58,6 @@ class CapaCapability:
             "attack": list(self.attack),
             "mbc": list(self.mbc),
             "description": self.description,
-        }
-
-
-@dataclass(frozen=True)
-class Evidence:
-    """Project-level evidence item produced by an analysis tool.
-
-    ``severity`` is a triage weight, not a malware probability. The Evidence
-    Fusion component must combine it with reliability and other signals.
-    A successful static capability match is an observed tool result, but it
-    is not by itself a malware label.  The ``attack_techniques`` mapping and
-    source details preserve that distinction for the router.
-    """
-
-    evidence_id: str
-    sha256: str
-    source: str
-    category: str
-    severity: float
-    reliability: float
-    summary: str
-    status: EvidenceStatus = EvidenceStatus.OBSERVED
-    raw_reference: str = ""
-    details: dict[str, Any] = field(default_factory=dict)
-    attack_techniques: tuple[AttackTechnique, ...] = ()
-
-    def __post_init__(self) -> None:
-        for field_name in ("severity", "reliability"):
-            value = getattr(self, field_name)
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"{field_name} must be between 0 and 1")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "evidence_id": self.evidence_id,
-            "sha256": self.sha256,
-            "source": self.source,
-            "category": self.category,
-            "severity": self.severity,
-            "reliability": self.reliability,
-            "summary": self.summary,
-            "status": self.status.value,
-            "raw_reference": self.raw_reference,
-            "details": dict(self.details),
-            "attack_techniques": [
-                technique.to_dict() for technique in self.attack_techniques
-            ],
         }
 
 
@@ -185,7 +108,7 @@ class CapaAnalysisResult:
         for index, capability in enumerate(self.capabilities, start=1):
             # Keep the raw CAPA label in ``details.attack`` while adding a
             # stable ATT&CK representation for the downstream router.
-            from .attack_mapping import normalize_attack_labels
+            from ..attack_mapping import normalize_attack_labels
 
             attack_techniques = normalize_attack_labels(capability.attack)
             evidence.append(

@@ -8,19 +8,17 @@ from .capa_analyzer import (
     parse_capa_report,
     sha256_file,
 )
-from .attack_mapping import (
+from ..attack_mapping import (
     normalize_attack_label,
     normalize_attack_labels,
     technique_display_name,
 )
+from ..evidence import AttackTechnique, Evidence, EvidenceStatus
 from .models import (
     CapaAnalysisResult,
     CapaBackend,
     CapaCapability,
     CapaStatus,
-    AttackTechnique,
-    Evidence,
-    EvidenceStatus,
 )
 
 __all__ = [
