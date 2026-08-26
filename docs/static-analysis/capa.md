@@ -3,22 +3,6 @@
 이 모듈은 JRR이 `CAPA_SCAN`을 선택했을 때 CAPA를 별도 프로세스로 실행하고,
 CAPA JSON 결과를 TRUST-TRIAGE의 공통 Evidence 형식으로 변환한다.
 
-## 분석 흐름
-
-```text
-Baseline / Risk Signals
-        ↓
-JRR 1차 판단
-        ↓  (CAPA_SCAN 선택 시)
-CAPA 정적 분석
-        ↓
-CAPA JSON → Capability → Evidence
-        ↓
-Evidence Fusion
-        ↓
-JRR 1회 재판단
-```
-
 CAPA 분석 실패, timeout, 환경 불일치는 악성 Evidence로 변환하지 않는다.
 실패 상태는 `CapaAnalysisResult.status`로 보존한다.
 
