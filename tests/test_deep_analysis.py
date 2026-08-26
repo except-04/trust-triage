@@ -21,11 +21,16 @@ class _Capability:
 
 
 class _FakeCapaResult:
-    status = "SUCCESS"
     sha256 = "b" * 64
 
-    def __init__(self, capabilities: list[_Capability]) -> None:
+    def __init__(
+        self,
+        capabilities: list[_Capability],
+        *,
+        status: str = "SUCCESS",
+    ) -> None:
         self.capabilities = capabilities
+        self.status = status
 
     def to_evidence(self, *, reliability: float = 0.8) -> tuple[Evidence, ...]:
         return tuple(
@@ -73,8 +78,12 @@ def _sample(tmp_path: Path) -> Path:
     return sample
 
 
-def _capa_result(*, capabilities: list[_Capability]) -> _FakeCapaResult:
-    return _FakeCapaResult(capabilities)
+def _capa_result(
+    *,
+    capabilities: list[_Capability],
+    status: str = "SUCCESS",
+) -> _FakeCapaResult:
+    return _FakeCapaResult(capabilities, status=status)
 
 
 def _injection_capability() -> _Capability:
@@ -150,6 +159,96 @@ def test_insufficient_capa_evidence_advances_to_speakeasy(tmp_path: Path) -> Non
     assert "ADVANCE_TO_SPEAKEASY" in result.reason_codes
 
 
+def test_insufficient_speakeasy_evidence_advances_to_ghidra(tmp_path: Path) -> None:
+    capa = _FakeCapaAnalyzer(_capa_result(capabilities=[]))
+    speakeasy = _FakeSpeakeasyAnalyzer(
+        {
+            "evidence_id": "speakeasy-generic",
+            "sha256": "f" * 64,
+            "status": "SUCCESS",
+            "observed_apis": ["CreateFileW"],
+            "behaviors": ["file_access"],
+            "events": {},
+        }
+    )
+    ghidra = _FakeCapaAnalyzer(
+        _capa_result(capabilities=[_injection_capability()])
+    )
+
+    result = DeepAnalysisOrchestrator(
+        capa_analyzer=capa,
+        speakeasy_analyzer=speakeasy,
+        ghidra_capa_analyzer=ghidra,
+    ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
+
+    assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
+    assert result.executed_tiers == (
+        AnalysisTier.CAPA,
+        AnalysisTier.SPEAKEASY,
+        AnalysisTier.GHIDRA_CAPA,
+    )
+    assert result.last_tier is AnalysisTier.GHIDRA_CAPA
+    assert result.final_verdict == "MALICIOUS"
+    assert ghidra.calls == 1
+    assert "ADVANCE_TO_GHIDRA_CAPA" in result.reason_codes
+
+
+def test_speakeasy_failure_uses_ghidra_fallback(tmp_path: Path) -> None:
+    capa = _FakeCapaAnalyzer(_capa_result(capabilities=[]))
+    speakeasy = _FakeSpeakeasyAnalyzer(
+        {
+            "evidence_id": "speakeasy-timeout",
+            "sha256": "g" * 64,
+            "status": "TIMEOUT",
+            "errors": ["timeout"],
+        }
+    )
+    ghidra = _FakeCapaAnalyzer(
+        _capa_result(capabilities=[_injection_capability()])
+    )
+
+    result = DeepAnalysisOrchestrator(
+        capa_analyzer=capa,
+        speakeasy_analyzer=speakeasy,
+        ghidra_capa_analyzer=ghidra,
+    ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
+
+    assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
+    assert result.final_verdict == "MALICIOUS"
+    assert result.tool_statuses["SPEAKEASY"] == "TIMEOUT"
+    assert result.tool_statuses["GHIDRA_CAPA"] == "SUCCESS"
+    assert "SPEAKEASY_TIMEOUT" in result.reason_codes
+    assert ghidra.calls == 1
+
+
+def test_ghidra_failure_returns_failed_status(tmp_path: Path) -> None:
+    capa = _FakeCapaAnalyzer(_capa_result(capabilities=[]))
+    speakeasy = _FakeSpeakeasyAnalyzer(
+        {
+            "evidence_id": "speakeasy-generic",
+            "sha256": "h" * 64,
+            "status": "SUCCESS",
+            "observed_apis": ["CreateFileW"],
+            "behaviors": ["file_access"],
+        }
+    )
+    ghidra = _FakeCapaAnalyzer(
+        _capa_result(capabilities=[], status="ENVIRONMENT_MISMATCH")
+    )
+
+    result = DeepAnalysisOrchestrator(
+        capa_analyzer=capa,
+        speakeasy_analyzer=speakeasy,
+        ghidra_capa_analyzer=ghidra,
+    ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
+
+    assert result.deep_analysis_status is DeepAnalysisStatus.FAILED
+    assert result.final_verdict == "UNKNOWN"
+    assert result.disposition is DeepAnalysisDisposition.ANALYSIS_FAILED
+    assert result.tool_statuses["GHIDRA_CAPA"] == "ENVIRONMENT_MISMATCH"
+    assert "GHIDRA_CAPA_ENVIRONMENT_MISMATCH" in result.reason_codes
+
+
 def test_speakeasy_failure_is_not_malicious_evidence(tmp_path: Path) -> None:
     capa = _FakeCapaAnalyzer(_capa_result(capabilities=[]))
     speakeasy = _FakeSpeakeasyAnalyzer(
@@ -188,10 +287,12 @@ def test_completed_but_uncertain_flow_requires_review(tmp_path: Path) -> None:
             "events": {"file_access": [{"path": "C:\\temp\\x.bin"}]},
         }
     )
+    ghidra = _FakeCapaAnalyzer(_capa_result(capabilities=[]))
 
     result = DeepAnalysisOrchestrator(
         capa_analyzer=capa,
         speakeasy_analyzer=speakeasy,
+        ghidra_capa_analyzer=ghidra,
         config=DeepAnalysisConfig(),
     ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
 

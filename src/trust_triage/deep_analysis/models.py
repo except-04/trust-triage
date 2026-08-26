@@ -25,6 +25,7 @@ class AnalysisTier(str, Enum):
 
     CAPA = "CAPA"
     SPEAKEASY = "SPEAKEASY"
+    GHIDRA_CAPA = "GHIDRA_CAPA"
 
 
 class DeepAnalysisDisposition(str, Enum):

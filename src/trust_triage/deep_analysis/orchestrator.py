@@ -1,4 +1,4 @@
-"""Bounded CAPA -> Speakeasy orchestration for one analysis request."""
+"""Bounded CAPA -> Speakeasy -> Ghidra CAPA orchestration."""
 
 from __future__ import annotations
 
@@ -55,9 +55,11 @@ class DeepAnalysisConfig:
 class DeepAnalysisOrchestrator:
     """Run each Tier at most once and preserve every decision reason.
 
-    ``speakeasy_analyzer`` is intentionally dependency-injected.  The
-    dynamic-analysis branch can pass its ``SpeakeasyAnalyzer`` instance here
-    without copying that implementation into the static-analysis branch.
+    ``speakeasy_analyzer`` and ``ghidra_capa_analyzer`` are intentionally
+    dependency-injected. The dynamic-analysis branch can pass its
+    ``SpeakeasyAnalyzer`` instance here, while the static-analysis branch can
+    pass a ``CapaAnalyzer`` configured with the Ghidra backend. Neither
+    implementation is copied into this module.
     """
 
     def __init__(
@@ -65,12 +67,14 @@ class DeepAnalysisOrchestrator:
         *,
         capa_analyzer: Any | None = None,
         speakeasy_analyzer: Any | None = None,
+        ghidra_capa_analyzer: Any | None = None,
         config: DeepAnalysisConfig | None = None,
     ) -> None:
         # CAPA is owned by feature/static-analysis and is injected at the
         # integration boundary.  Deep analysis must not copy that module.
         self.capa_analyzer = capa_analyzer
         self.speakeasy_analyzer = speakeasy_analyzer
+        self.ghidra_capa_analyzer = ghidra_capa_analyzer
         self.config = config or DeepAnalysisConfig()
 
     def run(
@@ -205,6 +209,30 @@ class DeepAnalysisOrchestrator:
         )
         if speakeasy_status != "SUCCESS":
             reason_codes.append(f"SPEAKEASY_{speakeasy_status}")
+
+        if speakeasy_status == "SUCCESS" and assessment.sufficient:
+            # Tier 2 produced enough evidence; do not pay for Tier 3.
+            return self._complete(
+                sha256=result_sha256,
+                initial_route=route,
+                initial_verdict=verdict,
+                last_tier=AnalysisTier.SPEAKEASY,
+                executed_tiers=executed_tiers,
+                evidence=evidence,
+                tool_statuses=tool_statuses,
+                reason_codes=reason_codes,
+                errors=errors,
+                assessment=assessment,
+            )
+
+        # Tier 3: Ghidra-backed CAPA is the final fallback.  It is injected
+        # from feature/static-analysis as the same CapaAnalyzer configured
+        # with CapaBackend.GHIDRA; no CAPA implementation is duplicated here.
+        reason_codes.append("ADVANCE_TO_GHIDRA_CAPA")
+        if self.ghidra_capa_analyzer is None:
+            tool_statuses[AnalysisTier.GHIDRA_CAPA.value] = "NOT_CONFIGURED"
+            errors.append("Ghidra CAPA analyzer is not configured")
+            reason_codes.append("GHIDRA_CAPA_NOT_CONFIGURED")
             return self._failed(
                 sha256=result_sha256,
                 initial_route=route,
@@ -217,14 +245,48 @@ class DeepAnalysisOrchestrator:
                 assessment=assessment,
             )
 
-        # The Tier 2 run completed.  If evidence is still insufficient, the
-        # analysis flow is complete but the proposed label remains UNKNOWN and
-        # the sample goes to analyst review.
+        executed_tiers.append(AnalysisTier.GHIDRA_CAPA)
+        ghidra_result: Any | None = None
+        try:
+            ghidra_result = self.ghidra_capa_analyzer.analyze(path)
+            ghidra_status = _status_value(ghidra_result) or "UNKNOWN"
+            evidence.extend(
+                normalize_capa_result(
+                    ghidra_result,
+                    reliability=self.config.capa_reliability,
+                )
+            )
+            errors.extend(_result_errors(ghidra_result))
+        except Exception as exc:  # Boundary: preserve tool failure for review.
+            ghidra_status = "TOOL_ERROR"
+            errors.append(f"Ghidra CAPA analyzer raised {type(exc).__name__}: {exc}")
+        tool_statuses[AnalysisTier.GHIDRA_CAPA.value] = ghidra_status
+
+        assessment = self.config.evidence_policy.assess(evidence)
+        reason_codes.extend(assessment.reason_codes)
+        result_sha256 = result_sha256 or _result_sha256(ghidra_result)
+        if ghidra_status != "SUCCESS":
+            reason_codes.append(f"GHIDRA_CAPA_{ghidra_status}")
+            return self._failed(
+                sha256=result_sha256,
+                initial_route=route,
+                initial_verdict=verdict,
+                executed_tiers=executed_tiers,
+                evidence=evidence,
+                tool_statuses=tool_statuses,
+                reason_codes=tuple(reason_codes),
+                errors=tuple(errors),
+                assessment=assessment,
+            )
+
+        # Ghidra is the final configured Tier.  A successful run with weak or
+        # conflicting evidence is complete from the tool perspective, but it
+        # must remain UNKNOWN and be sent to analyst review.
         return self._complete(
             sha256=result_sha256,
             initial_route=route,
             initial_verdict=verdict,
-            last_tier=AnalysisTier.SPEAKEASY,
+            last_tier=AnalysisTier.GHIDRA_CAPA,
             executed_tiers=executed_tiers,
             evidence=evidence,
             tool_statuses=tool_statuses,

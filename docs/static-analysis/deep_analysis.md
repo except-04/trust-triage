@@ -9,8 +9,10 @@ JRR route
 Tier 1: CAPA
   ├─ ATT&CK 근거가 충분함 → COMPLETE
   └─ 근거 부족/상충 → Tier 2: Speakeasy
-                         ├─ 정상 종료 → COMPLETE
-                         └─ timeout/미지원/도구 오류 → FAILED
+                         ├─ 근거 충분 → COMPLETE
+                         └─ 근거 부족 또는 실패 → Tier 3: Ghidra CAPA
+                                                    ├─ 정상 종료 → COMPLETE
+                                                    └─ timeout/환경 오류/미설정 → FAILED
 ```
 
 `feature/dynamic-analysis`의 Speakeasy 구현을 복사하지 않는다. 통합 시
@@ -22,9 +24,12 @@ Tier 1: CAPA
 from trust_triage.deep_analysis import DeepAnalysisOrchestrator
 
 # CAPA와 Speakeasy Analyzer는 각 담당 모듈에서 주입한다.
+# ghidra_capa_analyzer는 CapaConfig(backend=GHIDRA)로 만든 CAPA 실행기다.
+# 예: CapaAnalyzer(CapaConfig(backend=CapaBackend.GHIDRA))
 orchestrator = DeepAnalysisOrchestrator(
     capa_analyzer=capa_analyzer,
     speakeasy_analyzer=speakeasy_analyzer,
+    ghidra_capa_analyzer=ghidra_capa_analyzer,
 )
 result = orchestrator.run(
     sample_path,
@@ -91,12 +96,17 @@ calibration/evaluation 담당자가 검증해야 한다.
 
 CAPA가 기준을 만족하면 Speakeasy를 실행하지 않는다. CAPA가 성공했지만
 근거가 부족하거나 CAPA가 실패한 경우에는 Speakeasy를 한 번 시도한다.
-Speakeasy까지 정상 종료했지만 근거가 부족하면 전체 분석은 `COMPLETE`이고
-최종 제안은 `UNKNOWN`이며 `MANUAL_REVIEW`가 된다.
+Speakeasy가 성공했지만 근거가 부족하거나 timeout·미지원 API·도구 오류로
+종료되면 Ghidra backend CAPA를 마지막으로 한 번 시도한다.
+
+Ghidra backend CAPA가 정상 종료하면 전체 분석은 `COMPLETE`다. 그래도 근거가
+부족하면 최종 제안은 `UNKNOWN`이며 `MANUAL_REVIEW`가 된다. Ghidra가 실패하거나
+주입되지 않은 경우에는 `FAILED`와 `ANALYSIS_FAILED`를 반환한다.
 
 ## 안전 제한
 
 - 동일 Tier를 반복 실행하지 않는다.
+- 최대 세 단계(CAPA, Speakeasy, Ghidra CAPA)까지만 실행한다.
 - 입력 PE를 직접 실행하지 않는다. CAPA와 Speakeasy의 자체 분석 경계만 사용한다.
 - timeout·도구 버전·원본 결과 참조·실패 상태는 상위 Evidence 처리에 전달한다.
 - `final_verdict`는 시스템 제안이며, 악성·불확실 결과는 분석가 검토 대상이다.
