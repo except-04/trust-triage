@@ -5,7 +5,7 @@ from trust_triage.deep_analysis import (
     EvidenceStatus,
     normalize_attack_label,
 )
-from trust_triage.deep_analysis.attack_mapping import technique_display_name
+from trust_triage.attack_mapping import technique_display_name
 
 
 def test_human_readable_attack_label_is_normalized() -> None:

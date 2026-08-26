@@ -2,21 +2,19 @@
 
 from .models import (
     AnalysisTier,
-    AttackTechnique,
     DeepAnalysisDisposition,
     DeepAnalysisResult,
     DeepAnalysisStatus,
     EvidenceAssessment,
-    Evidence,
-    EvidenceStatus,
     EvidenceSufficiencyPolicy,
 )
 from .normalizer import normalize_capa_result, normalize_speakeasy_result
-from .attack_mapping import (
+from ..attack_mapping import (
     normalize_attack_label,
     normalize_attack_labels,
     technique_display_name,
 )
+from ..evidence import AttackTechnique, Evidence, EvidenceStatus
 from .orchestrator import DeepAnalysisConfig, DeepAnalysisOrchestrator
 
 __all__ = [

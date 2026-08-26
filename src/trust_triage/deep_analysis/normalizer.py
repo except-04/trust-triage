@@ -6,11 +6,11 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .attack_mapping import (
+from ..attack_mapping import (
     normalize_attack_labels,
     technique_display_name,
 )
-from .models import Evidence, EvidenceStatus
+from ..evidence import Evidence, EvidenceStatus
 
 
 _INJECTION_APIS = {

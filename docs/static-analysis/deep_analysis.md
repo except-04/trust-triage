@@ -20,11 +20,10 @@ Tier 1: CAPA
 
 ```python
 from trust_triage.deep_analysis import DeepAnalysisOrchestrator
-from trust_triage.static_analysis import CapaAnalyzer
 
-# SpeakeasyAnalyzer는 dynamic-analysis 모듈에서 주입한다.
+# CAPA와 Speakeasy Analyzer는 각 담당 모듈에서 주입한다.
 orchestrator = DeepAnalysisOrchestrator(
-    capa_analyzer=CapaAnalyzer(),
+    capa_analyzer=capa_analyzer,
     speakeasy_analyzer=speakeasy_analyzer,
 )
 result = orchestrator.run(

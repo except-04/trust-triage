@@ -12,7 +12,7 @@ from trust_triage.deep_analysis import (
     DeepAnalysisOrchestrator,
     DeepAnalysisStatus,
 )
-from trust_triage.deep_analysis.attack_mapping import normalize_attack_labels
+from trust_triage.attack_mapping import normalize_attack_labels
 
 
 @dataclass(frozen=True)
