@@ -8,58 +8,37 @@ DATA_DIR = os.path.join("data")
 print(f"데이터 폴더: {DATA_DIR}")
 
 # 2. 파일 로드
-# 뽑아둔 예측 확률 및 실제 라벨
+# 뽑아둔 원시 예측 확률
 xgb_prob_path = os.path.join(DATA_DIR, "y_pred_proba.npy")
-y_eval_path = os.path.join(DATA_DIR, "y_eval.npy")
+lgb_prob_path = os.path.join(DATA_DIR, "y_pred_proba_lgb.npy")
 
-# 기존 LightGBM 보정 확률 파일 탐색 (data 폴더 또는 dev 폴더)
-lgb_candidates = [
-    os.path.join("data", "jrr_calibrated_proba.npy"),
-    os.path.join(DATA_DIR, "jrr_calibrated_proba.npy"),
-    os.path.join("data", "y_pred_proba_lgb.npy")
-]
-
-lgb_prob_path = None
-for path in lgb_candidates:
-    if os.path.exists(path):
-        lgb_prob_path = path
-        break
-
+print(f"XGBoost 원시 확률 로드: {xgb_prob_path}")
 p_xgb = np.load(xgb_prob_path)
-y_true = np.load(y_eval_path)
 
 # 2D 형태(N, 2)인 경우 악성(클래스 1) 확률만 추출
 if p_xgb.ndim == 2:
     p_xgb = p_xgb[:, 1]
 
 print(f"XGBoost 예측 샘플 수: {len(p_xgb):,}개")
-print(f"실제 라벨 샘플 수: {len(y_true):,}개 (악성 비율: {y_true.mean()*100:.2f}%)")
 
-# ========== [신규 추가: XGBoost 확률 스케일 보정] ==========
-print("\n[진행] XGBoost 원시 확률(Raw)에 보정기 적용 중...")
-try:
-    calibrator_pack = joblib.load(os.path.join(DATA_DIR, "jrr_calibrator.pkl"))
-    calibrator = calibrator_pack['model']
-    # LightGBM과 스케일을 맞추기 위해 XGBoost도 보정(Calibrated) 처리
-    p_xgb = calibrator.predict(p_xgb) 
-    print("  -> XGBoost 예측 확률 보정 완료!")
-except FileNotFoundError:
-    print("  [에러] data/jrr_calibrator.pkl 파일을 찾을 수 없습니다.")
-    raise
-# =========================================================
+# 실제 라벨 로드 (참고용)
+y_eval_path = os.path.join(DATA_DIR, "y_eval.npy")
+if os.path.exists(y_eval_path):
+    y_true = np.load(y_eval_path)
+    print(f"실제 라벨 샘플 수: {len(y_true):,}개 (악성 비율: {y_true.mean()*100:.2f}%)")
 
 # LightGBM 파일이 있는 경우 불일치도 계산
-if lgb_prob_path:
-    print(f"LightGBM 로드: {lgb_prob_path}")
+if os.path.exists(lgb_prob_path):
+    print(f"\nLightGBM 원시 확률 로드: {lgb_prob_path}")
     p_lgb = np.load(lgb_prob_path)
     if p_lgb.ndim == 2:
         p_lgb = p_lgb[:, 1]
     
-    # 불일치도 계산 (|P_lgb - P_xgb|)
+    # 불일치도 계산 (|p_lgb_raw - p_xgb_raw|)
     disagreement = np.abs(p_lgb - p_xgb)
     
     print("\n" + "="*45)
-    print("Model Disagreement 통계 요약")
+    print("Model Disagreement 통계 요약 (Raw Prob 기준)")
     print("="*45)
     print(f"평균 Disagreement: {disagreement.mean():.4f}")
     print(f"최대 Disagreement: {disagreement.max():.4f}")
@@ -72,4 +51,4 @@ if lgb_prob_path:
     np.save(out_disagree, disagreement)
     print(f"Disagreement 파일 저장 완료: {out_disagree}")
 else:
-    print("LightGBM 보정 확률 파일이 아직 data 폴더에 없습니다. (XGBoost 단독 확률 정상 로드 확인됨)")
+    print(f"\nLightGBM 원시 확률 파일({lgb_prob_path})이 없습니다. 불일치 계산 대기 중...")
