@@ -249,6 +249,10 @@ mlartifacts/
 # folder
 data/
 EMBER2024/
+.capa-rules/
+.capa-localappdata/
+.capa-bin/
+.ghidra-appdata*/
 
 # file
 *.csv
