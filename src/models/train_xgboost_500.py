@@ -51,7 +51,7 @@ def main() -> None:
             }
         )
         model = xgb.XGBClassifier(
-            n_estimators=500,
+            n_estimators=1000,
             max_depth=6,
             learning_rate=0.05,
             random_state=42,
