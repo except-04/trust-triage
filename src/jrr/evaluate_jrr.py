@@ -23,7 +23,7 @@ def main():
             
         except FileNotFoundError as e:
             print(f"[에러] 평가에 필요한 데이터를 찾을 수 없습니다: {e}")
-            print("[안내] 라우터(10_jrr_router.py)를 먼저 실행하여 결과 파일(.npy)을 생성해주세요.")
+            print("[안내] 라우터(jrr_router.py)를 먼저 실행하여 결과 파일(.npy)을 생성해주세요.")
             return
         
         # 2. 공용 도구함에서 빌려온 4대 핵심 지표 계산 함수 실행

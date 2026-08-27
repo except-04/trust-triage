@@ -215,7 +215,7 @@ def main() -> int:
 
     layout = Layout(args.root)
     layout.mkdirs()
-    log = setup_logging("03_build_index", layout.logs)
+    log = setup_logging("build_index", layout.logs)
 
     if layout.is_done("build_index") and not args.force:
         log.info("이미 완료되었습니다 (--force로 재생성).")
@@ -260,7 +260,7 @@ def main() -> int:
             log.warning("train week_id 범위가 0–51과 다릅니다 — 분할 경계를 재확인하세요.")
 
     layout.mark_done("build_index")
-    log.info("다음 단계: python 04_split_qc.py --root %s", args.root)
+    log.info("다음 단계: python split_qc.py --root %s", args.root)
     return 0
 
 

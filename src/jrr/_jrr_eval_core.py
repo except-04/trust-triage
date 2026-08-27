@@ -36,7 +36,7 @@ def calculate_review_yield(y_true, routes, daily_budget=100):
     print(f"\n[진행] Review Yield (일일 검토 예산: {daily_budget}개) 시뮬레이션 중...")
     
     routes = np.array(routes)
-    deep_analysis_idx = np.where(routes == "심층분석")[0]
+    deep_analysis_idx = np.where(routes == "HIGH_RISK_UNCERTAIN")[0]
     total_routed = len(deep_analysis_idx)
     
     if total_routed == 0:
@@ -97,11 +97,10 @@ def run_kill_test(routes_func=None):
         if routes_func is not None:
             predicted_routes = routes_func(X_benign_ood)
         else:
-            print("  [안내] 라우터 함수가 연결되지 않아 기본값으로 처리합니다.")
-            return 0.001
+            raise ValueError("[치명적 에러] Kill Test에 라우터 함수(routes_func)가 전달되지 않았습니다. 테스트를 중단합니다.")
             
         predicted_routes = np.array(predicted_routes)
-        false_positives = np.sum(predicted_routes == "자동_악성")
+        false_positives = np.sum(predicted_routes == "AUTO_MALICIOUS")
         
         kill_test_fpr = false_positives / total_benign_kill_test
         
@@ -115,7 +114,5 @@ def run_kill_test(routes_func=None):
             
         return kill_test_fpr
         
-    except FileNotFoundError:
-        print("  [에러] data/X_ood_test.npy 또는 data/y_ood_test.npy 파일을 찾을 수 없습니다.")
-        print("  [안내] OOD 킬 테스트용 데이터 파일이 준비되면 경로를 확인 후 다시 실행해주세요.")
-        return 0.001
+    except FileNotFoundError as e:
+        raise FileNotFoundError("[치명적 에러] Kill Test용 OOD 데이터가 없습니다. 미실행 상태를 성공으로 위장할 수 없으므로 파이프라인을 중단합니다.") from e

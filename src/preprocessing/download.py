@@ -430,7 +430,7 @@ def main() -> int:
 
     layout = Layout(args.root)
     layout.mkdirs()
-    log = setup_logging("01_download", layout.logs)
+    log = setup_logging("download", layout.logs)
 
     log.info("작업 루트: %s", layout.root)
     log.info("플랫폼: %s / Python %s", sys.platform, sys.version.split()[0])
@@ -552,7 +552,7 @@ def main() -> int:
         log.error("동일 명령을 다시 실행하면 완료된 항목은 건너뜁니다.")
         return 1
 
-    log.info("다음 단계: python 02_vectorize.py --root %s", args.root)
+    log.info("다음 단계: python vectorize.py --root %s", args.root)
     return 0
 
 

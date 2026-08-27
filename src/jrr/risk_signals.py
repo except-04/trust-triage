@@ -33,7 +33,7 @@ TOP_N_PATH = "data/top_feature_indices_500.npy"
 # --------------------------------------------------------------------------
 
 def main() -> int:
-    print("[08_train_risk_signals] JRR 다중 위험 신호 산출 모델 학습 시작\n")
+    print("[train_risk_signals] JRR 다중 위험 신호 산출 모델 학습 시작\n")
     
     if not os.path.exists(X_TR_PATH) or not os.path.exists(TOP_N_PATH):
         print("에러: 데이터를 찾을 수 없습니다.")
@@ -94,7 +94,7 @@ def main() -> int:
         
         joblib.dump(risk_signal_components, 'data/jrr_risk_signals.pkl')
         
-        print("\n[08_train_risk_signals] 무사히 완료되었습니다. (jrr_risk_signals.pkl 생성)")
+        print("\n[train_risk_signals] 무사히 완료되었습니다. (jrr_risk_signals.pkl 생성)")
         
     return 0
 
