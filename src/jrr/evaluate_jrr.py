@@ -1,6 +1,6 @@
 import numpy as np
 import mlflow
-from sklearn.metrics import roc_auc_score, confusion_matrix
+from sklearn.metrics import roc_auc_score, confusion_matrix, brier_score_loss
 
 #핵심 포인트: 공용 도구함에서 평가 함수들을 정석대로 빌려오기
 from _jrr_eval_core import calculate_ece, calculate_review_yield, calculate_true_tpr, run_kill_test
@@ -36,6 +36,9 @@ def main():
         auc = roc_auc_score(y_true, y_prob)
         y_pred = (y_prob >= fixed_upper_bound).astype(int)
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        
+        # [EVAL] ECE/Brier Score 비교 이슈 대응
+        brier = brier_score_loss(y_true, y_prob)
         # ------------------------------------------------------------------
 
         # 주의: 기존 run_kill_test() 호출 시 라우팅 함수가 전달되지 않으면 에러가 발생할 수 있습니다.
@@ -47,6 +50,7 @@ def main():
         
         # 3. MLflow에 결과 박제
         mlflow.log_metric("ECE_Score", ece)
+        mlflow.log_metric("Brier_Score", brier)
         mlflow.log_metric("Review_Yield", r_yield)
         mlflow.log_metric("Actual_TPR", actual_tpr)
         if kill_test_fpr >= 0:
@@ -57,6 +61,7 @@ def main():
         print("[완료] JRR 평가 완료! 결과가 MLflow에 성공적으로 박제되었습니다.")
         print("--- 시스템 관점 (운영) ---")
         print(f" - 최종 ECE 점수: {ece:.4f}")
+        print(f" - 최종 Brier Score: {brier:.4f}")
         print(f" - 최종 Review Yield: {r_yield:.2f}%")
         if kill_test_fpr >= 0:
             print(f" - Kill Test 최종 FPR: {kill_test_fpr:.4f}")
