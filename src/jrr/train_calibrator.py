@@ -40,6 +40,10 @@ TARGET_FPR = 0.001  # 계획상 목표 (FPR 0.1%)
 TOP_N_PATH = "data/top_feature_indices_500.npy"
 MODEL_PATH = "data/baseline_model_lightgbm_tuned_500_4way.pkl"
 OUT_CALIBRATOR_PATH = "data/jrr_calibrator_4way.pkl"
+OUT_CALIBRATOR_LEGACY_PATH = "data/jrr_calibrator.pkl"
+
+X_EVAL_PATH = "data/X_eval.npy"
+OUT_PROBA_PATH = "data/jrr_calibrated_proba.npy"
 
 # --------------------------------------------------------------------------
 # main
@@ -102,8 +106,22 @@ def main() -> int:
         mlflow.sklearn.log_model(calibrator, "07_jrr_calibrator_model")
         
         # 6. 로컬 파일 저장
-        print(f"라우터 연동용 로컬 파일({OUT_CALIBRATOR_PATH}) 저장 중...")
+        print(f"라우터 연동용 로컬 파일({OUT_CALIBRATOR_PATH}, {OUT_CALIBRATOR_LEGACY_PATH}) 저장 중...")
         joblib.dump({'model': calibrator, 'threshold': optimal_threshold}, OUT_CALIBRATOR_PATH)
+        joblib.dump({'model': calibrator, 'threshold': optimal_threshold}, OUT_CALIBRATOR_LEGACY_PATH)
+        
+        # 7. Eval 데이터에 대한 예측 및 확률 보정 파일(jrr_calibrated_proba.npy) 생성
+        print(f"\n평가셋(Eval) 원시 확률 추론 및 보정 적용 중...")
+        if os.path.exists(X_EVAL_PATH):
+            X_eval = np.load(X_EVAL_PATH, mmap_mode="r")
+            X_eval_500 = X_eval[:, top_indices]
+            raw_eval_proba = model.predict_proba(X_eval_500)[:, 1]
+            calibrated_eval_proba = calibrator.predict(raw_eval_proba)
+            
+            print(f"보정된 확률 파일({OUT_PROBA_PATH}) 저장 중...")
+            np.save(OUT_PROBA_PATH, calibrated_eval_proba)
+        else:
+            print(f"경고: {X_EVAL_PATH} 파일이 없어 jrr_calibrated_proba.npy를 생성하지 못했습니다.")
         
         print("\n[train_calibrator] 완료되었습니다.")
         
