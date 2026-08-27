@@ -40,17 +40,46 @@ LABEL_MALICIOUS = 1
 
 # 시간 기반 분할 경계 (week_id 기준).
 # EMBER2024는 IID가 아니라 시간축 설계이므로 무작위 분할이 금지된다.
-# train 원본은 week_id 0–51(52주). 이를 시간 순서대로 3분할한다:
-#   idx_tr    : weeks  0–39  (약 77%)
-#   idx_calib : weeks 40–45  (약 12%, 임계값 추정용)
+# train 원본은 week_id 0–51(52주). 이를 시간 순서대로 4분할한다:
+#   idx_tr    : weeks  0–33  (약 65%, 모델 파라미터 적합 전용)
+#   idx_val   : weeks 34–39  (약 12%, 하이퍼파라미터/모델 선택 전용)
+#   idx_calib : weeks 40–45  (약 12%, 임계값·확률 보정 전용)
 #   idx_eval  : weeks 46–51  (약 12%, 시간 이동 후 성능 확인용)
-# calibration과 eval의 폭을 각 6주로 동일하게 두는 대칭성이 비율보다 중요하다.
+#
+# 왜 validation을 따로 두는가
+# --------------------------
+# 초기 설계는 train(0–39) / calib(40–45) / eval(46–51)의 3분할이라 validation이
+# 없었다. 그러면 모델 선택(하이퍼파라미터 탐색, early stopping)을 할 곳이 없어
+# calibration이나 eval이 그 역할까지 겸하게 된다. 그 순간
+#   * calib에서 모델을 고르면 → 그 모델의 임계값을 같은 데이터로 정하게 되어
+#     목표 FPR이 낙관적으로 추정된다(임계값 과적합).
+#   * eval에서 모델을 고르면 → eval이 더 이상 '시간 이동 후 성능'의 정직한
+#     추정치가 아니게 되고, 사실상 test를 미리 소모한 셈이 된다.
+# 그래서 train의 뒤쪽 6주를 떼어 validation으로 만든다. 모델 선택은 val에서
+# 끝내고, calib는 확정된 단일 모델의 임계값만 만지고, eval은 읽기만 한다.
+#
+# val / calib / eval의 폭을 각 6주로 동일하게 두는 대칭성이 비율보다 중요하다.
+# 폭이 같아야 "val→calib 6주 이동", "calib→eval 6주 이동"에서 관측한 성능 저하를
+# 서로 비교할 수 있고, eval의 저하폭이 test에서 겪을 저하의 대리 지표가 된다.
 # 비율은 경계의 결과로 받아들이고, 6:2:2를 맞추려 주차를 쪼개지 않는다.
-WEEK_TRAIN_END = 39     # idx_tr    = week <= 39
+WEEK_TRAIN_END = 33     # idx_tr    = week <= 33
+WEEK_VAL_START = 34     # idx_val   = 34 <= week <= 39
+WEEK_VAL_END = 39
 WEEK_CALIB_START = 40   # idx_calib = 40 <= week <= 45
 WEEK_CALIB_END = 45
 WEEK_EVAL_START = 46    # idx_eval  = week >= 46
 WEEK_MAX = 51           # train 원본의 마지막 주차 (사전 검증용)
+
+# 개발용 분할 이름. 시간 순서대로 나열한다 (04/05/06단계가 이 순서로 순회한다).
+DEV_SPLITS = ("tr", "val", "calib", "eval")
+
+# 각 분할의 주차 구간 [시작, 끝] (양끝 포함). 경계 로직의 단일 진실 공급원.
+SPLIT_WEEKS = {
+    "tr": (0, WEEK_TRAIN_END),
+    "val": (WEEK_VAL_START, WEEK_VAL_END),
+    "calib": (WEEK_CALIB_START, WEEK_CALIB_END),
+    "eval": (WEEK_EVAL_START, WEEK_MAX),
+}
 
 # 메타데이터에 담는 필드.
 #   sha256    : 식별자 / 중복 검사
@@ -65,6 +94,134 @@ PE_FILE_TYPES = ("Win32", "Win64")
 
 # 청크 크기(행 단위). 20000행 x 2568차원 x 4바이트 = 약 205MB
 DEFAULT_CHUNK = 20_000
+
+
+# --------------------------------------------------------------------------
+# 분할 계약 (split contract)
+# --------------------------------------------------------------------------
+#
+# 데이터 분할은 파일을 나누는 일이 아니라 "각 조각을 무엇에 쓰고 무엇에 쓰지
+# 않을지"를 약속하는 일이다. 약속이 문서 밖(사람 머릿속)에만 있으면 몇 주 뒤에
+# 반드시 깨진다. 그래서 계약을 코드 상수로 두고 06단계가 manifest.json에
+# 그대로 박아 넣는다. 분할을 바꾸면 계약도 같이 바뀌어 산출물에 남는다.
+
+SPLIT_CONTRACT_RATIONALE = (
+    "초기 3분할(train 0–39 / calib 40–45 / eval 46–51)에는 validation이 없어서 "
+    "모델 선택을 할 곳이 없었고, calibration과 eval이 그 역할까지 겸해야 했다. "
+    "calib에서 모델을 고르면 같은 데이터로 임계값까지 정하게 되어 목표 FPR이 "
+    "낙관적으로 추정되고, eval에서 고르면 eval이 시간 이동 성능의 정직한 추정치가 "
+    "아니게 된다. train의 뒤쪽 6주(34–39)를 validation으로 분리해 각 조각에 "
+    "역할을 하나씩만 준다."
+)
+
+SPLIT_CONTRACT_ORDER = [
+    "1) tr에서 학습한다 (fit).",
+    "2) val에서 하이퍼파라미터를 고르고 early stopping을 걸고 모델을 확정한다.",
+    "3) 모델을 확정한 뒤에야 calib에서 목표 FPR 임계값과 확률 보정을 산출한다.",
+    "4) eval에서 (2)(3)의 결과가 6주 시간 이동 후에도 유지되는지 확인만 한다.",
+    "5) 모든 결정이 끝난 뒤 lockbox(test/challenge)를 단 한 번 연다.",
+]
+
+
+def split_contract() -> dict:
+    """
+    각 분할의 용도/허용/금지를 기계가 읽을 수 있는 형태로 돌려준다.
+    06단계가 manifest.json의 "split_contract" 항목으로 기록한다.
+    """
+    def weeks(name: str) -> str:
+        lo, hi = SPLIT_WEEKS[name]
+        return f"{lo} <= week <= {hi}"
+
+    return {
+        "rationale": SPLIT_CONTRACT_RATIONALE,
+        "order_of_use": SPLIT_CONTRACT_ORDER,
+        "splits": {
+            "tr": {
+                "weeks": list(SPLIT_WEEKS["tr"]),
+                "week_rule": weeks("tr"),
+                "files": ["out/dev/X_tr.npy", "out/dev/y_tr.npy",
+                          "out/dev/arch_tr.npy"],
+                "role": "모델 파라미터 적합(fit) 전용",
+                "allowed": [
+                    "model.fit() / booster 학습",
+                    "특징 전처리 통계(median, scaler 등) 산출 — 반드시 여기서만",
+                    "횟수 제한 없이 반복 사용",
+                ],
+                "forbidden": [
+                    "성능 보고 (train 성능은 진단용일 뿐 결과가 아니다)",
+                ],
+                "touch_budget": "무제한",
+            },
+            "val": {
+                "weeks": list(SPLIT_WEEKS["val"]),
+                "week_rule": weeks("val"),
+                "files": ["out/dev/X_val.npy", "out/dev/y_val.npy",
+                          "out/dev/arch_val.npy"],
+                "role": "하이퍼파라미터 탐색 / early stopping / 모델 선택 전용",
+                "allowed": [
+                    "하이퍼파라미터 탐색과 비교",
+                    "LightGBM early stopping의 valid_sets",
+                    "특징 선택, 임베딩/아키텍처 후보 비교",
+                    "반복 사용 (단, 과적합은 val에 쌓인다는 점을 감안)",
+                ],
+                "forbidden": [
+                    "운영 임계값 산출 (그것은 calib의 역할)",
+                    "최종 성능 보고 (여러 번 들여다본 데이터는 낙관 편향된다)",
+                    "학습에 포함 (val을 tr에 합쳐 재학습하면 계약이 깨진다)",
+                ],
+                "touch_budget": "반복 허용",
+            },
+            "calib": {
+                "weeks": list(SPLIT_WEEKS["calib"]),
+                "week_rule": weeks("calib"),
+                "files": ["out/dev/X_calib.npy", "out/dev/y_calib.npy",
+                          "out/dev/arch_calib.npy"],
+                "role": "확정된 단일 모델의 임계값·확률 보정 전용",
+                "allowed": [
+                    "목표 FPR(예: 1e-3)에서의 임계값 산출",
+                    "확률 보정 (Platt / isotonic)",
+                    "arch(Win32/Win64)별 임계값 분리 산출",
+                ],
+                "forbidden": [
+                    "모델 선택이나 하이퍼파라미터 비교 (val에서 끝냈어야 한다)",
+                    "학습에 포함",
+                ],
+                "touch_budget": "모델 확정 후 1회",
+            },
+            "eval": {
+                "weeks": list(SPLIT_WEEKS["eval"]),
+                "week_rule": weeks("eval"),
+                "files": ["out/dev/X_eval.npy", "out/dev/y_eval.npy",
+                          "out/dev/arch_eval.npy"],
+                "role": "시간 이동 후 성능 확인 (읽기 전용 진단)",
+                "allowed": [
+                    "calib에서 정한 임계값이 6주 뒤에도 유지되는지 확인",
+                    "ROC-AUC 및 고정 FPR에서의 TPR을 arch별로 분해해 보고",
+                ],
+                "forbidden": [
+                    "eval 결과를 보고 모델/임계값/특징을 되돌려 바꾸기 "
+                    "(되먹임하는 순간 eval은 두 번째 validation이 된다)",
+                    "학습에 포함",
+                ],
+                "touch_budget": "가급적 1회, 되먹임 금지",
+            },
+            "lockbox(test/challenge)": {
+                "weeks": None,
+                "week_rule": "train과 별개의 원본 subset (시간 분할 대상 아님)",
+                "files": ["out/lockbox/X_test.npy", "out/lockbox/X_challenge.npy"],
+                "role": "최종 보고용 1회성 평가",
+                "allowed": [
+                    "모든 결정이 끝난 뒤 단 한 번의 최종 평가",
+                    "valid_mask_*.npy를 적용해 라벨 -1 행 제외",
+                ],
+                "forbidden": [
+                    "개발 중 열람",
+                    "결과를 보고 모델을 수정한 뒤 재평가",
+                ],
+                "touch_budget": "1회",
+            },
+        },
+    }
 
 
 # --------------------------------------------------------------------------
@@ -211,7 +368,7 @@ class Layout:
     <root>/
       dataset/            원본 .jsonl + thrember가 만든 .dat (44GB + 26GB)
       out/
-        dev/              X_tr / X_calib / X_eval  (개발용, 자유 사용)
+        dev/              X_tr / X_val / X_calib / X_eval  (개발용, 자유 사용)
         lockbox/          X_test / X_challenge     (봉인, 읽기 전용)
         index/            분할 인덱스, arch 인덱스, valid 마스크 (수 MB)
         reports/          QC 리포트, manifest, README

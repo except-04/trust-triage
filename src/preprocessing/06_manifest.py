@@ -6,6 +6,11 @@ manifest에 기록하는 것
 ----------------------
 * 모든 산출물의 shape / dtype / sha256
 * 클래스 비율, arch 비율, 시간 분할 주차 경계, 주차별 악성 비율 추이
+* 분할 계약(split_contract) — 각 분할을 무엇에 쓰고 무엇에 쓰지 않는지.
+  약속이 사람 머릿속에만 있으면 몇 주 뒤에 깨진다. train/val/calib/eval의
+  역할이 산출물 안에 함께 저장되어 있어야, 나중에 이 데이터를 받은 사람이
+  (혹은 몇 달 뒤의 내가) validation 없이 calib에서 모델을 고르는 실수를 하지
+  않는다.
 * pefile / numpy / thrember 버전과 thrember 커밋 해시
   → 나중에 X를 공유하지 않고 인덱스만 공유하기로 바꿀 경우, 받는 쪽이
     직접 벡터화한 결과가 내 것과 같은지 X_train.dat의 sha256으로 대조할 수
@@ -32,14 +37,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (  # noqa: E402
     Layout, Timer, add_root_arg, env_versions, fmt_bytes, get_dim,
-    read_json, setup_logging, sha256_file, thrember_commit, write_json,
+    read_json, setup_logging, sha256_file, split_contract, thrember_commit,
+    write_json,
 )
 
 README_TEMPLATE = """# EMBER2024 Win32/Win64 데이터셋 (전처리 완료본)
 
 생성 일시: {created}
 분할 방식: {split_method}
-주차 경계: idx_tr={b_tr} / idx_calib={b_calib} / idx_eval={b_eval}
+주차 경계: idx_tr={b_tr} / idx_val={b_val} / idx_calib={b_calib} / idx_eval={b_eval}
 특징 차원: {dim} (thrember / EMBER feature version 3)
 
 ## 디렉터리
@@ -54,19 +60,42 @@ out/
 
 ## 개발용 (out/dev/)
 
-| 파일 | 행 수 | 설명 |
+| 파일 | 행 수 | 용도 |
 |---|---|---|
-| X_tr.npy / y_tr.npy / arch_tr.npy | {n_tr} | 학습 (weeks 0–39) |
-| X_calib.npy / y_calib.npy / arch_calib.npy | {n_calib} | 임계값 보정 (weeks 40–45) |
-| X_eval.npy / y_eval.npy / arch_eval.npy | {n_eval} | 시간 이동 평가 (weeks 46–51) |
+| X_tr.npy / y_tr.npy / arch_tr.npy | {n_tr} | 학습 (weeks 0–33) — fit 전용 |
+| X_val.npy / y_val.npy / arch_val.npy | {n_val} | 하이퍼파라미터·early stopping·모델 선택 (weeks 34–39) |
+| X_calib.npy / y_calib.npy / arch_calib.npy | {n_calib} | 임계값·확률 보정 (weeks 40–45) |
+| X_eval.npy / y_eval.npy / arch_eval.npy | {n_eval} | 시간 이동 평가 (weeks 46–51) — 읽기만 |
 
 * **시간 기반 분할**입니다. 원본 train(week 0–51)을 `week_id`로 나눴습니다.
   EMBER2024는 IID가 아니라 시간축 설계이므로 무작위/층화 분할을 쓰지 않았고,
   리샘플링·SMOTE·class_weight도 적용하지 않았습니다.
 * 라벨 -1(미분류)과 비PE(.NET 등, file_type ∉ {{Win32,Win64}})는 제외했습니다.
 * `arch_*.npy`: 0 = Win32, 1 = Win64, 2 = 기타
-* 임계값은 **calibration(40–45)에서 목표 FPR로 산출 → eval(46–51)에서 시간
-  이동 후 유지되는지 확인 → test/challenge에 한 번만 적용**하세요.
+
+### 분할 계약 — 조각마다 역할은 하나씩
+
+| 조각 | 해도 되는 것 | 하면 안 되는 것 |
+|---|---|---|
+| **tr** (0–33) | fit, 전처리 통계 산출, 무제한 반복 | 성능 보고 |
+| **val** (34–39) | 하이퍼파라미터 탐색, early stopping, 모델 선택 | 임계값 산출, 최종 성능 보고, 학습에 포함 |
+| **calib** (40–45) | 확정된 모델의 목표 FPR 임계값, 확률 보정 | 모델 선택, 학습에 포함 |
+| **eval** (46–51) | 6주 이동 후 성능 확인 | 결과를 보고 모델/임계값 되돌려 바꾸기 |
+
+순서: **tr에서 학습 → val에서 모델 확정 → calib에서 임계값 산출 → eval에서
+유지 여부 확인 → test/challenge에 단 한 번 적용.**
+
+validation은 원래 없었습니다(train이 0–39 통짜였습니다). 그 상태에서는 모델
+선택을 할 곳이 없어 calib나 eval이 그 역할을 겸하게 되고, 임계값이 자기가
+고른 모델 위에서 추정되거나(목표 FPR이 낙관 편향) eval이 시간 이동 성능의
+정직한 추정치가 아니게 됩니다. 그래서 train 뒤쪽 6주를 val로 분리했습니다.
+val / calib / eval의 폭이 모두 6주로 같으므로 구간별 성능 저하를 서로 비교할
+수 있습니다. 전체 계약은 `reports/manifest.json`의 `split_contract`에 있습니다.
+
+* LightGBM을 쓴다면 `valid_sets=[val]`로 early stopping을 걸고, 최적 트리 수를
+  포함한 모든 하이퍼파라미터를 val에서 확정한 뒤 calib로 넘어가세요.
+  val을 tr에 합쳐 재학습하는 것은 계약 위반입니다(합치면 early stopping이
+  기억하는 최적 지점이 더 이상 유효하지 않습니다).
 * 지표는 arch별로 분해해서 보세요. Win32:Win64가 약 3:1이라 집계 지표는
   사실상 Win32 성능만 반영합니다. 평가는 accuracy/F1이 아니라 ROC-AUC와
   고정 FPR에서의 TPR을 씁니다(50:50 비율은 운영 환경과 다름).
@@ -97,14 +126,16 @@ out/
 
 ```python
 import numpy as np
-X_tr = np.load("out/dev/X_tr.npy", mmap_mode="r")   # lazy
-y_tr = np.load("out/dev/y_tr.npy")                  # 작으므로 그대로
+X_tr = np.load("out/dev/X_tr.npy", mmap_mode="r")    # lazy
+y_tr = np.load("out/dev/y_tr.npy")                   # 작으므로 그대로
+X_val = np.load("out/dev/X_val.npy", mmap_mode="r")  # 모델 선택용
+y_val = np.load("out/dev/y_val.npy")
 ```
 
 ## 재현
 
 `out/index/idx_*.npy`가 원본이고 `X_*.npy`는 그 파생물입니다.
-`X_train.dat`과 인덱스만 있으면 개발용 3분할을 언제든 복원할 수 있습니다.
+`X_train.dat`과 인덱스만 있으면 개발용 4분할을 언제든 복원할 수 있습니다.
 버전 정보와 `X_train.dat`의 sha256은 manifest.json에 있습니다.
 """
 
@@ -132,13 +163,22 @@ def main() -> int:
         "feature_dim": get_dim(),
         "split_method": qc.get("split_method", "time (week_id)"),
         "week_boundaries": qc.get("week_boundaries"),
+        # 계약은 코드(common.split_contract)가 진실이다. QC 리포트에 실린 값이
+        # 있으면 그대로 쓰고, 없으면(04를 옛 버전으로 돌린 경우) 현재 코드의
+        # 계약을 채워 넣는다.
+        "split_contract": qc.get("split_contract") or split_contract(),
         "nonpe_excluded": qc.get("nonpe_excluded"),
         "environment": env_versions(),
         "thrember_commit": thrember_commit(args.thrember_repo),
         "files": {},
+        # 여기에는 '분포'만 담는다. 접두사만으로 거르면 split_method나
+        # split_contract 같은 동명이인 키까지 딸려 들어와 계약 전문이 manifest
+        # 안에 두 번 실린다. 분포 항목은 label_stats()가 만든 dict이므로
+        # n_total 유무로 판별한다.
         "class_distribution": {
             k: v for k, v in qc.items()
             if k.startswith(("split_", "lockbox_", "train_raw"))
+            and isinstance(v, dict) and "n_total" in v
         },
         "weekly_malicious_ratio": qc.get("weekly_malicious_ratio"),
     }
@@ -192,11 +232,13 @@ def main() -> int:
     readme = README_TEMPLATE.format(
         created=manifest["created_at"],
         split_method=manifest.get("split_method"),
-        b_tr=wb.get("idx_tr", "week <= 39"),
+        b_tr=wb.get("idx_tr", "week <= 33"),
+        b_val=wb.get("idx_val", "34 <= week <= 39"),
         b_calib=wb.get("idx_calib", "40 <= week <= 45"),
         b_eval=wb.get("idx_eval", "week >= 46"),
         dim=manifest["feature_dim"],
         n_tr=nrows("X_tr.npy"),
+        n_val=nrows("X_val.npy"),
         n_calib=nrows("X_calib.npy"),
         n_eval=nrows("X_eval.npy"),
         n_test=nrows("X_test.npy"),
