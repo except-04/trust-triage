@@ -130,7 +130,7 @@ def main() -> int:
 
     layout = Layout(args.root)
     layout.mkdirs()
-    log = setup_logging("05_materialize", layout.logs)
+    log = setup_logging("materialize", layout.logs)
 
     dim = get_dim()
     rng = np.random.default_rng(0)
@@ -146,7 +146,7 @@ def main() -> int:
     for split in DEV_SPLITS:
         idx_path = layout.split_idx_path(split)
         if not idx_path.is_file():
-            log.error("%s 없음 — 04_split_qc.py를 먼저 실행하세요. "
+            log.error("%s 없음 — split_qc.py를 먼저 실행하세요. "
                       "(분할 경계를 바꿨다면 04를 --force로 다시 돌려야 "
                       "idx_%s.npy가 생깁니다.)", idx_path, split)
             return 1
@@ -245,7 +245,7 @@ def main() -> int:
             log.info("  %-28s %10s", p.name, fmt_bytes(p.stat().st_size))
 
     layout.mark_done("materialize")
-    log.info("다음 단계: python 06_manifest.py --root %s", args.root)
+    log.info("다음 단계: python manifest.py --root %s", args.root)
     return 0
 
 

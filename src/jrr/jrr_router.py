@@ -3,7 +3,7 @@ import numpy as np
 
 class JointRiskRouter:
     """
-    TRUST-Triage 핵심 엔진: Joint Risk Router (10_jrr_router.py)
+    TRUST-Triage 핵심 엔진: Joint Risk Router (jrr_router.py)
     확률값과 Model Disagreement를 바탕으로 3가지 큐로 분기합니다.
     """
     def __init__(self, tau_low=0.95, tau_high=0.976190, tau_disagree=0.3):
@@ -65,7 +65,7 @@ if __name__ == "__main__":
         p_lgb = p_lgb[:, 1]
 
     print("="*60)
-    print("Joint Risk Router (10_jrr_router.py) 실행")
+    print("Joint Risk Router (jrr_router.py) 실행")
     print("="*60)
 
     # 2. 라우터 동작

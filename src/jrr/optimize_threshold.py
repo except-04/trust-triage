@@ -1,4 +1,4 @@
-# src/jrr/09_optimize_threshold.py
+# src/jrr/optimize_threshold.py
 import numpy as np
 import mlflow
 import joblib
@@ -42,7 +42,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
         simulated_routes = simulate_routing(y_prob, lb, upper_bound)
         deep_count = np.sum(simulated_routes == "HIGH_RISK_UNCERTAIN")
         
-        # 10_evaluate_jrr.py의 가성비 계산 함수 호출
+        # evaluate_jrr.py의 가성비 계산 함수 호출
         current_yield = calculate_review_yield(y_true, simulated_routes, daily_budget)
         
         print(f"  [결과] 하한선 {lb:.2f} 설정 시 -> 심층분석 대상: {deep_count}개 | 가성비: {current_yield:.2f}%")
@@ -62,7 +62,7 @@ def main():
     
     with mlflow.start_run(run_name="Threshold_Simulation"):
         try:
-            # 1. 평가용 실제 데이터 및 07_train_calibrator.py 산출물 로드
+            # 1. 평가용 실제 데이터 및 train_calibrator.py 산출물 로드
             y_true = np.load("data/y_eval.npy") 
             y_prob = np.load("data/jrr_calibrated_proba.npy") 
             
@@ -94,7 +94,7 @@ def main():
         print(f" - [예상] 일일 심층분석 큐 인입량: {final_deep_count}건")
         print(f" - [예상] 분석가 검토 가성비(Yield): {max_yield:.2f}%")
         print("==================================================")
-        print("[안내] 산출된 하한선 값을 10_jrr_router.py 모듈의 라우팅 분기 조건에 업데이트 해주세요.")
+        print("[안내] 산출된 하한선 값을 jrr_router.py 모듈의 라우팅 분기 조건에 업데이트 해주세요.")
 
 if __name__ == "__main__":
     main()

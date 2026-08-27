@@ -42,7 +42,7 @@ TARGET_FPR = 0.001  # 계획상 목표 (FPR 0.1%)
 #data/X_eval.npy (평가용 원본 데이터)
 #data/top_feature_indices_500.npy (500개 피처 인덱스)
 #baseline_model_lightgbm_tuned_500_v4_9120.pkl (학습된 1차 모델)
-#jrr_calibrator.pkl (07_train_calibrator.py를 실행하여 만든 보정기 모델)
+#jrr_calibrator.pkl (train_calibrator.py를 실행하여 만든 보정기 모델)
 X_EVAL_PATH = "data/X_eval.npy"
 TOP_N_PATH = "data/top_feature_indices_500.npy"
 MODEL_PATH = "data/baseline_model_lightgbm_tuned_500_v4_9120.pkl"
@@ -52,7 +52,7 @@ MODEL_PATH = "data/baseline_model_lightgbm_tuned_500_v4_9120.pkl"
 # --------------------------------------------------------------------------
 
 def main() -> int:
-    print("[07_train_calibrator] JRR 확률 보정 모델 학습 시작\n")
+    print("[train_calibrator] JRR 확률 보정 모델 학습 시작\n")
     
     if not os.path.exists(Y_TRUE_PATH) or not os.path.exists(Y_PRED_PATH):
         print("에러: 데이터를 찾을 수 없습니다.")
@@ -119,7 +119,7 @@ def main() -> int:
         print("라우터 연동용 로컬 파일(jrr_calibrator.pkl) 저장 중...")
         joblib.dump({'model': calibrator, 'threshold': optimal_threshold}, 'data/jrr_calibrator.pkl')
         
-        print("\n[07_train_calibrator] 완료되었습니다.")
+        print("\n[train_calibrator] 완료되었습니다.")
         
     return 0
 

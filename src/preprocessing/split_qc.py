@@ -150,7 +150,7 @@ def main() -> int:
 
     layout = Layout(args.root)
     layout.mkdirs()
-    log = setup_logging("04_split_qc", layout.logs)
+    log = setup_logging("split_qc", layout.logs)
 
     if layout.is_done("split_qc") and not args.force:
         log.info("이미 완료되었습니다 (--force로 재실행).")
@@ -385,7 +385,7 @@ def main() -> int:
         "week_boundaries": week_boundaries,
         "n_per_split": {n: int(idx.size) for n, idx in splits.items()},
     })
-    log.info("다음 단계: python 05_materialize.py --root %s", args.root)
+    log.info("다음 단계: python materialize.py --root %s", args.root)
     return 0
 
 

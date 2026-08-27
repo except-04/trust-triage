@@ -153,7 +153,7 @@ def main() -> int:
 
     layout = Layout(args.root)
     layout.mkdirs()
-    log = setup_logging("06_manifest", layout.logs)
+    log = setup_logging("manifest", layout.logs)
 
     qc_path = layout.reports / "qc_report.json"
     qc = read_json(qc_path) if qc_path.is_file() else {}
