@@ -81,5 +81,6 @@ def test_feature_count_selection_uses_validation_only():
 def test_xgboost_uses_validation_and_hist():
     source = (MODELS_DIR / "train_xgboost_500.py").read_text(encoding="utf-8")
     assert 'tree_method="hist"' in source
+    assert 'eval_metric="auc"' in source
     assert "eval_set=[(X_val_500, y_val)]" in source
     assert "X_calib" not in source and "X_eval" not in source
