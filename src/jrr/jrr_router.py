@@ -6,7 +6,7 @@ class JointRiskRouter:
     TRUST-Triage 핵심 엔진: Joint Risk Router (jrr_router.py)
     확률값과 Model Disagreement를 바탕으로 3가지 큐로 분기합니다.
     """
-    def __init__(self, tau_low=0.95, tau_high=0.976190, tau_disagree=0.3):
+    def __init__(self, tau_low=0.95, tau_high=0.983645, tau_disagree=0.3):
         self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_PASS)
         self.tau_high = tau_high        # 악성 확신 커트라인 (AUTO_QUARANTINE)
         self.tau_disagree = tau_disagree # 모델 불일치 허용 기준
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     print("="*60)
 
     # 2. 라우터 동작
-    router = JointRiskRouter(tau_low=0.95, tau_high=0.976190, tau_disagree=0.3)
+    router = JointRiskRouter(tau_low=0.95, tau_high=0.983645, tau_disagree=0.3)
     routed = router.route_batch(p_lgb, disagreement)
 
     decisions = [r["decision"] for r in routed]
