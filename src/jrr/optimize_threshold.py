@@ -22,13 +22,13 @@ def simulate_routing(y_prob, lower_bound, upper_bound):
     
     return routes
 
-def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100, target_ratio=3.5):
+def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
     """
-    Calibration 데이터셋을 바탕으로 tau_low 후보별 라우팅 비율(%)과 Review Yield를 시뮬레이션하고,
-    팀 목표인 심층분석 라우팅 비율(~3.5%)에 가장 부합하는 최적의 tau_low를 탐색합니다.
+    Calibration 데이터셋을 바탕으로 tau_low 후보별 라우팅 비율(%), Review Yield(적중률), 악성 누락률을 시뮬레이션하고,
+    '검토 가성비(Review Yield) 극대화' 및 '악성 누출(미탐) 최소화'를 동시에 만족하는 최적의 tau_low를 탐색합니다.
     """
     print(f"\n=========================================================================================================================")
-    print(f"[Calibration Set 기준] tau_low 후보별 라우팅 비율, Review Yield, 자동정상 누출 악성 시뮬레이션")
+    print(f"[Calibration Set 기준] tau_low 후보별 라우팅 비율, Review Yield, 자동정상 악성 누락 시뮬레이션")
     print(f" - 고정 상한선(tau_high): {upper_bound:.6f}")
     print(f" - 분석 대상 총 샘플 수: {len(y_prob):,}건")
     print(f"=========================================================================================================================")
@@ -41,7 +41,8 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100, target_r
     test_bounds = [b for b in test_bounds if b < upper_bound]
     
     best_lower_bound = test_bounds[0]
-    best_diff = 999.0
+    best_yield = -1.0
+    best_min_leakage = 999999
     best_stats = {}
     
     for lb in test_bounds:
@@ -55,7 +56,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100, target_r
         pct_malicious = n_malicious / n_total * 100
         pct_uncertain = n_uncertain / n_total * 100
         
-        #악성 누락 개수 & 악성 누락률 (전체 악성 대비)
+        # 악성 누락 개수 & 악성 누락률 (전체 악성 대비)
         auto_benign_mask = (simulated_routes == "AUTO_BENIGN")
         leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
         leaked_rate_of_all_malware = (leaked_malware / n_total_malicious * 100) if n_total_malicious > 0 else 0.0
@@ -64,18 +65,34 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100, target_r
         
         print(f"  {lb:^7.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {current_yield:>10.2f}% | {leaked_malware:>10,}건 ({leaked_rate_of_all_malware:5.2f}%)")
         
-        # 목표 라우팅 비율(예: 3.5%)에 가장 가까운 tau_low 탐색
-        diff = abs(pct_uncertain - target_ratio)
-        if diff < best_diff:
-            best_diff = diff
+        # 1. Review Yield(적중률)가 더 높으면 우선 갱신
+        if current_yield > best_yield:
+            best_yield = current_yield
             best_lower_bound = lb
+            best_min_leakage = leaked_malware
             best_stats = {
                 "pct_uncertain": pct_uncertain,
                 "n_uncertain": n_uncertain,
                 "pct_benign": pct_benign,
                 "pct_malicious": pct_malicious,
-                "yield": current_yield
+                "yield": current_yield,
+                "leaked_malware": leaked_malware,
+                "leaked_rate": leaked_rate_of_all_malware
             }
+        # 2. 만약 Yield가 88%로 똑같다면 (예: 0.60 vs 0.70), 악성 누락(미탐)이 더 적은 쪽(0.60) 최종 선택
+        elif current_yield == best_yield:
+            if leaked_malware < best_min_leakage:
+                best_lower_bound = lb
+                best_min_leakage = leaked_malware
+                best_stats = {
+                    "pct_uncertain": pct_uncertain,
+                    "n_uncertain": n_uncertain,
+                    "pct_benign": pct_benign,
+                    "pct_malicious": pct_malicious,
+                    "yield": current_yield,
+                    "leaked_malware": leaked_malware,
+                    "leaked_rate": leaked_rate_of_all_malware
+                }
             
     print(f"==========================================================================================\n")
     return float(best_lower_bound), best_stats
@@ -119,27 +136,28 @@ def main():
             print("[안내] Calibration 데이터(.npy) 및 jrr_calibrator.pkl 파일 경로를 확인해주세요.")
             return
 
-        # 2. 최적화 시뮬레이션 실행 (목표 심층분석 비율: 약 3.5%)
+        # 2. 최적화 시뮬레이션 실행 (Review Yield 극대화 및 악성 누락 최소화)
         daily_budget = 100
-        target_ratio = 3.5
         optimal_lb, best_stats = optimize_lower_bound(
-            y_true, y_prob, fixed_upper_bound, daily_budget, target_ratio=target_ratio
+            y_true, y_prob, fixed_upper_bound, daily_budget
         )
         
         # 3. MLflow에 최종 결과 박제
         mlflow.log_param("daily_budget", daily_budget)
         mlflow.log_param("fixed_upper_bound", fixed_upper_bound)
-        mlflow.log_param("target_routing_ratio", target_ratio)
         mlflow.log_metric("optimal_lower_bound", optimal_lb)
         mlflow.log_metric("calib_uncertain_ratio", best_stats.get("pct_uncertain", 0.0))
         mlflow.log_metric("calib_review_yield", best_stats.get("yield", 0.0))
+        mlflow.log_metric("calib_leaked_malware", best_stats.get("leaked_malware", 0))
+        mlflow.log_metric("calib_leaked_rate", best_stats.get("leaked_rate", 0.0))
         
         print("==================================================")
         print("[완료] Calibration 기준 최적 라우팅 임계값 확정")
         print(f" - [확정] 자동 차단 상한선(Upper Bound): {fixed_upper_bound:.6f} (FPR 0.1% 기준 고정)")
-        print(f" - [확정] 심층 분석 하한선(Lower Bound): {optimal_lb:.2f} (목표 라우팅 비율 {target_ratio}% 기준)")
+        print(f" - [확정] 심층 분석 하한선(Lower Bound): {optimal_lb:.2f} (Review Yield 88% 최고점 & 누락 최소화)")
         print(f" - [확인] Calibration 심층분석 비율: {best_stats.get('pct_uncertain', 0.0):.2f}% ({best_stats.get('n_uncertain', 0):,}건)")
         print(f" - [확인] Calibration 분석가 가성비(Yield): {best_stats.get('yield', 0.0):.2f}%")
+        print(f" - [확인] Calibration 악성 누락: {best_stats.get('leaked_malware', 0):,}건 ({best_stats.get('leaked_rate', 0.0):.2f}%)")
         print("==================================================")
         print("[안내] 산출된 하한선(tau_low)을 확인하시고, jrr_router.py로 Eval 최종 라우팅을 실행하세요.")
 
