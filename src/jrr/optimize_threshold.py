@@ -27,16 +27,17 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100, target_r
     Calibration 데이터셋을 바탕으로 tau_low 후보별 라우팅 비율(%)과 Review Yield를 시뮬레이션하고,
     팀 목표인 심층분석 라우팅 비율(~3.5%)에 가장 부합하는 최적의 tau_low를 탐색합니다.
     """
-    print(f"\n==========================================================================================")
-    print(f"[Calibration Set 기준] tau_low 후보별 라우팅 비율 및 성능 시뮬레이션")
+    print(f"\n=========================================================================================================================")
+    print(f"[Calibration Set 기준] tau_low 후보별 라우팅 비율, Review Yield, 자동정상 누출 악성 시뮬레이션")
     print(f" - 고정 상한선(tau_high): {upper_bound:.6f}")
     print(f" - 분석 대상 총 샘플 수: {len(y_prob):,}건")
-    print(f"==========================================================================================")
-    print(f"{'tau_low':^9} | {'심층분석 비율':^13} | {'심층분석 건수':^12} | {'자동정상 비율':^13} | {'자동악성 비율':^13} | {'Review Yield':^12}")
-    print(f"{'-'*9}-+-{'-'*13}-+-{'-'*12}-+-{'-'*13}-+-{'-'*13}-+-{'-'*12}")
+    print(f"=========================================================================================================================")
+    print(f"{'tau_low':^9} | {'심층분석 비율':^13} | {'심층분석 건수':^12} | {'Review Yield':^12} | {'자동정상 중 악성 누출 건수 (누출률)':^32}")
+    print(f"{'-'*9}-+-{'-'*13}-+-{'-'*12}-+-{'-'*12}-+-{'-'*32}")
     
     n_total = len(y_prob)
-    test_bounds = [0.01, 0.02, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+    n_total_malicious = np.sum(y_true == 1)  # Calibration 전체 악성 수
+    test_bounds = [0.10, 0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.80]
     test_bounds = [b for b in test_bounds if b < upper_bound]
     
     best_lower_bound = test_bounds[0]
@@ -54,9 +55,14 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100, target_r
         pct_malicious = n_malicious / n_total * 100
         pct_uncertain = n_uncertain / n_total * 100
         
+        # 김정윤님 공식: 악성 누락 개수 & 악성 누락률 (전체 악성 대비)
+        auto_benign_mask = (simulated_routes == "AUTO_BENIGN")
+        leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
+        leaked_rate_of_all_malware = (leaked_malware / n_total_malicious * 100) if n_total_malicious > 0 else 0.0
+        
         current_yield = calculate_review_yield(y_true, simulated_routes, daily_budget)
         
-        print(f"  {lb:^7.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {pct_benign:>11.2f}% | {pct_malicious:>11.2f}% | {current_yield:>10.2f}%")
+        print(f"  {lb:^7.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {current_yield:>10.2f}% | {leaked_malware:>10,}건 ({leaked_rate_of_all_malware:5.2f}%)")
         
         # 목표 라우팅 비율(예: 3.5%)에 가장 가까운 tau_low 탐색
         diff = abs(pct_uncertain - target_ratio)
