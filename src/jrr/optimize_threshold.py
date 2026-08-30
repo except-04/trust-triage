@@ -55,7 +55,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100, target_r
         pct_malicious = n_malicious / n_total * 100
         pct_uncertain = n_uncertain / n_total * 100
         
-        # 김정윤님 공식: 악성 누락 개수 & 악성 누락률 (전체 악성 대비)
+        #악성 누락 개수 & 악성 누락률 (전체 악성 대비)
         auto_benign_mask = (simulated_routes == "AUTO_BENIGN")
         leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
         leaked_rate_of_all_malware = (leaked_malware / n_total_malicious * 100) if n_total_malicious > 0 else 0.0
