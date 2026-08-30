@@ -6,10 +6,10 @@ class JointRiskRouter:
     TRUST-Triage 핵심 엔진: Joint Risk Router (jrr_router.py)
     확률값과 Model Disagreement를 바탕으로 3가지 큐로 분기합니다.
     """
-    def __init__(self, tau_low=0.95, tau_high=0.983645, tau_disagree=0.3):
-        self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_PASS)
-        self.tau_high = tau_high        # 악성 확신 커트라인 (AUTO_QUARANTINE)
-        self.tau_disagree = tau_disagree # 모델 불일치 허용 기준
+    def __init__(self, tau_low=0.60, tau_high=0.983645, tau_disagree=0.3):
+        self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_PASS / Calibration 최적화 확정: 0.60)
+        self.tau_high = tau_high        # 악성 확신 커트라인 (AUTO_MALICIOUS / FPR 0.1% 고정선: 0.983645)
+        self.tau_disagree = tau_disagree # 모델 불일치 허용 기준 (고정값 0.3)
 
     def compute_disagreement(self, p_lgb: float, p_xgb: float) -> float:
         """실시간 추론 시 두 모델 간의 불일치도 계산"""
@@ -57,20 +57,22 @@ class JointRiskRouter:
 if __name__ == "__main__":
     DATA_DIR = os.path.join("data")
     
-    # 1. 데이터 로드
-    p_lgb = np.load(os.path.join(DATA_DIR, "jrr_calibrated_proba.npy"))
+    # 1. 데이터 로드 (Eval 평가 데이터셋)
+    p_eval = np.load(os.path.join(DATA_DIR, "jrr_calibrated_proba.npy"))
     disagreement = np.load(os.path.join(DATA_DIR, "model_disagreement.npy"))
     
-    if p_lgb.ndim == 2:
-        p_lgb = p_lgb[:, 1]
+    if p_eval.ndim == 2:
+        p_eval = p_eval[:, 1]
+    if disagreement.ndim == 2:
+        disagreement = disagreement[:, 1]
 
     print("="*60)
     print("Joint Risk Router (jrr_router.py) 실행")
     print("="*60)
 
-    # 2. 라우터 동작
-    router = JointRiskRouter(tau_low=0.95, tau_high=0.983645, tau_disagree=0.3)
-    routed = router.route_batch(p_lgb, disagreement)
+    # 2. 라우터 동작 (tau_high=0.983645, tau_disagree=0.3 고정, tau_low=0.60)
+    router = JointRiskRouter(tau_low=0.60, tau_high=0.983645, tau_disagree=0.3)
+    routed = router.route_batch(p_eval, disagreement)
 
     decisions = [r["decision"] for r in routed]
     n_total = len(decisions)
@@ -86,3 +88,4 @@ if __name__ == "__main__":
     print("="*60)
 
     np.save("data/jrr_routes.npy", np.array(decisions))
+    print("[저장 완료] data/jrr_routes.npy 생성 성공!")
