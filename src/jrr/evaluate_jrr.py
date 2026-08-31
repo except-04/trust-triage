@@ -19,8 +19,10 @@ def main():
             
             # (옵션) 07번에서 산출된 최적 임계값 로드 (TPR 검증용)
             import joblib
-            calibrator_pack = joblib.load("data/jrr_calibrator_4way.pkl")
-            fixed_upper_bound = calibrator_pack['threshold']
+            import os
+            calib_path = "data/jrr_calibrator_4way.pkl" if os.path.exists("data/jrr_calibrator_4way.pkl") else "data/jrr_calibrator.pkl"
+            calibrator_pack = joblib.load(calib_path)
+            fixed_upper_bound = float(calibrator_pack.get('threshold', 0.983645))
             
         except FileNotFoundError as e:
             print(f"[에러] 평가에 필요한 데이터를 찾을 수 없습니다: {e}")
