@@ -3,7 +3,7 @@ import mlflow
 from sklearn.metrics import roc_auc_score, confusion_matrix, brier_score_loss
 
 #핵심 포인트: 공용 도구함에서 평가 함수들을 정석대로 빌려오기
-from _jrr_eval_core import calculate_ece, calculate_review_yield, calculate_true_tpr, run_kill_test, evaluate_ood_routing
+from _jrr_eval_core import calculate_ece, calculate_review_yield, calculate_true_tpr, run_ood_and_kill_test
 
 def main():
     print("[JRR Evaluation] 라우터 평가 및 검증 파이프라인 시작!\n")
@@ -37,7 +37,7 @@ def main():
         ece = calculate_ece(y_true, y_prob)
         r_yield = calculate_review_yield(y_true, routes, daily_budget=100)
         actual_fpr, actual_tpr = calculate_true_tpr(y_true, y_prob, fixed_upper_bound)
-        ood_defense_rate = evaluate_ood_routing(y_true, routes, disagreement, threshold=0.3)
+        ood_defense_rate, kill_test_fpr = run_ood_and_kill_test(y_true, routes, disagreement, threshold=0.3)
         
         # --- [final_eval 기능 통합] 모델 관점의 최종 검증 지표 추가 ---
         auc = roc_auc_score(y_true, y_prob)
@@ -48,13 +48,6 @@ def main():
         brier = brier_score_loss(y_true, y_prob)
         # ------------------------------------------------------------------
 
-        # 주의: 기존 run_kill_test() 호출 시 라우팅 함수가 전달되지 않으면 에러가 발생할 수 있습니다.
-        try:
-            kill_test_fpr = run_kill_test()
-        except (ValueError, FileNotFoundError) as e:
-            print(f"Kill Test 건너뜀: {e}")
-            kill_test_fpr = -1.0
-        
         # 3. MLflow에 결과 박제
         mlflow.log_metric("ECE_Score", ece)
         mlflow.log_metric("Brier_Score", brier)
