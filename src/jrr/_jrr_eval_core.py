@@ -28,12 +28,13 @@ def calculate_ece(y_true, y_prob, n_bins=10):
             
     return ece_score
 
-def calculate_review_yield(y_true, routes, daily_budget=100):
+def calculate_review_yield(y_true, routes):
     """
-    [평가 지표 2] Review Yield (검토 가성비) 계산
-    심층분석 큐로 빠진 파일들이 분석가의 예산을 낭비하지 않고 얼마나 가치 있었는지 측정합니다.
+    [평가 지표 2] Review Yield (심층분석 큐 가성비) 계산
+    심층분석 큐로 빠진 전체 파일들 중 악성코드의 비율을 측정하여 큐의 효율성을 평가합니다.
+    (현재 예산 제한 정책 유보에 따라, 예산 제약 없이 큐 전체를 대상으로 계산합니다)
     """
-    print(f"\n[진행] Review Yield (일일 검토 예산: {daily_budget}개) 시뮬레이션 중...")
+    print(f"\n[진행] Review Yield (심층분석 큐 전체) 시뮬레이션 중...")
     
     routes = np.array(routes)
     deep_analysis_idx = np.where(routes == "HIGH_RISK_UNCERTAIN")[0]
@@ -43,17 +44,13 @@ def calculate_review_yield(y_true, routes, daily_budget=100):
         print("  [안내] 심층분석 큐로 할당된 파일이 없습니다. (Yield: 0)")
         return 0.0
 
-    if total_routed > daily_budget:
-        reviewed_idx = np.random.choice(deep_analysis_idx, daily_budget, replace=False)
-        print(f"  [경고] 심층분석 대상({total_routed}개)이 예산을 초과하여 {daily_budget}개만 샘플링 검토합니다.")
-    else:
-        reviewed_idx = deep_analysis_idx
-        print(f"  [안내] 심층분석 대상({total_routed}개) 전량 검토 진행.")
+    reviewed_idx = deep_analysis_idx
+    print(f"  [안내] 심층분석 대상({total_routed:,}개) 예산 제한 없이 전량 검토 진행.")
 
     caught_malware_count = np.sum(y_true[reviewed_idx] == 1)
-    yield_score = (caught_malware_count / len(reviewed_idx)) * 100
+    yield_score = (caught_malware_count / total_routed) * 100
     
-    print(f"  [결과] 분석가 검토 결과: 총 {len(reviewed_idx)}개 검토 중 {caught_malware_count}개의 숨은 악성코드 방어 성공!")
+    print(f"  [결과] 심층분석 결과: 총 {total_routed:,}개 검토 중 {caught_malware_count:,}개의 숨은 악성코드 방어 성공! (Yield: {yield_score:.2f}%)")
     
     return yield_score
 

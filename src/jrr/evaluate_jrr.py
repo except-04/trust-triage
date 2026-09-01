@@ -35,7 +35,7 @@ def main():
         
         # 2. 공용 도구함에서 빌려온 4대 핵심 지표 계산 함수 실행
         ece = calculate_ece(y_true, y_prob)
-        r_yield = calculate_review_yield(y_true, routes, daily_budget=100)
+        r_yield = calculate_review_yield(y_true, routes)
         actual_fpr, actual_tpr = calculate_true_tpr(y_true, y_prob, fixed_upper_bound)
         ood_defense_rate, kill_test_fpr = run_ood_and_kill_test(y_true, routes, disagreement, threshold=0.3)
         
