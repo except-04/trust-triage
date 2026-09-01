@@ -37,10 +37,10 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
     
     n_total = len(y_prob)
     n_total_malicious = np.sum(y_true == 1)  # Calibration 전체 악성 수
-    test_bounds = [0.10, 0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.80]
-    test_bounds = [b for b in test_bounds if b < upper_bound]
+    # 탐색할 하한선 후보군 (예: 0.90부터 upper_bound 직전까지 0.01 단위로 테스트)
+    test_bounds = np.arange(0.90, upper_bound, 0.01)
     
-    best_lower_bound = test_bounds[0]
+    best_lower_bound = test_bounds[0] if len(test_bounds) > 0 else 0.90
     best_yield = -1.0
     best_min_leakage = 999999
     best_stats = {}
@@ -112,24 +112,27 @@ def main():
             calibrator = calibrator_pack['model']
             fixed_upper_bound = float(calibrator_pack.get('threshold', 0.983645))
             
-            # Calibration 세트의 원시 예측 확률 확보
-            if os.path.exists("data/y_pred_proba_calib.npy"):
-                y_pred_raw = np.load("data/y_pred_proba_calib.npy")
+            if os.path.exists("data/jrr_calibrated_proba_calib.npy"):
+                y_prob = np.load("data/jrr_calibrated_proba_calib.npy")
             else:
-                print("[안내] Calibration 세트에 대한 LightGBM 원시 예측 확률 산출 중...")
-                X_calib = np.load("data/X_calib.npy", mmap_mode="r")
-                top_indices = np.load("data/top_feature_indices_500.npy")
-                model_path = "data/baseline_model_lightgbm_tuned_500_4way.pkl" if os.path.exists("data/baseline_model_lightgbm_tuned_500_4way.pkl") else "data/baseline_model_lightgbm_tuned_500_v4_9120.pkl"
-                model = joblib.load(model_path)
-                y_pred_raw = model.predict_proba(X_calib[:, top_indices])[:, 1]
-                np.save("data/y_pred_proba_calib.npy", y_pred_raw)
-                print("  -> data/y_pred_proba_calib.npy 생성 완료!")
+                # Calibration 세트의 원시 예측 확률 확보
+                if os.path.exists("data/y_pred_proba_calib.npy"):
+                    y_pred_raw = np.load("data/y_pred_proba_calib.npy")
+                else:
+                    print("[안내] Calibration 세트에 대한 LightGBM 원시 예측 확률 산출 중...")
+                    X_calib = np.load("data/X_calib.npy", mmap_mode="r")
+                    top_indices = np.load("data/top_feature_indices_500.npy")
+                    model_path = "data/baseline_model_lightgbm_tuned_500_4way.pkl" if os.path.exists("data/baseline_model_lightgbm_tuned_500_4way.pkl") else "data/baseline_model_lightgbm_tuned_500_v4_9120.pkl"
+                    model = joblib.load(model_path)
+                    y_pred_raw = model.predict_proba(X_calib[:, top_indices])[:, 1]
+                    np.save("data/y_pred_proba_calib.npy", y_pred_raw)
+                    print("  -> data/y_pred_proba_calib.npy 생성 완료!")
+                    
+                if y_pred_raw.ndim == 2:
+                    y_pred_raw = y_pred_raw[:, 1]
                 
-            if y_pred_raw.ndim == 2:
-                y_pred_raw = y_pred_raw[:, 1]
-            
-            # Calibration 세트의 보정 확률 계산
-            y_prob = calibrator.predict(y_pred_raw)
+                # Calibration 세트의 보정 확률 계산
+                y_prob = calibrator.predict(y_pred_raw)
             
         except FileNotFoundError as e:
             print(f"[에러] 시뮬레이션에 필요한 데이터를 찾을 수 없습니다: {e}")

@@ -116,3 +116,34 @@ def run_kill_test(routes_func=None):
         
     except FileNotFoundError as e:
         raise FileNotFoundError("[치명적 에러] Kill Test용 OOD 데이터가 없습니다. 미실행 상태를 성공으로 위장할 수 없으므로 파이프라인을 중단합니다.") from e
+
+def evaluate_ood_routing(y_true, routes, disagreement, threshold=0.3):
+    """
+    [평가 지표 5] OOD 시뮬레이션 테스트
+    Disagreement 점수가 분포의 Long Tail(꼬리)에 해당하는 특정 임계값(Threshold) 
+    이상인 샘플들이 정상적으로 HIGH_RISK_UNCERTAIN으로 라우팅되었는지 검증합니다.
+    """
+    print(f"\n[진행] OOD 시뮬레이션 테스트 중... (Disagreement >= {threshold} 기준)")
+    
+    ood_indices = np.where(disagreement >= threshold)[0]
+    n_ood = len(ood_indices)
+    
+    if n_ood == 0:
+        print("  [경고] 설정한 임계값을 넘는 OOD 샘플이 없습니다.")
+        return 0.0
+    
+    ood_routes = np.array(routes)[ood_indices]
+    ood_y_true = np.array(y_true)[ood_indices]
+    
+    n_uncertain = np.sum(ood_routes == "HIGH_RISK_UNCERTAIN")
+    n_benign = np.sum(ood_routes == "AUTO_BENIGN")
+    n_malicious = np.sum(ood_routes == "AUTO_MALICIOUS")
+    
+    defense_rate = (n_uncertain / n_ood) * 100
+    
+    print(f"  [결과] 추출된 OOD 샘플 수: {n_ood}개")
+    print(f"  [결과] 방어 성공(HIGH_RISK_UNCERTAIN): {n_uncertain}개 ({defense_rate:.2f}%)")
+    if n_benign > 0 or n_malicious > 0:
+        print(f"  [경고] 방어 실패 (오탐): AUTO_BENIGN {n_benign}개, AUTO_MALICIOUS {n_malicious}개")
+        
+    return defense_rate
