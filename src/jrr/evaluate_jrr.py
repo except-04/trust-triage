@@ -20,6 +20,8 @@ def main():
             disagreement = np.load("data/model_disagreement.npy")
             if disagreement.ndim == 2:
                 disagreement = disagreement[:, 1]
+                
+            ood_scores = np.load("data/jrr_ood_scores.npy")
             
             # (옵션) 07번에서 산출된 최적 임계값 로드 (TPR 검증용)
             import joblib
@@ -37,7 +39,7 @@ def main():
         ece = calculate_ece(y_true, y_prob)
         r_yield = calculate_review_yield(y_true, routes)
         actual_fpr, actual_tpr = calculate_true_tpr(y_true, y_prob, fixed_upper_bound)
-        ood_defense_rate, kill_test_fpr = run_ood_and_kill_test(y_true, routes, disagreement, threshold=0.3)
+        ood_defense_rate, kill_test_fpr = run_ood_and_kill_test(y_true, routes, ood_scores, threshold=0.0)
         
         # --- [final_eval 기능 통합] 모델 관점의 최종 검증 지표 추가 ---
         auc = roc_auc_score(y_true, y_prob)
@@ -66,7 +68,7 @@ def main():
         print(f" - 최종 Review Yield: {r_yield:.2f}%")
         if kill_test_fpr >= 0:
             print(f" - Kill Test 최종 FPR: {kill_test_fpr:.4f}")
-        print(f" - OOD 방어 성공률(Disagreement >= 0.3): {ood_defense_rate:.2f}%")
+        print(f" - OOD 방어 성공률(OOD Score < 0.0): {ood_defense_rate:.2f}%")
         print("\n--- 모델 관점 (final_eval 통합) ---")
         print(f" - ROC AUC: {auc:.6f}")
         print(f" - 평가셋 실측 TPR: {actual_tpr:.4f} (목표 FPR 0.1% 기준)")

@@ -73,20 +73,20 @@ def calculate_true_tpr(y_true, y_prob, threshold):
     
     return actual_fpr, actual_tpr
 
-def run_ood_and_kill_test(y_true, routes, disagreement, threshold=0.3):
+def run_ood_and_kill_test(y_true, routes, ood_scores, threshold=0.0):
     """
     [평가 지표 4, 5 통합] OOD 시뮬레이션 및 Kill Test
-    X_eval 데이터 내에서 Disagreement 점수가 높은 샘플들을 OOD로 간주하여,
+    X_eval 데이터 내에서 Isolation Forest 점수가 낮은 샘플들을 OOD로 간주하여,
     1. 이들이 안전하게 HIGH_RISK_UNCERTAIN으로 라우팅되는지(방어율) 확인하고,
     2. 그 중 '정상 파일'들이 'AUTO_MALICIOUS'로 잘못 판정(Kill Test FPR)되지 않았는지 검증합니다.
     """
-    print(f"\n[진행] OOD 시뮬레이션 및 Kill Test 가동 중... (Disagreement >= {threshold} 기준)")
+    print(f"\n[진행] OOD 시뮬레이션 및 Kill Test 가동 중... (OOD Score < {threshold} 기준)")
     
-    ood_indices = np.where(disagreement >= threshold)[0]
+    ood_indices = np.where(ood_scores < threshold)[0]
     n_ood = len(ood_indices)
     
     if n_ood == 0:
-        print("  [경고] 설정한 임계값을 넘는 OOD 샘플이 없습니다.")
+        print("  [경고] 설정한 임계값 미만인 OOD 샘플이 없습니다.")
         return 0.0, 0.0
         
     ood_routes = np.array(routes)[ood_indices]
