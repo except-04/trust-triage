@@ -81,6 +81,7 @@ def main() -> int:
         # 4. 신뢰도 보정 및 최적 임계값 도출 (Calibration Set 기준)
         print("\n수행계획서 FPR 0.1% 정책 적용 및 최적 임계값 도출 중...")
         calibrated_probs = calibrator.predict(raw_calib_proba)
+        np.save("data/jrr_calibrated_proba_calib.npy", calibrated_probs)
         fpr, tpr, thresholds = roc_curve(y_calib, calibrated_probs)
         
         # FPR이 목표치(0.001) 이하인 구간 중 가장 성적이 좋은(탐지율이 높은) 위치 탐색

@@ -83,9 +83,9 @@ def main() -> int:
         }
         
         print("\n=== [위험 신호 컴포넌트 준비 완료] ===")
-        print("✔️ OOD Score: Isolation Forest 모델 세팅 완료")
-        print("✔️ Analysis Difficulty: 500차원 내 동적 인덱스 맵핑 완료")
-        print("✔️ Model Disagreement: 라우터 단에서 분산 계산으로 처리 예정")
+        print("[v] OOD Score: Isolation Forest 모델 세팅 완료")
+        print("[v] Analysis Difficulty: 500차원 내 동적 인덱스 맵핑 완료")
+        print("[v] Model Disagreement: 라우터 단에서 분산 계산으로 처리 예정")
         print("========================================\n")
         
         # 4. 결과 로컬 및 MLflow 저장

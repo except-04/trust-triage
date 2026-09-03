@@ -3,7 +3,7 @@ import mlflow
 from sklearn.metrics import roc_auc_score, confusion_matrix, brier_score_loss
 
 #핵심 포인트: 공용 도구함에서 평가 함수들을 정석대로 빌려오기
-from _jrr_eval_core import calculate_ece, calculate_review_yield, calculate_true_tpr, run_kill_test
+from _jrr_eval_core import calculate_ece, calculate_review_yield, calculate_true_tpr, run_ood_and_kill_test
 
 def main():
     print("[JRR Evaluation] 라우터 평가 및 검증 파이프라인 시작!\n")
@@ -16,6 +16,12 @@ def main():
             y_true = np.load("data/y_eval.npy") 
             y_prob = np.load("data/jrr_calibrated_proba.npy") 
             routes = np.load("data/jrr_routes.npy") 
+            
+            disagreement = np.load("data/model_disagreement.npy")
+            if disagreement.ndim == 2:
+                disagreement = disagreement[:, 1]
+                
+            ood_scores = np.load("data/jrr_ood_scores.npy")
             
             # (옵션) 07번에서 산출된 최적 임계값 로드 (TPR 검증용)
             import joblib
@@ -31,8 +37,9 @@ def main():
         
         # 2. 공용 도구함에서 빌려온 4대 핵심 지표 계산 함수 실행
         ece = calculate_ece(y_true, y_prob)
-        r_yield = calculate_review_yield(y_true, routes, daily_budget=100)
+        r_yield = calculate_review_yield(y_true, routes)
         actual_fpr, actual_tpr = calculate_true_tpr(y_true, y_prob, fixed_upper_bound)
+        ood_defense_rate, kill_test_fpr = run_ood_and_kill_test(y_true, routes, ood_scores, threshold=0.0)
         
         # --- [final_eval 기능 통합] 모델 관점의 최종 검증 지표 추가 ---
         auc = roc_auc_score(y_true, y_prob)
@@ -43,13 +50,6 @@ def main():
         brier = brier_score_loss(y_true, y_prob)
         # ------------------------------------------------------------------
 
-        # 주의: 기존 run_kill_test() 호출 시 라우팅 함수가 전달되지 않으면 에러가 발생할 수 있습니다.
-        try:
-            kill_test_fpr = run_kill_test()
-        except (ValueError, FileNotFoundError) as e:
-            print(f"Kill Test 건너뜀: {e}")
-            kill_test_fpr = -1.0
-        
         # 3. MLflow에 결과 박제
         mlflow.log_metric("ECE_Score", ece)
         mlflow.log_metric("Brier_Score", brier)
@@ -58,6 +58,7 @@ def main():
         if kill_test_fpr >= 0:
             mlflow.log_metric("KillTest_FPR", kill_test_fpr)
         mlflow.log_metric("ROC_AUC", auc)
+        mlflow.log_metric("OOD_Defense_Rate", ood_defense_rate)
         
         print("\n==================================================")
         print("[완료] JRR 평가 완료! 결과가 MLflow에 성공적으로 박제되었습니다.")
@@ -67,6 +68,7 @@ def main():
         print(f" - 최종 Review Yield: {r_yield:.2f}%")
         if kill_test_fpr >= 0:
             print(f" - Kill Test 최종 FPR: {kill_test_fpr:.4f}")
+        print(f" - OOD 방어 성공률(OOD Score < 0.0): {ood_defense_rate:.2f}%")
         print("\n--- 모델 관점 (final_eval 통합) ---")
         print(f" - ROC AUC: {auc:.6f}")
         print(f" - 평가셋 실측 TPR: {actual_tpr:.4f} (목표 FPR 0.1% 기준)")
