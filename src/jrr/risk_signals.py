@@ -52,9 +52,14 @@ def main() -> int:
         top_500_idx = np.load(TOP_N_PATH)
         
         # OOD 모델도 실전 라우터와 동일하게 Top 500 피처만 보도록 슬라이싱
-        # 데이터가 너무 클 경우(예: 300만 개) 학습 속도를 위해 10만 개만 샘플링
+        # 데이터가 너무 크므로(예: 400만 개) 학습 속도와 시간적 편향(Bias) 방지를 위해 
+        # 전체 데이터 풀에서 10만 건을 랜덤 유니폼 샘플링합니다.
         sample_size = min(100000, len(X_tr_raw))
-        X_tr_sample = X_tr_raw[:sample_size, top_500_idx]
+        np.random.seed(42)
+        random_indices = np.random.choice(len(X_tr_raw), sample_size, replace=False)
+        
+        # 행을 먼저 무작위 추출한 뒤, Top 500 열만 슬라이싱
+        X_tr_sample = X_tr_raw[random_indices][:, top_500_idx]
         
         # 2. Isolation Forest 학습 (OOD 점수 산출용)
         print(f"\n[2] Isolation Forest 학습 중... (샘플 {sample_size:,}개 사용)")

@@ -6,7 +6,7 @@ class JointRiskRouter:
     TRUST-Triage 핵심 엔진: Joint Risk Router (jrr_router.py)
     확률값과 Model Disagreement, OOD Score, Analysis Difficulty를 바탕으로 3가지 큐로 분기합니다.
     """
-    def __init__(self, tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=1.0):
+    def __init__(self, tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0):
         self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_BENIGN / Calibration 최적화 확정: 0.60)
         self.tau_high = tau_high        # 악성 확신 커트라인 (AUTO_MALICIOUS / FPR 0.1% 고정선: 0.983645)
         self.tau_disagree = tau_disagree # 모델 불일치 허용 기준 (고정값 0.3)
@@ -106,8 +106,8 @@ if __name__ == "__main__":
     print("Joint Risk Router (jrr_router.py) 실행")
     print("="*60)
 
-    # 2. 라우터 동작 (tau_high=0.983645, tau_disagree=0.3 고정, tau_low=0.60, tau_ood=0.0, tau_difficulty=1.0)
-    router = JointRiskRouter(tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=1.0)
+    # 2. 라우터 동작 (tau_high=0.983645, tau_disagree=0.3 고정, tau_low=0.60, tau_ood=0.0, tau_difficulty=5.0)
+    router = JointRiskRouter(tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0)
     routed = router.route_batch(p_eval, disagreement, ood_scores, difficulty_scores)
 
     decisions = [r["decision"] for r in routed]
