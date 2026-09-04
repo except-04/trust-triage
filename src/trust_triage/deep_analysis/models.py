@@ -1,4 +1,4 @@
-"""Contracts for the CAPA -> Speakeasy deep-analysis pipeline."""
+"""Contracts for the CAPA + FLOSS -> Speakeasy deep-analysis pipeline."""
 
 from __future__ import annotations
 
@@ -20,10 +20,60 @@ class DeepAnalysisStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class LLMInterpretationStatus(str, Enum):
+    """Status of the optional external LLM interpretation step."""
+
+    SUCCESS = "SUCCESS"
+    DISABLED = "DISABLED"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    TIMEOUT = "TIMEOUT"
+    API_ERROR = "API_ERROR"
+    INVALID_RESPONSE = "INVALID_RESPONSE"
+
+
+@dataclass(frozen=True)
+class LLMInterpretation:
+    """Validated, evidence-grounded output returned by the LLM adapter."""
+
+    status: LLMInterpretationStatus
+    verdict: str = "UNKNOWN"
+    confidence: float = 0.0
+    supporting_evidence_ids: tuple[str, ...] = ()
+    contradicting_evidence_ids: tuple[str, ...] = ()
+    attack_techniques: tuple[str, ...] = ()
+    summary: str = ""
+    manual_review_required: bool = True
+    model: str = ""
+    analysis_time_ms: int = 0
+    error: str = ""
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be between 0 and 1")
+        if self.analysis_time_ms < 0:
+            raise ValueError("analysis_time_ms must not be negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "verdict": self.verdict,
+            "confidence": self.confidence,
+            "supporting_evidence_ids": list(self.supporting_evidence_ids),
+            "contradicting_evidence_ids": list(self.contradicting_evidence_ids),
+            "attack_techniques": list(self.attack_techniques),
+            "summary": self.summary,
+            "manual_review_required": self.manual_review_required,
+            "model": self.model,
+            "analysis_time_ms": self.analysis_time_ms,
+            "error": self.error,
+        }
+
+
 class AnalysisTier(str, Enum):
-    """Supported deep-analysis tiers in the MVP."""
+    """Supported deep-analysis tools in the MVP."""
 
     CAPA = "CAPA"
+    FLOSS = "FLOSS"
     SPEAKEASY = "SPEAKEASY"
     GHIDRA_CAPA = "GHIDRA_CAPA"
 
@@ -137,6 +187,7 @@ class DeepAnalysisResult:
     errors: tuple[str, ...] = ()
     requires_human_review: bool = False
     evidence_assessment: EvidenceAssessment | None = None
+    llm_interpretation: LLMInterpretation | None = None
 
     @property
     def status(self) -> DeepAnalysisStatus:
@@ -162,6 +213,11 @@ class DeepAnalysisResult:
             "evidence_assessment": (
                 self.evidence_assessment.to_dict()
                 if self.evidence_assessment is not None
+                else None
+            ),
+            "llm_interpretation": (
+                self.llm_interpretation.to_dict()
+                if self.llm_interpretation is not None
                 else None
             ),
         }

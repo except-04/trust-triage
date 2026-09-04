@@ -46,6 +46,32 @@ def normalize_capa_result(
     return tuple(to_evidence(reliability=reliability))
 
 
+def normalize_floss_result(
+    result: Any,
+    *,
+    reliability: float = 0.55,
+    max_strings: int = 64,
+) -> tuple[Evidence, ...]:
+    """Normalize the static branch's FLOSS result without importing it.
+
+    FLOSS is owned by ``feature/static-analysis``. Keeping this boundary
+    duck-typed lets the deep-analysis branch accept the implementation from
+    that branch without copying its subprocess or parser code.
+    """
+
+    if _status_value(result) != "SUCCESS":
+        return ()
+    to_evidence = getattr(result, "to_evidence", None)
+    if not callable(to_evidence):
+        return ()
+    return tuple(
+        to_evidence(
+            reliability=reliability,
+            max_strings=max_strings,
+        )
+    )
+
+
 def normalize_speakeasy_result(
     result: Any,
     *,

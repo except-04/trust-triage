@@ -1,4 +1,4 @@
-"""Bounded CAPA -> Speakeasy deep-analysis orchestration."""
+"""Bounded CAPA + FLOSS -> Speakeasy deep-analysis orchestration."""
 
 from .models import (
     AnalysisTier,
@@ -7,8 +7,15 @@ from .models import (
     DeepAnalysisStatus,
     EvidenceAssessment,
     EvidenceSufficiencyPolicy,
+    LLMInterpretation,
+    LLMInterpretationStatus,
 )
-from .normalizer import normalize_capa_result, normalize_speakeasy_result
+from .llm_interpreter import MonoGPTClaudeInterpreter, MonoGPTConfig
+from .normalizer import (
+    normalize_capa_result,
+    normalize_floss_result,
+    normalize_speakeasy_result,
+)
 from ..attack_mapping import (
     normalize_attack_label,
     normalize_attack_labels,
@@ -29,9 +36,14 @@ __all__ = [
     "Evidence",
     "EvidenceStatus",
     "EvidenceSufficiencyPolicy",
+    "LLMInterpretation",
+    "LLMInterpretationStatus",
+    "MonoGPTClaudeInterpreter",
+    "MonoGPTConfig",
     "normalize_attack_label",
     "normalize_attack_labels",
     "normalize_capa_result",
+    "normalize_floss_result",
     "normalize_speakeasy_result",
     "technique_display_name",
 ]
