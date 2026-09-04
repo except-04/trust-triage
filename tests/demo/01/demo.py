@@ -22,7 +22,7 @@ SELECTION_JSON = ARTIFACTS / "feature-selection-ember-v3-top500.json"
 LGB_PATH = ARTIFACTS / "baseline_model_lightgbm_tuned_500_v4_9120.pkl"
 XGB_PATH = ARTIFACTS / "baseline_model_xgb_500.pkl"
 CALIB_PATH = ARTIFACTS / "jrr_calibrator.pkl"
-JRR_ROUTER_PATH = REPO_ROOT / "src" / "jrr" / "10_jrr_router.py"
+JRR_ROUTER_PATH = REPO_ROOT / "src" / "jrr" / "jrr_router.py"
 
 TAU_LOW = 0.1
 TAU_DISAGREE = 0.3
@@ -140,7 +140,7 @@ def signals(calib, p_lgb_raw: float, p_xgb_raw: float) -> tuple:
 
     return p_calib, disagreement
 
-# 10_jrr_router.py를 일반적인 방법으로 import 할 수 없어 사용
+# jrr_router.py를 일반적인 방법으로 import 할 수 없어 사용
 def load_router_class(router_path: pathlib.Path):
     spec = importlib.util.spec_from_file_location("jrr_router", router_path)
     mod = importlib.util.module_from_spec(spec)

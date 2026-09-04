@@ -5,9 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trust-triage"
 version = "0.1.0"
-description = "TRUST-TRIAGE static malware triage components"
+description = "TRUST-TRIAGE malware triage and analysis components"
 requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

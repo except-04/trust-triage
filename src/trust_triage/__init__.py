@@ -1,1 +1,1 @@
-"""TRUST-TRIAGE 애플리케이션 패키지."""
+"""TRUST-TRIAGE 공통 Python 패키지."""

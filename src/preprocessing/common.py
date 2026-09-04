@@ -496,9 +496,9 @@ def open_dat(layout: Layout, subset: str, dim: int | None = None):
 
     x_path, y_path = layout.dat(subset)
     if not x_path.is_file():
-        raise FileNotFoundError(f"{x_path} 없음 — 02_vectorize.py를 먼저 실행하세요.")
+        raise FileNotFoundError(f"{x_path} 없음 — vectorize.py를 먼저 실행하세요.")
     if not y_path.is_file():
-        raise FileNotFoundError(f"{y_path} 없음 — 02_vectorize.py를 먼저 실행하세요.")
+        raise FileNotFoundError(f"{y_path} 없음 — vectorize.py를 먼저 실행하세요.")
 
     x_bytes = x_path.stat().st_size
     y_bytes = y_path.stat().st_size
@@ -547,7 +547,7 @@ def load_meta(layout: Layout, subset: str):
     path = layout.meta_path(subset)
     if not path.is_file():
         raise FileNotFoundError(
-            f"{path} 없음 — 03_build_index.py(메타데이터 추출)를 먼저 실행하세요."
+            f"{path} 없음 — build_index.py(메타데이터 추출)를 먼저 실행하세요."
         )
     return pd.read_pickle(path)
 

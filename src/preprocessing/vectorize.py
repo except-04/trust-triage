@@ -60,7 +60,7 @@ def main() -> int:
 
     layout = Layout(args.root)
     layout.mkdirs()
-    log = setup_logging("02_vectorize", layout.logs)
+    log = setup_logging("vectorize", layout.logs)
 
     try:
         import thrember  # noqa: F401
@@ -71,7 +71,7 @@ def main() -> int:
 
     jsonl = sorted(layout.dataset.glob("*.jsonl"))
     if not jsonl:
-        log.error("%s 안에 .jsonl이 없습니다. 01_download.py를 먼저 실행하세요.",
+        log.error("%s 안에 .jsonl이 없습니다. download.py를 먼저 실행하세요.",
                   layout.dataset)
         return 1
     log.info("입력 .jsonl 파일 %d개", len(jsonl))
@@ -146,7 +146,7 @@ def main() -> int:
         return 1
 
     layout.mark_done("vectorize", {"feature_dim": dim})
-    log.info("다음 단계: python 03_build_index.py --root %s", args.root)
+    log.info("다음 단계: python build_index.py --root %s", args.root)
     return 0
 
 

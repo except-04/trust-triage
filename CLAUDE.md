@@ -56,7 +56,7 @@ Key invariant repeated throughout this module: **training data and a live extrac
 
 ### `src/preprocessing/` — EMBER2024 dataset pipeline (one-time / offline, not part of the shipped service)
 
-Six numbered stage scripts (`01_download.py` … `06_manifest.py`, run via `run_all.ps1`/`run_all.sh`) turn raw EMBER2024 Win32/Win64 data into a reproducible, time-based train/calibration/eval split plus a sealed lockbox (test/challenge). Each stage writes a completion marker under `.state/` so reruns skip finished stages (`--force` to redo). `src/preprocessing/README.md` documents *why* each design choice was made — read it before touching this pipeline; the highlights:
+Six numbered stage scripts (`download.py` … `manifest.py`, run via `run_all.ps1`/`run_all.sh`) turn raw EMBER2024 Win32/Win64 data into a reproducible, time-based train/calibration/eval split plus a sealed lockbox (test/challenge). Each stage writes a completion marker under `.state/` so reruns skip finished stages (`--force` to redo). `src/preprocessing/README.md` documents *why* each design choice was made — read it before touching this pipeline; the highlights:
 
 - **Time-based split only**, via `week_id`: weeks 0–39 = train, 40–45 = calibration, 46–51 = eval. Never re-split randomly/by stratification — EMBER2024 is explicitly non-IID over time, and calibration/eval must stay equal-width (6 weeks each) so eval's performance drift is a valid proxy for lockbox drift.
 - **Never call `thrember.read_vectorized_features()`** — it materializes the full matrix in RAM (~21GB+). Use `common.open_dat()` / `np.memmap` instead; `common.py`'s `Layout` class centralizes the on-disk directory structure (`dataset/`, `out/dev/`, `out/lockbox/`, `out/index/`, `out/reports/`).
