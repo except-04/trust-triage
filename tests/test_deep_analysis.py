@@ -11,6 +11,8 @@ from trust_triage.deep_analysis import (
     DeepAnalysisDisposition,
     DeepAnalysisOrchestrator,
     DeepAnalysisStatus,
+    LLMInterpretation,
+    LLMInterpretationStatus,
 )
 from trust_triage.attack_mapping import normalize_attack_labels
 
@@ -61,6 +63,34 @@ class _FakeCapaAnalyzer:
         return self.result
 
 
+class _FakeFlossResult:
+    sha256 = "f" * 64
+
+    def __init__(self, evidence: tuple[Evidence, ...] = (), *, status: str = "SUCCESS") -> None:
+        self.evidence = evidence
+        self.status = status
+
+    def to_evidence(
+        self,
+        *,
+        reliability: float = 0.55,
+        max_strings: int = 64,
+    ) -> tuple[Evidence, ...]:
+        del reliability, max_strings
+        return self.evidence if self.status == "SUCCESS" else ()
+
+
+class _FakeFlossAnalyzer:
+    def __init__(self, result: _FakeFlossResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    def analyze(self, sample_path: Path) -> _FakeFlossResult:
+        del sample_path
+        self.calls += 1
+        return self.result
+
+
 class _FakeSpeakeasyAnalyzer:
     def __init__(self, result: dict) -> None:
         self.result = result
@@ -70,6 +100,33 @@ class _FakeSpeakeasyAnalyzer:
         del sample_path
         self.calls += 1
         return self.result
+
+
+class _FakeLLMInterpreter:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.evidence: tuple[Evidence, ...] = ()
+
+    def interpret(
+        self,
+        evidence: tuple[Evidence, ...],
+        *,
+        sha256: str,
+        initial_verdict: str | None,
+    ) -> LLMInterpretation:
+        del sha256, initial_verdict
+        self.calls += 1
+        self.evidence = tuple(evidence)
+        return LLMInterpretation(
+            status=LLMInterpretationStatus.SUCCESS,
+            verdict="MALICIOUS",
+            confidence=0.9,
+            supporting_evidence_ids=(evidence[0].evidence_id,),
+            attack_techniques=("T1055",),
+            summary="The supplied evidence supports a malicious recommendation.",
+            manual_review_required=True,
+            model="test-model",
+        )
 
 
 def _sample(tmp_path: Path) -> Path:
@@ -88,6 +145,23 @@ def _capa_result(
 
 def _injection_capability() -> _Capability:
     return _Capability(attack=("Defense Evasion::Process Injection",))
+
+
+def _floss_string_evidence() -> Evidence:
+    return Evidence(
+        evidence_id="floss-1",
+        sha256="f" * 64,
+        source="FLOSS",
+        category="OBFUSCATED_STRING",
+        severity=0.5,
+        reliability=0.55,
+        summary="FLOSS recovered decoded_strings: https://example.invalid/c2",
+        status=EvidenceStatus.OBSERVED,
+        details={
+            "string": "https://example.invalid/c2",
+            "string_type": "decoded_strings",
+        },
+    )
 
 
 def test_low_risk_route_does_not_start_deep_analysis(tmp_path: Path) -> None:
@@ -117,11 +191,57 @@ def test_capa_sufficient_evidence_stops_before_speakeasy(tmp_path: Path) -> None
     assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
     assert result.last_tier is AnalysisTier.CAPA
     assert result.executed_tiers == (AnalysisTier.CAPA,)
-    assert result.final_verdict == "MALICIOUS"
-    assert result.disposition is DeepAnalysisDisposition.ALERT_RECOMMENDED
+    assert result.final_verdict == "UNKNOWN"
+    assert result.disposition is DeepAnalysisDisposition.MANUAL_REVIEW
     assert speakeasy.calls == 0
     assert result.evidence_assessment is not None
     assert result.evidence_assessment.sufficient is True
+
+
+def test_capa_and_floss_run_as_one_static_phase_and_reach_llm(
+    tmp_path: Path,
+) -> None:
+    capa = _FakeCapaAnalyzer(_capa_result(capabilities=[_injection_capability()]))
+    floss = _FakeFlossAnalyzer(_FakeFlossResult((_floss_string_evidence(),)))
+    speakeasy = _FakeSpeakeasyAnalyzer({"status": "SUCCESS"})
+    llm = _FakeLLMInterpreter()
+
+    result = DeepAnalysisOrchestrator(
+        capa_analyzer=capa,
+        floss_analyzer=floss,
+        speakeasy_analyzer=speakeasy,
+        llm_interpreter=llm,
+    ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
+
+    assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
+    assert result.executed_tiers == (AnalysisTier.CAPA, AnalysisTier.FLOSS)
+    assert result.last_tier is AnalysisTier.FLOSS
+    assert result.final_verdict == "MALICIOUS"
+    assert capa.calls == 1
+    assert floss.calls == 1
+    assert speakeasy.calls == 0
+    assert llm.calls == 1
+    assert {item.source for item in llm.evidence} == {"CAPA", "FLOSS"}
+    assert result.llm_interpretation is not None
+    assert result.llm_interpretation.status is LLMInterpretationStatus.SUCCESS
+
+
+def test_floss_failure_does_not_discard_successful_capa_evidence(
+    tmp_path: Path,
+) -> None:
+    capa = _FakeCapaAnalyzer(_capa_result(capabilities=[_injection_capability()]))
+    floss = _FakeFlossAnalyzer(_FakeFlossResult(status="TIMEOUT"))
+
+    result = DeepAnalysisOrchestrator(
+        capa_analyzer=capa,
+        floss_analyzer=floss,
+        speakeasy_analyzer=None,
+    ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
+
+    assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
+    assert result.final_verdict == "UNKNOWN"
+    assert result.tool_statuses["FLOSS"] == "TIMEOUT"
+    assert result.evidence and result.evidence[0].source == "CAPA"
 
 
 def test_insufficient_capa_evidence_advances_to_speakeasy(tmp_path: Path) -> None:
@@ -149,7 +269,7 @@ def test_insufficient_capa_evidence_advances_to_speakeasy(tmp_path: Path) -> Non
     assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
     assert result.executed_tiers == (AnalysisTier.CAPA, AnalysisTier.SPEAKEASY)
     assert result.last_tier is AnalysisTier.SPEAKEASY
-    assert result.final_verdict == "MALICIOUS"
+    assert result.final_verdict == "UNKNOWN"
     assert speakeasy.calls == 1
     assert any(
         technique.technique_id == "T1055"
@@ -179,6 +299,7 @@ def test_insufficient_speakeasy_evidence_advances_to_ghidra(tmp_path: Path) -> N
         capa_analyzer=capa,
         speakeasy_analyzer=speakeasy,
         ghidra_capa_analyzer=ghidra,
+        config=DeepAnalysisConfig(enable_ghidra_capa=True),
     ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
 
     assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
@@ -188,7 +309,7 @@ def test_insufficient_speakeasy_evidence_advances_to_ghidra(tmp_path: Path) -> N
         AnalysisTier.GHIDRA_CAPA,
     )
     assert result.last_tier is AnalysisTier.GHIDRA_CAPA
-    assert result.final_verdict == "MALICIOUS"
+    assert result.final_verdict == "UNKNOWN"
     assert ghidra.calls == 1
     assert "ADVANCE_TO_GHIDRA_CAPA" in result.reason_codes
 
@@ -211,10 +332,11 @@ def test_speakeasy_failure_uses_ghidra_fallback(tmp_path: Path) -> None:
         capa_analyzer=capa,
         speakeasy_analyzer=speakeasy,
         ghidra_capa_analyzer=ghidra,
+        config=DeepAnalysisConfig(enable_ghidra_capa=True),
     ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
 
     assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
-    assert result.final_verdict == "MALICIOUS"
+    assert result.final_verdict == "UNKNOWN"
     assert result.tool_statuses["SPEAKEASY"] == "TIMEOUT"
     assert result.tool_statuses["GHIDRA_CAPA"] == "SUCCESS"
     assert "SPEAKEASY_TIMEOUT" in result.reason_codes
@@ -240,6 +362,7 @@ def test_ghidra_failure_returns_failed_status(tmp_path: Path) -> None:
         capa_analyzer=capa,
         speakeasy_analyzer=speakeasy,
         ghidra_capa_analyzer=ghidra,
+        config=DeepAnalysisConfig(enable_ghidra_capa=True),
     ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
 
     assert result.deep_analysis_status is DeepAnalysisStatus.FAILED
@@ -247,6 +370,37 @@ def test_ghidra_failure_returns_failed_status(tmp_path: Path) -> None:
     assert result.disposition is DeepAnalysisDisposition.ANALYSIS_FAILED
     assert result.tool_statuses["GHIDRA_CAPA"] == "ENVIRONMENT_MISMATCH"
     assert "GHIDRA_CAPA_ENVIRONMENT_MISMATCH" in result.reason_codes
+
+
+def test_ghidra_is_disabled_by_default_and_not_executed(tmp_path: Path) -> None:
+    capa = _FakeCapaAnalyzer(_capa_result(capabilities=[]))
+    speakeasy = _FakeSpeakeasyAnalyzer(
+        {
+            "evidence_id": "speakeasy-generic",
+            "sha256": "i" * 64,
+            "status": "SUCCESS",
+            "observed_apis": ["CreateFileW"],
+            "behaviors": ["file_access"],
+        }
+    )
+    ghidra = _FakeCapaAnalyzer(
+        _capa_result(capabilities=[_injection_capability()])
+    )
+
+    result = DeepAnalysisOrchestrator(
+        capa_analyzer=capa,
+        speakeasy_analyzer=speakeasy,
+        ghidra_capa_analyzer=ghidra,
+    ).run(_sample(tmp_path), initial_route="HIGH_RISK_UNCERTAIN")
+
+    assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
+    assert result.executed_tiers == (AnalysisTier.CAPA, AnalysisTier.SPEAKEASY)
+    assert result.last_tier is AnalysisTier.SPEAKEASY
+    assert result.final_verdict == "UNKNOWN"
+    assert result.disposition is DeepAnalysisDisposition.MANUAL_REVIEW
+    assert result.tool_statuses["GHIDRA_CAPA"] == "DISABLED"
+    assert "GHIDRA_CAPA_DISABLED" in result.reason_codes
+    assert ghidra.calls == 0
 
 
 def test_speakeasy_failure_is_not_malicious_evidence(tmp_path: Path) -> None:
