@@ -3,9 +3,13 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# PE binaries and local analysis inputs
+# PE binaries, local analysis inputs, and analysis artifacts
 *.exe
 *.dll
+*.dmp
+artifacts/
+reports/
+data/raw/
 
 # C extensions
 *.so
@@ -249,6 +253,10 @@ mlartifacts/
 # folder
 data/
 EMBER2024/
+.capa-rules/
+.capa-localappdata/
+.capa-bin/
+.ghidra-appdata*/
 
 # file
 *.csv

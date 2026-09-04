@@ -1,39 +1,38 @@
-"""
-    Optuna 기반 LightGBM 하이퍼파라미터 튜닝 (top500 feature).
+"""Validation 전용 Optuna 선택을 사용하는 Top-500 LightGBM 학습."""
 
-    목적 지표는 compare_baseline_models.py의 evaluate()와 동일한 방식으로 계산한다:
-    threshold는 calibration에서만 산출하고, tpr_at_fpr은 eval(시간 이동) 세트에
-    threshold를 적용만 해서 얻는다 (재산출 금지).
+from __future__ import annotations
 
-    n_trials=10, 튜닝 단계 n_estimators=200으로 빠르게 탐색한 뒤,
-    best_params로 n_estimators=500 최종 모델을 다시 학습한다.
-"""
+import argparse
+from pathlib import Path
 
-import numpy as np
+import joblib
 import lightgbm as lgb
 import mlflow
+import numpy as np
 import optuna
-import joblib
 from sklearn.metrics import roc_curve
 
-DATA_DIR = r"D:\KISIA_laptop\out\dev"
-TARGET_FPR = 0.001  # 0.1%
+try:
+    from .data_contract import (
+        load_top_indices,
+        require_new_output,
+        validate_four_way_contract,
+    )
+except ImportError:  # pragma: no cover - 파일을 직접 실행할 때 사용
+    from data_contract import (
+        load_top_indices,
+        require_new_output,
+        validate_four_way_contract,
+    )
+
+TARGET_FPR = 0.001
 N_TRIALS = 20
-#TUNING_N_ESTIMATORS = 200      # trial 1, 2, 3
-TUNING_N_ESTIMATORS = 1000      # trial 4
-#FINAL_N_ESTIMATORS = 500       # trial 1, 2, 3
-CHUNK = 20_000  # common.py의 DEFAULT_CHUNK와 동일
+TUNING_N_ESTIMATORS = 1000
+CHUNK = 20_000
 
 
-# ==============================================================
-# 1. 데이터 로드
-# ==============================================================
-# X_tr[:, top_indices] 처럼 memmap에 바로 fancy indexing을 하면 numpy가
-# 원소 단위로 흩어진 디스크 읽기를 시도해 사실상 멈춘 것처럼 느려진다
-# (train_xgboost_500.py에서 실제로 걸려서 KeyboardInterrupt로 끊었던 원인).
-# 대신 행을 청크 단위로 "통째로" 읽어(memmap이 잘하는 순차 읽기) RAM에 올린
-# 뒤, RAM 위에서 열을 골라낸다. common.py의 iter_chunks()와 같은 전략이다.
 def select_columns_chunked(X, col_indices, chunk_size=CHUNK):
+    """memmap을 행 청크로 읽은 뒤 선택한 열만 float32 RAM 배열로 만든다."""
     col_indices = np.asarray(col_indices)
     n = X.shape[0]
     out = np.empty((n, len(col_indices)), dtype=np.float32)
@@ -43,175 +42,108 @@ def select_columns_chunked(X, col_indices, chunk_size=CHUNK):
     return out
 
 
-X_tr_full = np.load(f"{DATA_DIR}/X_tr.npy", mmap_mode="r")
-y_tr = np.load(f"{DATA_DIR}/y_tr.npy")
-
-X_calib_full = np.load(f"{DATA_DIR}/X_calib.npy", mmap_mode="r")
-y_calib = np.load(f"{DATA_DIR}/y_calib.npy")
-
-X_eval_full = np.load(f"{DATA_DIR}/X_eval.npy", mmap_mode="r")
-y_eval = np.load(f"{DATA_DIR}/y_eval.npy")
-
-top_indices = np.sort(np.load("top_feature_indices_500.npy"))
-
-print("top500 컬럼 선택 중 (청크 단위)...")
-X_tr_500 = select_columns_chunked(X_tr_full, top_indices)
-X_calib_500 = select_columns_chunked(X_calib_full, top_indices)
-X_eval_500 = select_columns_chunked(X_eval_full, top_indices)
-
-print(f"학습: {X_tr_500.shape} / 보정: {X_calib_500.shape} / 평가: {X_eval_500.shape}")
+def validation_tpr_at_fpr(y_true, scores, target_fpr=TARGET_FPR):
+    """Validation 내부의 모델 선택 점수와 임시 threshold를 계산한다."""
+    fpr, tpr, thresholds = roc_curve(y_true, scores)
+    index = np.searchsorted(fpr, target_fpr, side="right") - 1
+    index = max(index, 0)
+    return float(tpr[index]), float(thresholds[index])
 
 
-# ==============================================================
-# 2. 지표 계산 - compare_baseline_models.py의 evaluate()와 동일한 방식
-# ==============================================================
-def find_threshold_at_fpr(y_true, scores, target_fpr):
-    """FPR이 target_fpr이 되는 threshold를 찾는다 (calibration에서만 호출)."""
-    fpr, _, threshold = roc_curve(y_true, scores)
-    idx = np.searchsorted(fpr, target_fpr, side="right") - 1
-    idx = max(idx, 0)
-    return threshold[idx]
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument(
+        "--top-indices", type=Path, default=Path("top_feature_indices_500.npy")
+    )
+    parser.add_argument("--model-output", type=Path, required=True)
+    parser.add_argument("--n-trials", type=int, default=N_TRIALS)
+    return parser.parse_args(argv)
 
 
-def tpr_at_threshold(y_true, scores, threshold):
-    """주어진 threshold에서 TPR을 계산한다."""
-    pred = (scores >= threshold).astype(int)
-    tp = ((pred == 1) & (y_true == 1)).sum()
-    fn = ((pred == 0) & (y_true == 1)).sum()
-    return tp / (tp + fn) if (tp + fn) > 0 else float("nan")
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    splits = validate_four_way_contract(args.data_dir)
+    model_output = require_new_output(args.model_output)
+    top_indices = load_top_indices(args.top_indices)
 
+    X_tr_500 = select_columns_chunked(splits["tr"].X, top_indices)
+    X_val_500 = select_columns_chunked(splits["val"].X, top_indices)
+    y_tr = splits["tr"].y
+    y_val = splits["val"].y
+    mlflow.set_experiment("trust-triage-baseline")
 
-def evaluate(model, X_calib, y_calib, X_eval, y_eval, target_fpr=TARGET_FPR):
-    """threshold는 calibration에서 산출하고 eval에는 적용만 한다."""
-    calib_scores = model.predict_proba(X_calib)[:, 1]
-    threshold = find_threshold_at_fpr(y_calib, calib_scores, target_fpr)
+    def objective(trial):
+        params = {
+            "objective": "binary",
+            "metric": ["auc"],
+            "num_leaves": trial.suggest_int("num_leaves", 100, 350),
+            "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.15, log=True),
+            "min_child_samples": trial.suggest_int("min_child_samples", 50, 3000, log=True),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "subsample_freq": 1,
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "random_state": 42,
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
+            "force_col_wise": True,
+        }
+        with mlflow.start_run(run_name=f"lightgbm_tuning_trial{trial.number}"):
+            mlflow.set_tag("model_type", "lightgbm_tuned")
+            mlflow.set_tag("feature_set", "reduced")
+            mlflow.set_tag("top_n", "500")
+            mlflow.set_tag("split_type", "temporal_week_id_4way")
+            mlflow.set_tag("selection_split", "validation")
+            model = lgb.LGBMClassifier(**params, n_estimators=TUNING_N_ESTIMATORS)
+            model.fit(
+                X_tr_500,
+                y_tr,
+                eval_set=[(X_val_500, y_val)],
+                callbacks=[lgb.early_stopping(stopping_rounds=100, verbose=False)],
+            )
+            scores = model.predict_proba(X_val_500)[:, 1]
+            selection_tpr, selection_threshold = validation_tpr_at_fpr(y_val, scores)
+            trial.set_user_attr("best_iteration", int(model.best_iteration_))
+            mlflow.log_params(params)
+            mlflow.log_param("n_estimators", TUNING_N_ESTIMATORS)
+            mlflow.log_metric("validation_tpr_at_fpr", selection_tpr)
+            mlflow.log_metric("validation_selection_threshold", selection_threshold)
+            mlflow.log_metric("best_iteration", model.best_iteration_)
+        return selection_tpr
 
-    eval_scores = model.predict_proba(X_eval)[:, 1]
-    tpr = tpr_at_threshold(y_eval, eval_scores, threshold)
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(seed=42),
+        study_name="lightgbm_top500_validation_tuning",
+    )
+    study.optimize(objective, n_trials=args.n_trials)
 
-    return {"tpr_at_fpr": tpr, "threshold": threshold}
-
-
-# ==============================================================
-# 3. Optuna 목적 함수
-# ==============================================================
-mlflow.set_experiment("trust-triage-baseline")
-
-
-def objective(trial):
-    params = {
+    best_n_estimators = int(study.best_trial.user_attrs["best_iteration"])
+    final_params = {
         "objective": "binary",
         "metric": ["auc"],
-        #"num_leaves": trial.suggest_int("num_leaves", 15, 255),    # trial 1
-        #"num_leaves": trial.suggest_int("num_leaves", 130, 220),    # trial 2
-        #"num_leaves": trial.suggest_int("num_leaves", 160, 220),    # trial 3
-        "num_leaves": trial.suggest_int("num_leaves", 100, 350),    # trial 4
-        #"learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),        # trial 1, 2
-        #"learning_rate": trial.suggest_float("learning_rate", 0.12, 0.25, log=True),        # trial 3
-        "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.15, log=True),        # trial 4
-        #"min_child_samples": trial.suggest_int("min_child_samples", 5, 100),               # trial 1, 2, 3
-        "min_child_samples": trial.suggest_int("min_child_samples", 50, 3000, log=True),        # trial 4
-        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-        "subsample_freq": 1,
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
         "random_state": 42,
-        "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),            # trial 4
-        "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),          # trial 4
+        "subsample_freq": 1,
         "force_col_wise": True,
+        **study.best_params,
     }
-
-    with mlflow.start_run(run_name=f"lightgbm_tuning_trial{trial.number}"):
+    with mlflow.start_run(run_name="lightgbm_tuned_500_train_only"):
         mlflow.set_tag("model_type", "lightgbm_tuned")
         mlflow.set_tag("feature_set", "reduced")
         mlflow.set_tag("top_n", "500")
-        mlflow.set_tag("split_type", "temporal_week_id")
-        mlflow.set_tag("optuna_trial", str(trial.number))
+        mlflow.set_tag("split_type", "temporal_week_id_4way")
+        mlflow.set_tag("fit_split", "train")
+        final_model = lgb.LGBMClassifier(**final_params, n_estimators=best_n_estimators)
+        final_model.fit(X_tr_500, y_tr)
+        mlflow.log_params(final_params)
+        mlflow.log_param("n_estimators", best_n_estimators)
+        mlflow.log_metric("best_validation_tpr_at_fpr", study.best_value)
+        mlflow.lightgbm.log_model(final_model, "model")
 
-        model = lgb.LGBMClassifier(**params, n_estimators=TUNING_N_ESTIMATORS)
-        model.fit(
-            X_tr_500, y_tr,
-            eval_X=X_calib_500,
-            eval_y=y_calib,
-            callbacks=[lgb.early_stopping(stopping_rounds=100, verbose=False)],
-        )
-        
-        trial.set_user_attr("best_iteration", int(model.best_iteration_))
-        
-        metrics = evaluate(model, X_calib_500, y_calib, X_eval_500, y_eval)
-
-        mlflow.log_params(params)
-        mlflow.log_param("n_estimators", TUNING_N_ESTIMATORS)
-        mlflow.log_metric("tpr_at_fpr", metrics["tpr_at_fpr"])
-        mlflow.log_metric("threshold", metrics["threshold"])
-        mlflow.log_metric("target_fpr", TARGET_FPR)
-        mlflow.log_metric("best_iteration", model.best_iteration_)
-
-        print(
-            f"[trial {trial.number}] tpr_at_fpr={metrics['tpr_at_fpr']:.4f} "
-            f"params={params}"
-        )
-
-    return metrics["tpr_at_fpr"]
+    joblib.dump(final_model, model_output)
+    print(f"새 LightGBM artifact 저장 완료: {model_output}")
+    return 0
 
 
-# ==============================================================
-# 4. 튜닝 실행
-# ==============================================================
-sampler = optuna.samplers.TPESampler(seed=42)
-
-study = optuna.create_study(
-    direction="maximize",
-    sampler=sampler,
-    study_name="lightgbm_top500_tuning_v4"
-)
-study.optimize(objective, n_trials=N_TRIALS)
-
-print("\n=== 튜닝 완료 ===")
-print(f"Best tpr_at_fpr: {study.best_value:.4f}")
-print(f"Best params: {study.best_params}")
-best_n_estimators = int(
-    study.best_trial.user_attrs["best_iteration"]
-)
-
-print(f"Best iteration: {best_n_estimators}")
-
-# ==============================================================
-# 5. best_params로 최종 모델 학습 (n_estimators=500)
-# ==============================================================
-final_params = {
-    "objective": "binary",
-    "metric": ["auc"],
-    "random_state": 42,
-    "subsample_freq": 1,
-    "force_col_wise": True,
-    **study.best_params,
-}
-
-with mlflow.start_run(run_name="lightgbm_tuned_500_final"):
-    mlflow.set_tag("model_type", "lightgbm_tuned")
-    mlflow.set_tag("feature_set", "reduced")
-    mlflow.set_tag("top_n", "500")
-    mlflow.set_tag("split_type", "temporal_week_id")
-    mlflow.set_tag("optuna_final", "true")
-
-    final_model = lgb.LGBMClassifier(**final_params, n_estimators=best_n_estimators)
-    final_model.fit(
-        X_tr_500, y_tr,
-    )
-
-    final_metrics = evaluate(final_model, X_calib_500, y_calib, X_eval_500, y_eval)
-
-    mlflow.log_params(final_params)
-    mlflow.log_param("n_estimators", best_n_estimators)
-    mlflow.log_metric("tpr_at_fpr", final_metrics["tpr_at_fpr"])
-    mlflow.log_metric("threshold", final_metrics["threshold"])
-    mlflow.log_metric("target_fpr", TARGET_FPR)
-    mlflow.lightgbm.log_model(final_model, "model")
-
-    print(
-        f"\n최종 모델 ㅡ TPR@FPR{TARGET_FPR:.1%}: {final_metrics['tpr_at_fpr']:.4f} "
-        f"(threshold={final_metrics['threshold']:.4f})"
-    )
-
-joblib.dump(final_model, "baseline_model_lightgbm_tuned_500.pkl")
-print("baseline_model_lightgbm_tuned_500.pkl 저장 완료")
+if __name__ == "__main__":
+    raise SystemExit(main())

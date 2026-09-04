@@ -31,7 +31,7 @@ k\                       ← 지금 이 폴더 (코드)
 `C:\EMBER\src\EMBER2024`)
 
 `out\README.md`와 이 파일은 다릅니다. 저건 데이터를 받는 사람용 설명서라
-[06_manifest.py](06_manifest.py)의 `README_TEMPLATE`이 매번 새로 씁니다.
+[manifest.py](manifest.py)의 `README_TEMPLATE`이 매번 새로 씁니다.
 이 파일은 파이프라인을 돌리는 사람용입니다.
 
 ## 요구 환경
@@ -46,22 +46,22 @@ Python 3.11+ (검증: 3.14.5 / Windows 11), `thrember`, `numpy`, `pandas`,
 ## 전체 실행
 
 ```bash
-python 01_download.py --root C:\EMBER\result
+python download.py --root C:\EMBER\result
 ```
 ```bash
-python 02_vectorize.py --root C:\EMBER\result
+python vectorize.py --root C:\EMBER\result
 ```
 ```bash
-python 03_build_index.py --root C:\EMBER\result
+python build_index.py --root C:\EMBER\result
 ```
 ```bash
-python 04_split_qc.py --root C:\EMBER\result
+python split_qc.py --root C:\EMBER\result
 ```
 ```bash
-python 05_materialize.py --root C:\EMBER\result --verify
+python materialize.py --root C:\EMBER\result --verify
 ```
 ```bash
-python 06_manifest.py --root C:\EMBER\result --thrember-repo C:\EMBER\src\EMBER2024
+python manifest.py --root C:\EMBER\result --thrember-repo C:\EMBER\src\EMBER2024
 ```
 
 각 단계는 끝날 때 다음 단계 명령을 로그에 찍습니다. 이미 끝난 단계는
@@ -72,12 +72,12 @@ python 06_manifest.py --root C:\EMBER\result --thrember-repo C:\EMBER\src\EMBER2
 
 | 단계 | 하는 일 | 소요(이 머신) |
 |---|---|---|
-| [01_download.py](01_download.py) | Win32/Win64 train·test + challenge 다운로드, challenge의 arch 인덱스 생성 | 33분 |
-| [02_vectorize.py](02_vectorize.py) | `.jsonl` → `X_*.dat` / `y_*.dat` (2568차원 float32) + 0행 검사 | 39분 |
-| [03_build_index.py](03_build_index.py) | 벡터 행 순서 그대로 메타데이터(sha256/week_id/file_type/family/label) 추출, arch 파생 | 3분 |
-| [04_split_qc.py](04_split_qc.py) | 마스킹 + **시간 4분할 인덱스 생성** + non-finite QC + 주차별 드리프트 리포트 | 4분 |
-| [05_materialize.py](05_materialize.py) | 인덱스를 적용해 최종 `.npy` 산출 (X는 여기서만 복사됨) | 4분 |
-| [06_manifest.py](06_manifest.py) | 전체 sha256, manifest.json, **분할 계약** 기록, lockbox 봉인, README 생성 | 1분 |
+| [download.py](download.py) | Win32/Win64 train·test + challenge 다운로드, challenge의 arch 인덱스 생성 | 33분 |
+| [vectorize.py](vectorize.py) | `.jsonl` → `X_*.dat` / `y_*.dat` (2568차원 float32) + 0행 검사 | 39분 |
+| [build_index.py](build_index.py) | 벡터 행 순서 그대로 메타데이터(sha256/week_id/file_type/family/label) 추출, arch 파생 | 3분 |
+| [split_qc.py](split_qc.py) | 마스킹 + **시간 4분할 인덱스 생성** + non-finite QC + 주차별 드리프트 리포트 | 4분 |
+| [materialize.py](materialize.py) | 인덱스를 적용해 최종 `.npy` 산출 (X는 여기서만 복사됨) | 4분 |
+| [manifest.py](manifest.py) | 전체 sha256, manifest.json, **분할 계약** 기록, lockbox 봉인, README 생성 | 1분 |
 
 [common.py](common.py)는 CLI가 없는 공유 모듈입니다. 경로 레이아웃, memmap
 헬퍼, 로깅, **주차 경계 상수와 분할 계약**이 전부 여기 있습니다.
@@ -210,11 +210,11 @@ accuracy/F1이 아니라 **ROC-AUC와 고정 FPR에서의 TPR**을 씁니다.
 정합해집니다 (약 8분):
 
 ```bash
-python 04_split_qc.py --root C:\EMBER\result --force
+python split_qc.py --root C:\EMBER\result --force
 ```
 ```bash
-python 05_materialize.py --root C:\EMBER\result --skip-lockbox --verify
+python materialize.py --root C:\EMBER\result --skip-lockbox --verify
 ```
 ```bash
-python 06_manifest.py --root C:\EMBER\result --thrember-repo C:\EMBER\src\EMBER2024
+python manifest.py --root C:\EMBER\result --thrember-repo C:\EMBER\src\EMBER2024
 ```

@@ -12,7 +12,7 @@ Project/
 └── trust-triage/
     ├── src/
     │   └── jrr/
-    │       └── 10_jrr_router.py
+    │       └── jrr_router.py
     ├── pyproject.toml
     ├── requirements.txt
     └── ...
