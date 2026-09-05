@@ -39,7 +39,7 @@
         ▼
 [④ 위험 신호 계산] ────────────────── 담당: 김건우
         │
-        │ - Calibrated Probability
+        │ - Uncertain Probability
         │ - Model Disagreement
         │ - OOD Score
         │ - Analysis Difficulty

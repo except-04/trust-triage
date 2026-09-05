@@ -52,8 +52,8 @@ def main() -> int:
         top_500_idx = np.load(TOP_N_PATH)
         
         # OOD 모델도 실전 라우터와 동일하게 Top 500 피처만 보도록 슬라이싱
-        # 데이터가 너무 크므로(예: 400만 개) 학습 속도와 시간적 편향(Bias) 방지를 위해 
-        # 전체 데이터 풀에서 10만 건을 랜덤 유니폼 샘플링합니다.
+        # 데이터가 너무 크므로(약 272만 개) 학습 속도와 시간적 편향(Bias) 방지를 위해 
+        # Train 데이터 풀에서 10만 건을 랜덤 유니폼 샘플링합니다. (Eval 등 다른 세트 누수 없음)
         sample_size = min(100000, len(X_tr_raw))
         np.random.seed(42)
         random_indices = np.random.choice(len(X_tr_raw), sample_size, replace=False)
