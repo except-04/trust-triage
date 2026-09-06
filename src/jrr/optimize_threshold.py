@@ -22,7 +22,7 @@ def simulate_routing(y_prob, lower_bound, upper_bound):
     
     return routes
 
-def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
+def optimize_lower_bound(y_true, y_prob, upper_bound):
     """
     Calibration 데이터셋을 바탕으로 tau_low 후보별 라우팅 비율(%), Review Yield(적중률), 악성 누락률을 시뮬레이션하고,
     '검토 가성비(Review Yield) 극대화' 및 '악성 누출(미탐) 최소화'를 동시에 만족하는 최적의 tau_low를 탐색합니다.
@@ -61,7 +61,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
         leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
         leaked_rate_of_all_malware = (leaked_malware / n_total_malicious * 100) if n_total_malicious > 0 else 0.0
         
-        current_yield = calculate_review_yield(y_true, simulated_routes, daily_budget)
+        current_yield = calculate_review_yield(y_true, simulated_routes)
         
         print(f"  {lb:^7.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {current_yield:>10.2f}% | {leaked_malware:>10,}건 ({leaked_rate_of_all_malware:5.2f}%)")
         
@@ -140,13 +140,11 @@ def main():
             return
 
         # 2. 최적화 시뮬레이션 실행 (Review Yield 극대화 및 악성 누락 최소화)
-        daily_budget = 100
         optimal_lb, best_stats = optimize_lower_bound(
-            y_true, y_prob, fixed_upper_bound, daily_budget
+            y_true, y_prob, fixed_upper_bound
         )
         
         # 3. MLflow에 최종 결과 박제
-        mlflow.log_param("daily_budget", daily_budget)
         mlflow.log_param("fixed_upper_bound", fixed_upper_bound)
         mlflow.log_metric("optimal_lower_bound", optimal_lb)
         mlflow.log_metric("calib_uncertain_ratio", best_stats.get("pct_uncertain", 0.0))
