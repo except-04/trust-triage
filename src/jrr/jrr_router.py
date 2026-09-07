@@ -4,7 +4,7 @@ import numpy as np
 class JointRiskRouter:
     """
     TRUST-Triage 핵심 엔진: Joint Risk Router (jrr_router.py)
-    확률값과 Model Disagreement, OOD Score, Analysis Difficulty를 바탕으로 3가지 큐로 분기합니다.
+    확률값과 Model Disagreement, OOD Score, Analysis Difficulty를 바탕으로 3가지 초기 판정으로 분기합니다.
     """
     def __init__(self, tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0):
         self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_BENIGN / Calibration 최적화 확정: 0.60)
@@ -22,8 +22,9 @@ class JointRiskRouter:
         
         if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isnan(difficulty_score):
             return {
-                "decision": "HIGH_RISK_UNCERTAIN",
-                "calibrated_prob": -1.0,
+                "initial_verdict": "HIGH_RISK_UNCERTAIN",
+                "route": "DEEP_ANALYSIS",
+                "calibrated_probability": -1.0,
                 "disagreement": -1.0,
                 "ood_score": 0.0,
                 "difficulty_score": 0.0,
@@ -54,10 +55,17 @@ class JointRiskRouter:
         else:
             decision = "AUTO_BENIGN"
             reason = f"High Benign Confidence ({p_calib:.4f})"
+            
+        route = (
+            "DEEP_ANALYSIS"
+            if decision == "HIGH_RISK_UNCERTAIN"
+            else "FINAL"
+        )
 
         return {
-            "decision": decision,
-            "calibrated_prob": round(float(p_calib), 4),
+            "initial_verdict": decision,
+            "route": route,
+            "calibrated_probability": round(float(p_calib), 4),
             "disagreement": round(float(disagreement), 4),
             "ood_score": round(float(ood_score), 4),
             "difficulty_score": round(float(difficulty_score), 4),
@@ -110,7 +118,7 @@ if __name__ == "__main__":
     router = JointRiskRouter(tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0)
     routed = router.route_batch(p_eval, disagreement, ood_scores, difficulty_scores)
 
-    decisions = [r["decision"] for r in routed]
+    decisions = [r["initial_verdict"] for r in routed]
     n_total = len(decisions)
     n_benign = decisions.count("AUTO_BENIGN")
     n_malicious = decisions.count("AUTO_MALICIOUS")
