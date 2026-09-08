@@ -1,0 +1,12 @@
+# -*- coding: utf-8 -*-
+# 실제 초기 분석 프로세스용. API 서버만 실행할 때는 필요하지 않다.
+-r requirements-backend.txt
+numpy>=1.26
+joblib>=1.3
+scikit-learn>=1.4
+lightgbm>=4.3
+xgboost>=2.0
+shap>=0.45
+pefile>=2024.8.26
+thrember @ git+https://github.com/FutureComputing4AI/EMBER2024.git@0ef753e81d98bf209f71b03cd331dfc190b5b54d
+signify==0.7.1

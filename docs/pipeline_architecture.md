@@ -1,5 +1,7 @@
 # TRUST-EDR 파이프라인 아키텍처 문서
 
+> **Backend 구현 안내 (2026-09-08):** 현재 HTTP 접수·조회·검토 계약은 [최신 공통 명세](interface_spec.md)를 바탕으로 만든 [Backend OpenAPI](backend-api/openapi.json)를 참고합니다. 구현은 `trust_triage.backend_api`이며, [소스코드 구조](backend-api/backend-structure.md)와 [API 설명](backend-api/api-reference.md)에 연결 방법이 있습니다. 초기 JRR의 공개 `initial_verdict`는 그대로 보존하고, 심층 분석 연결부에서 `HIGH_RISK_UNCERTAIN`을 내부 요청의 `UNKNOWN`으로 변환합니다. 초기 결과·시스템 제안·전문가 의견은 별도로 저장합니다. 아래의 이전 설계 예시와 현재 구현이 다른 항목은 Backend 명세에 명시되어 있습니다.
+
 > 각 모듈의 입출력(인터페이스)을 정의합니다.
 >
 > **담당자는 본인 파트의 출력 형식을 실제 구현에 맞춰 확정·수정해주세요.**

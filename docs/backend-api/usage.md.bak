@@ -1,0 +1,250 @@
+# Backend API 실행과 팀 연결 안내
+
+Backend는 파일 접수, 초기 분석, 심층 분석 연결, 결과 조회, 전문가 검토를 한 분석 번호로 관리한다. HTTP 서버는 요청을 DB에 접수하고, 별도의 `run` 프로세스가 실제 분석 단계를 진행한다.
+
+## 1. 먼저 알아둘 구조
+
+```text
+Dashboard / API 사용자
+    │ 파일 업로드
+    ▼
+Backend serve ── 파일 저장 + PostgreSQL 작업 등록 ──► 202 접수 응답
+    │
+    │ 사용자는 analysis_id로 진행 상황과 결과 조회
+    │
+Backend run
+    ├─ Feature 추출 → LightGBM / XGBoost → Calibration / Risk / JRR
+    ├─ SHAP 설명
+    ├─ 필요하면 Deep Analysis에 같은 SHA-256으로 요청
+    │      └─ CAPA / FLOSS → 필요하면 SQS → Speakeasy Worker
+    └─ 최종 판정 제안 저장
+           └─ 전문가 검토 의견과 수정 이력 저장
+```
+
+기본 실행 프로세스는 `serve`와 `run` 두 개다. Speakeasy까지 연결하는 환경에는 별도 Speakeasy Worker가 추가된다. 화면을 열어두지 않아도 `run`이 대기 작업을 처리한다. 결과 조회만으로 Feature 추출이나 LLM 호출이 시작되지는 않는다.
+
+이 브랜치의 Backend 코드와 `feature/deep-analysis`의 심층 분석 서비스는 별도 작업이다. 현재 체크아웃에 심층 분석 서비스가 아직 병합·설치되지 않았다면, API 접수·조회는 사용할 수 있지만 실제 심층 분석은 `DEEP_INTEGRATION_UNAVAILABLE`로 끝난다. 이 Backend가 옆 폴더의 코드를 자동으로 가져오지는 않는다.
+
+## 2. 환경 준비
+
+저장소 루트에서 기존 팀 방식대로 Python 3.11 가상환경을 사용한다.
+
+```powershell
+python -m venv trust-triage-env
+.\trust-triage-env\Scripts\python.exe -m pip install -r requirements-backend.txt
+.\trust-triage-env\Scripts\python.exe -m pip install -e . --no-deps
+```
+
+**API 접수·조회만 연결할 때**는 위 환경과 PostgreSQL이면 된다. **실제 초기 분석까지 실행할 때**는 4절의 분석 의존성과 학습 산출물도 준비한다. 모델이 없어도 API 문서와 접수·조회 기능을 개발할 수 있으며, 없는 모델로 임의 점수를 반환하지 않는다.
+
+설정 예제를 로컬 설정 파일로 복사하고 DB 접속 정보를 입력한다.
+
+```powershell
+Copy-Item docs/backend-api/.env.example docs/backend-api/.env.local
+```
+
+명령은 저장소 루트에서 실행한다. 설정 파일의 상대 경로 역시 실행한 작업 폴더 기준이다. `.env`는 자동으로 읽지 않으며 `--env-file`로 지정한 파일만 읽는다. 이미 프로세스 환경에 설정된 값이 파일의 값보다 우선한다. 실제 접속 정보가 들어간 `.env.local`, 원본 PE, 모델 파일은 Git에 올리지 않는다.
+
+## 3. DB 초기화와 기본 실행
+
+PostgreSQL 서버와 DB는 먼저 준비되어 있어야 한다. `init-db`는 그 DB 안에 Backend가 사용할 테이블을 만든다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local init-db
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local check
+```
+
+첫 번째 터미널에서 HTTP 서버를 실행한다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local serve
+```
+
+4절의 모델 환경을 준비한 후, 두 번째 터미널에서 작업 처리기를 실행한다. 접수·조회만 개발할 때는 이 단계까지 실행할 필요가 없다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local run
+```
+
+기본 주소는 `http://127.0.0.1:8000`이다. 브라우저에서 `/docs`를 열면 입력 형식과 응답 구조를 직접 확인할 수 있다. 대기 작업을 한 차례만 처리하려면 다음처럼 실행한다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local run --once --limit 10
+```
+
+`run --once`는 현재 처리 가능한 작업의 **다음 단계 한 번**을 진행한다. Feature 분석, 심층 분석 대기, 최종 결과 저장은 여러 차례에 걸쳐 진행될 수 있다. 운영 시에는 `run`을 계속 실행해야 한다.
+
+## 4. 분석 모델 준비
+
+실제 초기 분석 의존성을 설치한다. 팀에서 이미 사용하는 분석 환경이 있으면 해당 환경의 버전과 모델 산출물 호환성을 먼저 맞춘다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m pip install -r requirements-backend-analysis.txt
+```
+
+초기 분석에는 다음 여섯 종류의 팀 산출물이 필요하다.
+
+| 설정 이름 | 지정할 팀 산출물 |
+|---|---|
+| `BACKEND_LGBM_PATH` | 기준 악성 확률을 계산하는 LightGBM 모델 |
+| `BACKEND_XGB_PATH` | 비교 모델 확률과 불일치를 계산하는 XGBoost 모델 |
+| `BACKEND_CALIBRATOR_PATH` | LightGBM 확률 보정용 Isotonic Calibration 산출물 |
+| `BACKEND_RISK_SIGNALS_PATH` | OOD 모델과 분석 난이도 정보가 담긴 Risk Signals 산출물 |
+| `BACKEND_TOP_INDICES_PATH` | 학습에 사용한 상위 500개 Feature 인덱스 `.npy` |
+| `BACKEND_SELECTION_MANIFEST_PATH` | Feature 이름, 순서, 형식과 인덱스 파일 해시를 담은 selection manifest `.json` |
+
+500차원이라는 사실만으로 모델을 연결하지 않는다. 추출 Schema, 학습 인덱스, Feature 순서, 모델 종류와 Calibration 산출물을 함께 검사한다. 설정된 파일이 없거나 규격이 맞지 않으면 명시적인 실패 상태를 저장한다.
+
+모델 경로는 서버 설정으로만 지정한다. API에 올린 파일이나 요청 파라미터로 모델을 선택하지 않는다. 기존 Feature 추출 모듈과 같은 방식으로 입력 PE를 실행하지 않고 분석하며, 초기 분석과 SHAP에는 각각 시간 제한이 있다.
+
+분석 실행 환경까지 검사하려면 다음 명령을 사용한다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local check --analysis
+```
+
+이 명령은 지정한 파일과 분석 패키지의 **존재 여부**를 확인한다. 실제 모델 종류·Feature Schema·Calibration 정합성은 각 분석의 시간 제한이 있는 자식 프로세스에서 검사한다. `check --analysis` 성공만으로 실제 모델 검증이 끝난 것은 아니다.
+
+## 5. 상태와 판정 읽기
+
+| 항목 | 의미 |
+|---|---|
+| `analysis_id` | 이번 분석 요청 번호. 같은 파일을 새로 분석해도 새 번호가 생긴다. |
+| `sha256` | 입력 파일 내용의 해시. 초기·심층 분석과 증거를 연결한다. |
+| `status` | 전체 작업의 `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` 상태 |
+| `current_stage` | `UPLOAD`, `INITIAL_ANALYSIS`, `JRR`, `CAPA_FLOSS`, `SPEAKEASY`, `LLM`, `FINAL_ASSESSMENT` 중 현재 단계 |
+| `initial_verdict` | 초기 JRR의 `AUTO_BENIGN`, `AUTO_MALICIOUS`, `HIGH_RISK_UNCERTAIN` 제안 |
+| `final_verdict` | 시스템의 최종 제안: `BENIGN`, `MALICIOUS`, `UNCERTAIN` |
+| `analyst_final_verdict` | 전문가가 따로 기록한 `BENIGN` 또는 `MALICIOUS`. `null`은 아직 확정하지 않았다는 뜻이다. |
+| `review_revision` | 전문가 검토가 저장될 때마다 증가하는 번호 |
+
+`COMPLETED`는 전체 처리가 끝났다는 뜻이며, 파일이 정상이라는 뜻은 아니다. 도구 단계의 완료·실패도 전체 작업 상태와 구분한다. 예를 들어 Speakeasy 결과가 저장된 뒤에도 Backend의 최종 처리 단계는 남아 있을 수 있다.
+
+현재 최종 처리 규칙은 `backend-review-first-v1`이다. 자동 정상 제안은 조건이 맞으면 `BENIGN`, 자동 악성 제안은 검토가 필요한 `MALICIOUS`로 저장한다. 심층 분석 대상은 누적 증거와 LLM 설명을 제공하고 `UNCERTAIN`으로 전문가에게 넘긴다. SHAP 실패나 도구 실행 실패를 악성 증거로 바꾸지 않는다. 최종 자동 재판정 정책은 팀 정책을 확정한 뒤 교체하는 연결 지점으로 남아 있다.
+
+## 6. 중복 업로드와 재시작
+
+동일 SHA-256을 새로 업로드하면 기본적으로 새 분석을 만든다. `duplicate_of`에는 같은 파일의 이전 분석 번호를 표시한다.
+
+네트워크 오류로 **같은 접수 요청을 재전송**할 때는 같은 `Idempotency-Key`를 보낸다. 같은 키에 파일 순서, SHA-256, 크기, 파일 이름, 단일·일괄 업로드 종류가 같으면 최초 접수 결과를 반환한다. 값이 다르면 `409`로 충돌을 알린다. 같은 키로 재전송할 때 파일 이름이나 일괄 업로드 순서를 바꾸지 않는다.
+
+작업 처리기가 중단되어도 DB에 저장된 초기·심층 분석 결과는 남는다. 점유 시간이 만료되면 다른 처리기가 이어받는다. 이전 처리기는 만료된 점유권으로 결과를 덮어쓸 수 없다. 정상적으로 저장된 초기 분석 단계는 심층 분석 결과를 기다리는 동안 다시 실행하지 않는다.
+
+DB 결과를 저장하기 전에 프로세스가 종료되면 해당 단계는 다시 실행될 수 있다. 외부 도구 호출 자체의 무조건적인 1회 실행을 보장하는 구조는 아니다.
+
+## 7. 심층 분석과 Speakeasy 연결
+
+실제 연결 전에 다음이 준비되어야 한다.
+
+1. 검토한 `feature/deep-analysis`의 서비스 코드와 필요한 Worker 코드가 현재 Python 환경에 병합 또는 설치되어 있어야 한다.
+2. `BACKEND_STORAGE_MODE=s3`로 설정한다. Backend와 Worker가 같은 S3 버킷·허용 접두사 및 PostgreSQL을 사용해야 한다.
+3. 해당 서비스의 실행 의존성, CAPA/FLOSS 설정, SQS 큐와 Worker 실행 환경을 준비한다.
+4. 심층 분석 서비스와 Worker가 요구하는 DB 테이블은 해당 모듈의 초기화 명령으로 준비한다. Backend `init-db`는 Backend 소유 테이블만 초기화한다.
+5. Backend `serve`, Backend `run`, Speakeasy Worker를 각각 실행한다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local check --deep
+```
+
+Backend는 저장된 초기 결과를 유지한 채 심층 분석 서비스에 같은 `analysis_id`와 `sha256`을 전달한다. CAPA/FLOSS 결과가 충분하지 않으면 심층 분석 서비스가 SQS에 Speakeasy 요청을 보낸다. Worker가 결과를 저장하면 후속 처리에서 그 결과를 다시 읽어 증거와 LLM 설명을 반영한다.
+
+`local` 저장 모드는 Backend의 초기 분석 개발에 사용할 수 있다. 별도 Speakeasy Worker와 원본을 공유하는 심층 분석 연결에는 S3 설정이 필요하다.
+
+Backend의 심층 분석 대기 기한은 `BACKEND_DEEP_WAIT_SECONDS`로 설정하며, 기본값은 **업로드 접수 시각부터 24시간**이다. 기한이 되었을 때 이미 저장된 심층 분석 완료·실패 결과가 있으면 그 결과를 반영한다. 아직 완료되지 않았다면 `DEEP_WAIT_TIMEOUT`으로 Backend 작업을 종료한다.
+
+이 시간 초과는 별도 Deep Analysis나 Speakeasy 작업을 취소하지 않는다. 운영자가 연결된 작업의 진행 상황과 결과를 확인하고 처리 상태를 정리해야 한다. 아래 원본 정리는 이런 외부 작업이 여전히 파일을 사용하는 경우 삭제를 보류한다.
+
+## 8. 전문가 검토와 원본 보관
+
+검토 의견은 작업이 `COMPLETED` 또는 `FAILED`가 된 후 저장할 수 있다. 조회한 `review_revision`을 `expected_revision`으로 전달한다. 그 사이 다른 사람이 검토를 저장했다면 `409`가 반환되므로 최신 결과를 다시 조회한다.
+
+`analyst_final_verdict=null`로 저장하면 판단 보류 의견이 남는다. 검토 이력은 추가 기록으로 보존하며 초기 모델 판정과 시스템 최종 제안을 덮어쓰지 않는다.
+
+원본 보관 기간의 기본값은 **분석 종료 후 24시간**이다. 다음 명령은 삭제 후보만 보여준다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local cleanup --limit 100
+```
+
+후보의 원본 파일을 실제로 삭제하려면 `--delete`를 명시한다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file docs/backend-api/.env.local cleanup --delete --limit 100
+```
+
+진행 중인 Backend 작업의 원본은 삭제 대상에 넣지 않는다. **S3에 저장된 심층 분석 대상**은 연결된 Deep Analysis·Speakeasy 작업도 확인한다. 해당 작업이 진행 중이거나 상태를 확인할 수 없으면 원본을 보존하고 `skipped_ids`에 표시한다. 따라서 Backend가 시간 초과로 종료되었더라도 외부 Worker가 사용하는 원본은 바로 삭제하지 않는다.
+
+응답의 `candidate_ids`는 보관 기간이 지난 종료 작업, `skipped_ids`는 외부 작업 상태 때문에 보류한 작업, `deleted_ids`는 실제 삭제한 작업 번호다. 파일 삭제 성공 후 DB에 삭제 시각을 기록하며 분석 결과와 검토 이력은 그대로 남는다. 보류한 작업은 외부 작업 상태를 확인한 뒤 다시 정리한다. 보관 정책을 자동 적용하려면 이 명령을 운영 환경의 작업 스케줄러에서 실행하도록 별도로 구성한다.
+
+## 9. 테스트
+
+외부 서비스 없이 Backend 테스트를 실행할 수 있다. 테스트의 모델·분석기·큐는 가짜 결과를 사용하며 실제 악성 파일을 실행하지 않는다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m pip install -r requirements-backend-dev.txt
+.\trust-triage-env\Scripts\python.exe -m pytest tests/backend_api -m "not postgres"
+```
+
+실제 PostgreSQL 검증은 별도 테스트 DB를 지정해야 실행된다. 테스트마다 임시 Schema를 생성하고 그 Schema만 정리한다.
+
+```powershell
+$env:BACKEND_TEST_DATABASE_URL = "host=127.0.0.1 port=5432 dbname=trust_triage_test user=backend_test"
+# 필요한 암호는 로컬 환경의 PGPASSWORD 또는 PostgreSQL 인증 설정으로 제공한다.
+.\trust-triage-env\Scripts\python.exe -m pytest tests/backend_api -m postgres
+```
+
+DB 테스트는 등록 원자성, idempotency, 동시 작업 점유, 재시도 기한, 단계별 결과 보존, 검토 수정 충돌, 원본 삭제 표시를 검사한다. 실제 AWS 및 팀 모델을 연결한 운영 검증과는 구분한다.
+
+## 10. Dashboard에서 사용할 API
+
+현재 구현의 상세 명세는 `/docs`와 `/openapi.json`에 있다.
+
+| 요청 | 용도 |
+|---|---|
+| `GET /health` | HTTP 서버가 동작하는지 확인 |
+| `GET /ready` | Backend DB 테이블 연결 확인 |
+| `POST /analyses` | PE 한 개 접수. multipart `file` 필드 사용 |
+| `POST /batches` | 여러 PE 접수. multipart `files` 필드를 파일 수만큼 반복 |
+| `GET /analyses` | 분석 목록. `limit`, `offset`, `status`, `sha256` 필터 지원 |
+| `GET /analyses/{analysis_id}` | 초기·심층·최종·검토 상태를 합친 화면용 결과 |
+| `GET /analyses/{analysis_id}/status` | 현재 진행 상황 |
+| `GET /analyses/{analysis_id}/triage` | 최초 모델 확률, 위험 신호, JRR 판정 |
+| `GET /analyses/{analysis_id}/xai` | LightGBM 원래 출력에 대한 SHAP 설명 |
+| `GET /analyses/{analysis_id}/deep-analysis` | CAPA/FLOSS/Speakeasy 결과, 증거, LLM 설명 |
+| `GET /batches/{batch_id}` | 일괄 작업별 진행·완료 수와 결과 |
+| `PATCH /analyses/{analysis_id}/verdict` | 전문가 검토 저장 |
+| `GET /analyses/{analysis_id}/reviews` | 전문가 검토 이력 |
+
+API 토큰을 설정했다면 요청에 `X-API-Key`를 넣는다. 검토 전용 토큰도 설정했다면 검토 저장 요청에 `X-Reviewer-Key`를 추가한다. localhost 외부에 공개하는 설정에는 API 토큰이 필수다. 아래의 토큰 표기는 실제 설정한 값으로 바꾼다. 로컬에서 토큰을 비워 둔 경우 해당 헤더를 생략할 수 있다.
+
+승인된 격리 환경의 정상 데모 파일을 접수하는 PowerShell 예시:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/analyses -H "X-API-Key: <API 토큰>" -H "Idempotency-Key: demo-request-001" -F "file=@C:/approved-demo/benign.exe"
+```
+
+응답의 `analysis_id`를 저장하고 진행 상태를 조회한다. `202`는 접수 성공이며 분석 완료 응답이 아니다.
+
+```powershell
+curl.exe "http://127.0.0.1:8000/analyses/<analysis_id>/status" -H "X-API-Key: <API 토큰>"
+curl.exe "http://127.0.0.1:8000/analyses/<analysis_id>" -H "X-API-Key: <API 토큰>"
+```
+
+검토 요청 본문 예시:
+
+```json
+{
+  "analyst_final_verdict": null,
+  "analyst_notes": "추가 근거를 확인한 후 확정하겠습니다.",
+  "reviewer_id": "analyst-1",
+  "expected_revision": 0
+}
+```
+
+`expected_revision`에는 전체 결과에서 조회한 `review_revision`을 넣는다. `0`은 아직 검토가 한 번도 저장되지 않았을 때의 예시다.
+
+API 명세만 JSON으로 내보낼 때는 DB·AWS에 연결하지 않는다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api export-openapi --output docs/backend-api/openapi.json
+```

@@ -34,6 +34,9 @@ streamlit>=1.33
 python-multipart>=0.0.9      # FastAPI 파일 업로드용
 pydantic>=2.6
 
+# Backend의 PostgreSQL/S3 연결 및 API 실행 의존성
+-r requirements-backend.txt
+
 # --- Alert 출력 ---
 requests>=2.31
 

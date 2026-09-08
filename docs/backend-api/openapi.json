@@ -1,0 +1,3642 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "TRUST-TRIAGE Backend API",
+    "description": "TRUST-TRIAGE Backend API는 Windows PE(`.exe`, `.dll`)를 접수하고 정적 모델 판정,\n위험 신호, 선택적 심층 분석 증거, 시스템 처리 제안 및 전문가 검토 이력을 제공합니다.\n파일 접수는 비동기 방식이며 `202 Accepted`는 작업 등록을 의미합니다.\n\n### 표준 처리 흐름\n\n| 단계 | API | 계약 |\n| --- | --- | --- |\n| 1. 생존 확인 | [GET /health](./docs#/01.%20%EC%84%9C%EB%B9%84%EC%8A%A4%20%EC%83%81%ED%83%9C/health_health_get) | API 프로세스의 생존 상태를 반환합니다. |\n| 2. 분석 접수 | [POST /analyses](./docs#/02.%20%EB%B6%84%EC%84%9D%20%EC%A0%91%EC%88%98/upload_analyses_post) | PE 파일을 등록하고 `analysis_id`를 반환합니다. |\n| 3. 상태 조회 | [GET /analyses/{analysis_id}/status](./docs#/03.%20%EB%B6%84%EC%84%9D%20%EC%A1%B0%ED%9A%8C/get_status_analyses__analysis_id__status_get) | 비동기 작업의 현재 상태와 단계를 반환합니다. |\n| 4. 결과 조회 | [GET /analyses/{analysis_id}](./docs#/03.%20%EB%B6%84%EC%84%9D%20%EC%A1%B0%ED%9A%8C/get_analysis_analyses__analysis_id__get) | 누적 분석 결과와 최종 처리 제안을 반환합니다. |\n\n### 상태 및 응답 의미\n\n`QUEUED`와 `RUNNING`은 비종료 상태이며, `COMPLETED`와 `FAILED`는 종료 상태입니다.\nHTTP `200`은 조회 요청의 성공을 나타내므로 응답의 `status`가 `FAILED`일 수 있습니다.\nSwagger UI의 `Example Value`는 스키마 예시이며, 실행된 요청의 실제 응답은\n`Server response → Response body`에 표시됩니다. 예시의 식별자, 확률 및 판정값은 실제 분석 결과가 아닙니다.\n\n**인증 정책:** 현재 배포 환경에서는 `X-API-Key` 검증이 비활성화되어 있습니다.\n접수 정보 저장에는 데이터베이스가 필요하고, 비동기 분석 수행에는 별도의 분석 처리기(`run`)가 필요합니다.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "01. 서비스 상태"
+        ],
+        "summary": "서비스 생존 상태 확인",
+        "description": "### 목적\n\nAPI 프로세스가 HTTP 요청을 수신하고 응답할 수 있는지 확인하는 liveness 엔드포인트입니다.\n\n### 요청 및 응답\n\n요청 매개변수와 인증이 없습니다. 정상 응답은 HTTP `200`과 `status: \"ok\"`를 반환합니다.\n\n### 점검 범위\n\n데이터베이스, 객체 저장소, 모델 및 분석 처리기의 상태는 검사하지 않습니다. 데이터베이스 준비 상태는 `GET /ready`에서 별도로 제공합니다.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {},
+                "examples": {
+                  "ok": {
+                    "summary": "서버가 응답하는 경우",
+                    "value": {
+                      "status": "ok",
+                      "service": "trust-triage-backend",
+                      "version": "0.1.0"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "01. 서비스 상태"
+        ],
+        "summary": "데이터베이스 준비 상태 확인",
+        "description": "### 목적\n\n분석 접수와 조회에 필요한 데이터베이스 연결 및 백엔드 테이블의 준비 상태를 확인합니다.\n\n### 요청 및 응답\n\n요청 매개변수는 없습니다. API 키가 활성화된 환경에서는 `X-API-Key`가 필요합니다.\nHTTP `200`과 `status: \"ready\"`는 연결 및 필수 테이블 검사가 성공했음을 의미합니다.\nHTTP `503`은 데이터베이스 설정, 접근 권한, 연결 또는 테이블 초기화 문제를 나타냅니다.\n\n### 점검 범위\n\n객체 저장소, 모델 로딩 및 분석 처리기 가동 여부는 이 엔드포인트의 점검 대상에 포함되지 않습니다.",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {},
+                "examples": {
+                  "ready": {
+                    "summary": "DB와 백엔드 테이블을 확인한 경우",
+                    "value": {
+                      "status": "ready"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/analyses": {
+      "post": {
+        "tags": [
+          "02. 분석 접수"
+        ],
+        "summary": "단일 PE 분석 접수",
+        "description": "### 목적\n\n단일 Windows PE 파일을 비동기 분석 작업으로 등록합니다. 지원 입력은 `.exe`와 `.dll`이며 서버는 업로드된 파일을 실행하지 않습니다.\n\n### 요청\n\n- Content-Type: `multipart/form-data`\n- 필수 필드: `file`\n- 파일 크기 상한: **50 MiB (52,428,800 bytes)**\n- `Idempotency-Key`: 네트워크 재시도 등 동일 요청의 중복 등록을 방지하는 선택 헤더\n\n### 응답\n\nHTTP `202 Accepted`는 작업이 등록되었음을 의미하며 분석 완료를 보장하지 않습니다.\n응답의 `analysis_id`는 상태 및 결과 조회에 사용하는 리소스 식별자이고, 초기 `status`는 일반적으로 `QUEUED`입니다.\n\n### 처리 특성\n\n동일한 SHA-256을 다시 접수하면 기본적으로 새 `analysis_id`가 생성되고 `duplicate_of`가 이전 분석을 참조합니다.\n동일한 `Idempotency-Key`와 동일한 파일의 재전송은 기존 접수 결과를 반환하며, 같은 키에 다른 파일을 연결하면 `409`가 반환됩니다.\n`QUEUED` 상태가 장시간 지속되는 경우 비동기 분석 처리기(`run`)의 가동 상태를 운영 측에서 점검해야 합니다.",
+        "operationId": "upload_analyses_post",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "선택적 멱등성 키. 동일한 업로드 요청을 재전송할 때 같은 값을 사용하면 중복 작업 생성을 방지합니다. 동일한 키에 다른 파일 집합을 사용하면 409가 반환됩니다.",
+              "title": "Idempotency-Key"
+            },
+            "description": "선택적 멱등성 키. 동일한 업로드 요청을 재전송할 때 같은 값을 사용하면 중복 작업 생성을 방지합니다. 동일한 키에 다른 파일 집합을 사용하면 409가 반환됩니다."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "비동기 분석 작업이 접수되었습니다. 응답 식별자로 상태와 결과를 조회할 수 있습니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisAccepted"
+                },
+                "examples": {
+                  "accepted": {
+                    "summary": "단일 분석 작업 접수",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "QUEUED",
+                      "duplicate_of": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "요청 본문을 해석할 수 없습니다. 경로, HTTP 메서드 또는 multipart 형식이 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_HTTP_REQUEST",
+                    "message": "요청 경로, 메서드 또는 multipart 형식이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "설정된 제한 시간 안에 파일 전송이 완료되지 않았습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UPLOAD_TIMEOUT",
+                    "message": "요청 본문 업로드 시간이 초과되었습니다.",
+                    "stage": "UPLOAD",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "현재 리소스 상태 또는 멱등성 키에 연결된 기존 요청과 충돌합니다. error.code가 충돌 유형을 구분합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "IDEMPOTENCY_CONFLICT",
+                    "message": "같은 접수 키에 다른 파일이 연결되어 있습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "파일 또는 전체 요청 본문이 서버의 업로드 제한을 초과했습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "파일이 허용 크기를 초과했습니다.",
+                    "stage": "UPLOAD",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "multipart/form-data 형식의 PE 파일 본문입니다. 바이너리를 JSON으로 인코딩하지 않습니다.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "분석 대상 Windows PE 파일입니다. 지원 확장자는 .exe와 .dll입니다."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "03. 분석 조회"
+        ],
+        "summary": "분석 목록 조회",
+        "description": "### 목적\n\n접수된 분석을 최신순으로 조회하며 상태 또는 파일 해시 기준 필터와 offset 기반 페이지네이션을 제공합니다.\n\n### 쿼리 매개변수\n\n| 이름 | 기본값 | 의미 |\n| --- | --- | --- |\n| `limit` | `20` | 페이지당 결과 수. 허용 범위는 1~100 |\n| `offset` | `0` | 결과 집합에서 건너뛸 항목 수 |\n| `status` | 없음 | `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` 중 하나로 필터링 |\n| `sha256` | 없음 | 64자리 소문자 SHA-256과 일치하는 파일로 필터링 |\n\n### 응답 및 페이지네이션\n\n`total_count`는 필터 조건에 일치하는 전체 건수이고 `analyses`는 현재 페이지의 결과입니다.\n다음 페이지의 offset은 현재 `offset + limit`으로 계산합니다. SHA-256은 파일 내용 식별자이며 작업 식별자인 `analysis_id`와 별개입니다.",
+        "operationId": "list_analyses_analyses_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "페이지당 분석 결과 수입니다. 기본값은 20이고 최댓값은 100입니다.",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "페이지당 분석 결과 수입니다. 기본값은 20이고 최댓값은 100입니다."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "결과 집합 시작점의 0 기반 offset입니다. 다음 페이지는 현재 offset + limit으로 계산합니다.",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "결과 집합 시작점의 0 기반 offset입니다. 다음 페이지는 현재 offset + limit으로 계산합니다."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "QUEUED",
+                    "RUNNING",
+                    "COMPLETED",
+                    "FAILED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "분석 수명주기 상태 필터입니다. 생략하면 모든 상태를 조회합니다.",
+              "title": "Status"
+            },
+            "description": "분석 수명주기 상태 필터입니다. 생략하면 모든 상태를 조회합니다."
+          },
+          {
+            "name": "sha256",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "파일 내용의 64자리 소문자 SHA-256 필터입니다. 생략하면 해시 조건을 적용하지 않습니다.",
+              "title": "Sha256"
+            },
+            "description": "파일 내용의 64자리 소문자 SHA-256 필터입니다. 생략하면 해시 조건을 적용하지 않습니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisListResponse"
+                },
+                "examples": {
+                  "one_result": {
+                    "summary": "저장된 분석 1건이 있는 경우",
+                    "value": {
+                      "total_count": 1,
+                      "limit": 20,
+                      "offset": 0,
+                      "analyses": [
+                        {
+                          "analysis_id": "analysis_example_001",
+                          "batch_id": null,
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "created_at": "2026-09-08T09:00:00Z",
+                          "status": "COMPLETED",
+                          "current_stage": "FINAL_ASSESSMENT",
+                          "updated_at": "2026-09-08T09:00:20Z",
+                          "completed_at": "2026-09-08T09:00:20Z",
+                          "error": null,
+                          "filename": "example.exe",
+                          "size_bytes": 14848,
+                          "duplicate_of": null,
+                          "prediction": {
+                            "lgbm_raw_probability": 0.04,
+                            "xgb_raw_probability": 0.08,
+                            "calibrated_probability": 0.05
+                          },
+                          "risk_signals": {
+                            "disagreement": 0.04,
+                            "ood_score": 0.12,
+                            "difficulty_score": 0.08
+                          },
+                          "initial_verdict": "AUTO_BENIGN",
+                          "route": "FINAL",
+                          "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                          "top_features": [
+                            {
+                              "feature_name": "general[0]",
+                              "feature_value": 14848.0,
+                              "shap_value": -0.42,
+                              "direction": "BENIGN"
+                            }
+                          ],
+                          "deep_analysis_status": {
+                            "capa": "NOT_REQUIRED",
+                            "floss": "NOT_REQUIRED",
+                            "speakeasy": "NOT_REQUIRED",
+                            "cape": "NOT_REQUIRED"
+                          },
+                          "evidence": [],
+                          "llm_summary": null,
+                          "final_verdict": "BENIGN",
+                          "final_assessment": {
+                            "final_verdict": "BENIGN",
+                            "disposition": "AUTO_ALLOW_RECOMMENDED",
+                            "requires_human_review": false,
+                            "reason": "설명용 예시: 초기 정상 경로이며 모델 설명도 완료되었습니다.",
+                            "policy_version": "backend-review-first-v1"
+                          },
+                          "analyst_final_verdict": null,
+                          "approval_status": "AUTO_POLICY",
+                          "review_revision": 0
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batches": {
+      "post": {
+        "tags": [
+          "04. 배치 분석"
+        ],
+        "summary": "배치 분석 접수",
+        "description": "### 목적\n\n여러 Windows PE 파일을 단일 배치로 등록하고 배치 수준의 추적 식별자를 발급합니다.\n\n### 요청\n\n- Content-Type: `multipart/form-data`\n- 필수 필드: 반복 가능한 `files`\n- 파일 수 상한: **10개**\n- 파일별 크기 상한: **50 MiB (52,428,800 bytes)**\n- `Idempotency-Key`: 동일한 파일 집합과 순서로 구성된 요청의 재전송을 식별하는 선택 헤더\n\n### 응답\n\nHTTP `202 Accepted`는 배치와 파일별 작업이 등록되었음을 의미합니다.\n`batch_id`는 배치 집계 조회에 사용하고, `analyses[].analysis_id`는 개별 파일 조회에 사용합니다.\n\n### 원자성 및 멱등성\n\n모든 파일이 입력 검증을 통과한 경우에만 배치가 등록됩니다. 하나 이상의 파일이 실패하면 배치 전체가 생성되지 않습니다.\n동일한 멱등성 키에 다른 파일 집합 또는 순서를 사용하면 `409`가 반환됩니다.",
+        "operationId": "upload_batch_batches_post",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "선택적 멱등성 키. 동일한 업로드 요청을 재전송할 때 같은 값을 사용하면 중복 작업 생성을 방지합니다. 동일한 키에 다른 파일 집합을 사용하면 409가 반환됩니다.",
+              "title": "Idempotency-Key"
+            },
+            "description": "선택적 멱등성 키. 동일한 업로드 요청을 재전송할 때 같은 값을 사용하면 중복 작업 생성을 방지합니다. 동일한 키에 다른 파일 집합을 사용하면 409가 반환됩니다."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "비동기 분석 작업이 접수되었습니다. 응답 식별자로 상태와 결과를 조회할 수 있습니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchAccepted"
+                },
+                "examples": {
+                  "accepted": {
+                    "summary": "묶음 접수 — batch_id와 analysis_id가 함께 반환됨",
+                    "value": {
+                      "batch_id": "batch_example_001",
+                      "total_count": 1,
+                      "analyses": [
+                        {
+                          "analysis_id": "analysis_example_001",
+                          "batch_id": "batch_example_001",
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "created_at": "2026-09-08T09:00:00Z",
+                          "status": "QUEUED",
+                          "duplicate_of": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "요청 본문을 해석할 수 없습니다. 경로, HTTP 메서드 또는 multipart 형식이 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_HTTP_REQUEST",
+                    "message": "요청 경로, 메서드 또는 multipart 형식이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "설정된 제한 시간 안에 파일 전송이 완료되지 않았습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UPLOAD_TIMEOUT",
+                    "message": "요청 본문 업로드 시간이 초과되었습니다.",
+                    "stage": "UPLOAD",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "현재 리소스 상태 또는 멱등성 키에 연결된 기존 요청과 충돌합니다. error.code가 충돌 유형을 구분합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "IDEMPOTENCY_CONFLICT",
+                    "message": "같은 접수 키에 다른 파일이 연결되어 있습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "파일 또는 전체 요청 본문이 서버의 업로드 제한을 초과했습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "파일이 허용 크기를 초과했습니다.",
+                    "stage": "UPLOAD",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "multipart/form-data 형식의 PE 파일 본문입니다. 바이너리를 JSON으로 인코딩하지 않습니다.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "files"
+                ],
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary",
+                      "description": "분석 대상 Windows PE 파일입니다. 지원 확장자는 .exe와 .dll입니다."
+                    },
+                    "description": "배치 분석 대상 파일 목록입니다. 파일 수와 파일별 용량은 서버 설정의 상한을 적용합니다."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}": {
+      "get": {
+        "tags": [
+          "03. 분석 조회"
+        ],
+        "summary": "종합 분석 결과 조회",
+        "description": "### 목적\n\n파일 메타데이터, 진행 상태, 초기 판정, 심층 분석 증거, 시스템 최종 제안 및 전문가 검토 상태를 하나의 응답으로 제공합니다.\n\n### 요청\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n\n### 주요 필드\n\n| 필드 | 의미 |\n| --- | --- |\n| `status` / `current_stage` | 전체 진행 상태 / 현재 단계 |\n| `initial_verdict` | 초기 JRR 판정 |\n| `final_verdict` / `final_assessment` | 시스템의 최종 판정과 처리 제안 |\n| `analyst_final_verdict` / `approval_status` | 전문가 의견과 승인 상태 |\n| `review_revision` | 전문가 검토의 낙관적 동시성 제어에 사용하는 현재 리비전 |\n\n### 일관성 특성\n\n분석 도중에도 조회할 수 있으며 아직 생성되지 않은 결과는 `null` 또는 빈 목록으로 반환됩니다.\n초기 모델 및 JRR 상세는 `/triage`, SHAP 설명은 `/xai`, 추가 도구 결과는 `/deep-analysis`에서 제공합니다.\n전문가 검토 등록은 전체 상태가 `COMPLETED` 또는 `FAILED`인 분석에 한해 허용됩니다.",
+        "operationId": "get_analysis_analyses__analysis_id__get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "examples": [
+                "analysis_example_001"
+              ],
+              "title": "Analysis Id"
+            },
+            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResponse"
+                },
+                "examples": {
+                  "completed": {
+                    "summary": "정상 처리 제안으로 완료된 설명용 예시",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "COMPLETED",
+                      "current_stage": "FINAL_ASSESSMENT",
+                      "updated_at": "2026-09-08T09:00:20Z",
+                      "completed_at": "2026-09-08T09:00:20Z",
+                      "error": null,
+                      "filename": "example.exe",
+                      "size_bytes": 14848,
+                      "duplicate_of": null,
+                      "prediction": {
+                        "lgbm_raw_probability": 0.04,
+                        "xgb_raw_probability": 0.08,
+                        "calibrated_probability": 0.05
+                      },
+                      "risk_signals": {
+                        "disagreement": 0.04,
+                        "ood_score": 0.12,
+                        "difficulty_score": 0.08
+                      },
+                      "initial_verdict": "AUTO_BENIGN",
+                      "route": "FINAL",
+                      "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                      "top_features": [
+                        {
+                          "feature_name": "general[0]",
+                          "feature_value": 14848.0,
+                          "shap_value": -0.42,
+                          "direction": "BENIGN"
+                        }
+                      ],
+                      "deep_analysis_status": {
+                        "capa": "NOT_REQUIRED",
+                        "floss": "NOT_REQUIRED",
+                        "speakeasy": "NOT_REQUIRED",
+                        "cape": "NOT_REQUIRED"
+                      },
+                      "evidence": [],
+                      "llm_summary": null,
+                      "final_verdict": "BENIGN",
+                      "final_assessment": {
+                        "final_verdict": "BENIGN",
+                        "disposition": "AUTO_ALLOW_RECOMMENDED",
+                        "requires_human_review": false,
+                        "reason": "설명용 예시: 초기 정상 경로이며 모델 설명도 완료되었습니다.",
+                        "policy_version": "backend-review-first-v1"
+                      },
+                      "analyst_final_verdict": null,
+                      "approval_status": "AUTO_POLICY",
+                      "review_revision": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ANALYSIS_NOT_FOUND",
+                    "message": "해당 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}/status": {
+      "get": {
+        "tags": [
+          "03. 분석 조회"
+        ],
+        "summary": "분석 진행 상태 조회",
+        "description": "### 목적\n\n비동기 분석 작업의 수명주기 상태, 현재 단계, 종료 시각 및 오류를 조회합니다.\n\n### 요청\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n\n### 응답 상태\n\n| `status` | 의미 | 클라이언트 처리 |\n| --- | --- | --- |\n| `QUEUED` | 처리 대기 | 폴링 지속 |\n| `RUNNING` | 분석 진행 | `current_stage` 기반 진행 표시 및 폴링 지속 |\n| `COMPLETED` | 분석 정상 종료 | 폴링 종료 및 종합 결과 조회 |\n| `FAILED` | 분석 실패 종료 | 폴링 종료 및 `error` 기반 장애 처리 |\n\n### 폴링 계약\n\n기본 권장 간격은 2~3초이며, 장기 실행 시 점진적 backoff를 적용할 수 있습니다.\n`COMPLETED`와 `FAILED`는 종료 상태입니다. HTTP `200`은 조회 요청의 성공을 나타내므로 응답의 분석 상태가 `FAILED`일 수 있습니다.",
+        "operationId": "get_status_analyses__analysis_id__status_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "examples": [
+                "analysis_example_001"
+              ],
+              "title": "Analysis Id"
+            },
+            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisProgress"
+                },
+                "examples": {
+                  "queued": {
+                    "summary": "대기 — 분석 처리기를 기다리는 중",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "QUEUED",
+                      "current_stage": "UPLOAD",
+                      "updated_at": "2026-09-08T09:00:00Z",
+                      "completed_at": null,
+                      "error": null
+                    }
+                  },
+                  "running": {
+                    "summary": "진행 — 초기 분석을 수행하는 중",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "RUNNING",
+                      "current_stage": "INITIAL_ANALYSIS",
+                      "updated_at": "2026-09-08T09:00:00Z",
+                      "completed_at": null,
+                      "error": null
+                    }
+                  },
+                  "completed": {
+                    "summary": "완료 — 종합 결과를 조회할 수 있음",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "COMPLETED",
+                      "current_stage": "FINAL_ASSESSMENT",
+                      "updated_at": "2026-09-08T09:00:20Z",
+                      "completed_at": "2026-09-08T09:00:20Z",
+                      "error": null
+                    }
+                  },
+                  "failed": {
+                    "summary": "분석 실패 — error에서 원인 확인",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "FAILED",
+                      "current_stage": "FINAL_ASSESSMENT",
+                      "updated_at": "2026-09-08T09:00:20Z",
+                      "completed_at": "2026-09-08T09:00:20Z",
+                      "error": {
+                        "code": "MODEL_NOT_CONFIGURED",
+                        "message": "초기 분석 모델 경로가 설정되지 않았습니다.",
+                        "stage": "MODEL_LOADING",
+                        "retryable": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ANALYSIS_NOT_FOUND",
+                    "message": "해당 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}/triage": {
+      "get": {
+        "tags": [
+          "03. 분석 조회"
+        ],
+        "summary": "초기 분류 및 JRR 결과 조회",
+        "description": "### 목적\n\n기본 모델의 원 확률, 보정 확률, 위험 신호 및 Joint Risk Router의 초기 경로 결정을 제공합니다.\n\n### 요청 및 가용성\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n초기 분석이 완료되기 전에는 확률과 판정 필드가 `null`일 수 있으며, 이 응답의 `status`는 초기 분석 단계의 상태를 나타냅니다.\n\n### 결과 해석\n\n`prediction`은 두 모델의 악성 확률과 보정 확률, `risk_signals`는 모델 불일치·OOD·분석 난이도입니다.\n확률 필드는 0~1 범위이며 `0.72`는 72%에 해당합니다. OOD 원점수는 확률이 아니므로 음수가 허용됩니다.\n\n`initial_verdict`와 `reason`은 초기 판단을, `route`는 `FINAL` 또는 `DEEP_ANALYSIS` 처리 경로를 나타냅니다.\n초기 판정 생성 이후에도 후속 단계가 진행될 수 있으므로 전체 수명주기 상태는 `/status` 응답을 기준으로 판단합니다.",
+        "operationId": "get_triage_analyses__analysis_id__triage_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "examples": [
+                "analysis_example_001"
+              ],
+              "title": "Analysis Id"
+            },
+            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriageResponse"
+                },
+                "examples": {
+                  "completed": {
+                    "summary": "초기 판정 완료 — 전체 분석 상태와 별개",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "COMPLETED",
+                      "prediction": {
+                        "lgbm_raw_probability": 0.04,
+                        "xgb_raw_probability": 0.08,
+                        "calibrated_probability": 0.05
+                      },
+                      "risk_signals": {
+                        "disagreement": 0.04,
+                        "ood_score": 0.12,
+                        "difficulty_score": 0.08
+                      },
+                      "initial_verdict": "AUTO_BENIGN",
+                      "route": "FINAL",
+                      "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                      "feature_metadata": {}
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ANALYSIS_NOT_FOUND",
+                    "message": "해당 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}/deep-analysis": {
+      "get": {
+        "tags": [
+          "03. 분석 조회"
+        ],
+        "summary": "심층 분석 상태 및 증거 조회",
+        "description": "### 목적\n\nJRR이 심층 분석 경로로 전달한 파일에 대해 CAPA, FLOSS, Speakeasy 등 도구별 실행 상태와 정규화된 증거를 제공합니다.\n\n### 요청 및 부작용\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n이 GET 요청은 저장된 결과만 조회하며 새로운 도구 실행을 시작하지 않습니다.\n\n### 응답 구조\n\n`deep_analysis_status`는 도구별 대기·진행·완료 상태입니다. `NOT_REQUIRED`는 해당 분석이 필요 없어 생략됐다는 뜻입니다.\n`tool_details`는 `TIMEOUT`을 포함한 원래 도구 상태와 버전을 보존합니다.\n`evidence`는 ATT&CK 기법 단위 집계, `evidence_details`는 출처와 신뢰도를 포함한 개별 증거를 제공합니다.\n`llm_summary`는 생성된 경우에만 제공되는 전문가 참고 설명입니다.\n\n### 실패 의미\n\n도구 실패 자체는 악성 증거로 처리되지 않습니다. 전체 분석 상태와 도구별 상태는 서로 다른 수명주기를 가질 수 있으므로 함께 해석해야 합니다.",
+        "operationId": "get_deep_analyses__analysis_id__deep_analysis_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "examples": [
+                "analysis_example_001"
+              ],
+              "title": "Analysis Id"
+            },
+            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeepAnalysisResponse"
+                },
+                "examples": {
+                  "not_required": {
+                    "summary": "심층 분석 대상이 아닌 경우",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "NOT_REQUIRED",
+                      "deep_analysis_status": {
+                        "capa": "NOT_REQUIRED",
+                        "floss": "NOT_REQUIRED",
+                        "speakeasy": "NOT_REQUIRED",
+                        "cape": "NOT_REQUIRED"
+                      },
+                      "tool_details": {},
+                      "capa": null,
+                      "floss": null,
+                      "speakeasy": null,
+                      "evidence": [],
+                      "evidence_details": [],
+                      "llm_summary": null,
+                      "llm_status": null,
+                      "error": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ANALYSIS_NOT_FOUND",
+                    "message": "해당 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}/xai": {
+      "get": {
+        "tags": [
+          "03. 분석 조회"
+        ],
+        "summary": "SHAP 기반 모델 설명 조회",
+        "description": "### 목적\n\nLightGBM 원출력에 대한 SHAP 기여도를 영향도가 큰 특성 순으로 제공합니다.\n\n### 요청 및 응답\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n`top_features`의 `feature_name`은 스키마 특성명, `feature_value`는 관측값, `shap_value`는 모델 원출력에 대한 기여도입니다.\n`direction`은 기여 방향을 `MALICIOUS`, `BENIGN`, `NEUTRAL`로 정규화합니다.\n\n### 해석 범위\n\nSHAP 값은 확률 또는 백분율이 아닙니다. 설명 대상은 `explained_output`에 명시된 LightGBM 원출력입니다.\n빈 `top_features`는 미완료 또는 설명 단계 실패와 함께 발생할 수 있으며 `status`와 `error`가 그 상태를 구분합니다.\n외부 분석 도구가 생성한 증거는 `/deep-analysis` 응답에 포함됩니다.",
+        "operationId": "get_xai_analyses__analysis_id__xai_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "examples": [
+                "analysis_example_001"
+              ],
+              "title": "Analysis Id"
+            },
+            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XAIResponse"
+                },
+                "examples": {
+                  "completed": {
+                    "summary": "모델 예측에 영향을 준 특성 예시",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "COMPLETED",
+                      "explained_output": "LIGHTGBM_RAW_OUTPUT",
+                      "top_features": [
+                        {
+                          "feature_name": "general[0]",
+                          "feature_value": 14848.0,
+                          "shap_value": -0.42,
+                          "direction": "BENIGN"
+                        }
+                      ],
+                      "error": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ANALYSIS_NOT_FOUND",
+                    "message": "해당 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "04. 배치 분석"
+        ],
+        "summary": "배치 처리 상태 및 결과 조회",
+        "description": "### 목적\n\n배치에 포함된 파일별 분석 상태와 종합 결과를 집계하여 제공합니다.\n\n### 요청\n\n경로 매개변수 `batch_id`에는 `POST /batches` 응답에서 반환된 배치 식별자를 사용합니다.\n`batch_id`는 개별 파일의 `analysis_id`와 별개의 네임스페이스를 가집니다.\n\n### 완료 조건\n\n`total_count`는 전체 파일 수, `finished_count`는 **COMPLETED와 FAILED를 합한 종료 파일 수**입니다.\n두 값이 같으면 모든 파일이 종료 상태에 도달한 것이며, 모든 분석이 성공했다는 의미는 아닙니다.\n\n`status_counts`는 상태별 파일 수를, `analyses`는 파일별 결과와 오류를 제공합니다.\n개별 분석의 상세 리소스는 각 항목의 `analysis_id`로 조회할 수 있습니다.",
+        "operationId": "get_batch_batches__batch_id__get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "배치 리소스 식별자. POST /batches 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다.",
+              "examples": [
+                "batch_example_001"
+              ],
+              "title": "Batch Id"
+            },
+            "description": "배치 리소스 식별자. POST /batches 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse"
+                },
+                "examples": {
+                  "completed": {
+                    "summary": "묶음의 모든 파일이 종료된 경우",
+                    "value": {
+                      "batch_id": "batch_example_001",
+                      "total_count": 1,
+                      "finished_count": 1,
+                      "status_counts": {
+                        "QUEUED": 0,
+                        "RUNNING": 0,
+                        "COMPLETED": 1,
+                        "FAILED": 0
+                      },
+                      "analyses": [
+                        {
+                          "analysis_id": "analysis_example_001",
+                          "batch_id": "batch_example_001",
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "created_at": "2026-09-08T09:00:00Z",
+                          "status": "COMPLETED",
+                          "current_stage": "FINAL_ASSESSMENT",
+                          "updated_at": "2026-09-08T09:00:20Z",
+                          "completed_at": "2026-09-08T09:00:20Z",
+                          "error": null,
+                          "filename": "example.exe",
+                          "size_bytes": 14848,
+                          "duplicate_of": null,
+                          "prediction": {
+                            "lgbm_raw_probability": 0.04,
+                            "xgb_raw_probability": 0.08,
+                            "calibrated_probability": 0.05
+                          },
+                          "risk_signals": {
+                            "disagreement": 0.04,
+                            "ood_score": 0.12,
+                            "difficulty_score": 0.08
+                          },
+                          "initial_verdict": "AUTO_BENIGN",
+                          "route": "FINAL",
+                          "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                          "top_features": [
+                            {
+                              "feature_name": "general[0]",
+                              "feature_value": 14848.0,
+                              "shap_value": -0.42,
+                              "direction": "BENIGN"
+                            }
+                          ],
+                          "deep_analysis_status": {
+                            "capa": "NOT_REQUIRED",
+                            "floss": "NOT_REQUIRED",
+                            "speakeasy": "NOT_REQUIRED",
+                            "cape": "NOT_REQUIRED"
+                          },
+                          "evidence": [],
+                          "llm_summary": null,
+                          "final_verdict": "BENIGN",
+                          "final_assessment": {
+                            "final_verdict": "BENIGN",
+                            "disposition": "AUTO_ALLOW_RECOMMENDED",
+                            "requires_human_review": false,
+                            "reason": "설명용 예시: 초기 정상 경로이며 모델 설명도 완료되었습니다.",
+                            "policy_version": "backend-review-first-v1"
+                          },
+                          "analyst_final_verdict": null,
+                          "approval_status": "AUTO_POLICY",
+                          "review_revision": 0
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "BATCH_NOT_FOUND",
+                    "message": "해당 일괄 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}/verdict": {
+      "patch": {
+        "tags": [
+          "05. 전문가 검토"
+        ],
+        "summary": "전문가 검토 결과 등록",
+        "description": "### 목적\n\n종료된 분석에 전문가 판정 또는 보류 의견을 추가합니다. 초기 판정과 시스템 최종 제안은 변경하지 않고 별도 필드로 보존합니다.\n\n### 선행 조건 및 인증\n\n분석의 전체 상태가 `COMPLETED` 또는 `FAILED`여야 합니다.\n검토 전용 키가 설정된 환경에서는 `X-Reviewer-Key`가 필요하며, API 키도 활성화된 경우 두 헤더가 모두 필요합니다.\n\n### 요청 필드\n\n| 필드 | 의미 |\n| --- | --- |\n| `analyst_final_verdict` | `BENIGN`, `MALICIOUS`, 또는 보류를 나타내는 `null` |\n| `analyst_notes` | 판정 또는 보류의 근거 |\n| `reviewer_id` | 감사 이력에 기록할 검토자 식별자 |\n| `expected_revision` | 종합 결과의 최신 `review_revision` 값 |\n\n### 동시성 및 응답\n\n`expected_revision`은 낙관적 동시성 제어에 사용됩니다. 다른 검토가 먼저 저장된 경우 `409 / REVIEW_CONFLICT`가 반환되며 최신 리비전으로 재검토해야 합니다.\n분석이 종료되지 않은 경우 `409 / ANALYSIS_NOT_FINISHED`가 반환됩니다. 성공 응답의 `revision`은 새 검토 리비전입니다.",
+        "operationId": "save_review_analyses__analysis_id__verdict_patch",
+        "security": [
+          {
+            "ApiKeyAuth": [],
+            "ReviewerKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "examples": [
+                "analysis_example_001"
+              ],
+              "title": "Analysis Id"
+            },
+            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRequest"
+              },
+              "examples": {
+                "hold": {
+                  "summary": "검토 보류",
+                  "value": {
+                    "analyst_final_verdict": null,
+                    "analyst_notes": "증거 간 상충이 해소되지 않아 추가 분석 결과 검토가 필요합니다.",
+                    "reviewer_id": "reviewer.example",
+                    "expected_revision": 0
+                  }
+                },
+                "benign": {
+                  "summary": "정상 판정",
+                  "value": {
+                    "analyst_final_verdict": "BENIGN",
+                    "analyst_notes": "정상 파일로 판단한 근거를 여기에 기록합니다.",
+                    "reviewer_id": "reviewer.example",
+                    "expected_revision": 0
+                  }
+                },
+                "malicious": {
+                  "summary": "악성 판정",
+                  "value": {
+                    "analyst_final_verdict": "MALICIOUS",
+                    "analyst_notes": "악성 파일로 판단한 근거를 여기에 기록합니다.",
+                    "reviewer_id": "reviewer.example",
+                    "expected_revision": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResponse"
+                },
+                "examples": {
+                  "held": {
+                    "summary": "전문가 검토 보류 등록",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "revision": 1,
+                      "analyst_final_verdict": null,
+                      "analyst_notes": "증거 간 상충이 해소되지 않아 추가 분석 결과 검토가 필요합니다.",
+                      "reviewer_id": "reviewer.example",
+                      "reviewed_at": "2026-09-08T09:05:00Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "전문가 검토 권한이 없습니다. 유효한 X-Reviewer-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "REVIEW_FORBIDDEN",
+                    "message": "유효한 X-Reviewer-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ANALYSIS_NOT_FOUND",
+                    "message": "해당 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "현재 리소스 상태 또는 멱등성 키에 연결된 기존 요청과 충돌합니다. error.code가 충돌 유형을 구분합니다.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "revision": {
+                    "summary": "다른 검토가 먼저 저장됨",
+                    "value": {
+                      "error": {
+                        "code": "REVIEW_CONFLICT",
+                        "message": "검토 리비전이 변경되었습니다. 최신 결과에 대한 재검토가 필요합니다.",
+                        "stage": null,
+                        "retryable": false
+                      }
+                    }
+                  },
+                  "running": {
+                    "summary": "분석이 아직 진행 중",
+                    "value": {
+                      "error": {
+                        "code": "ANALYSIS_NOT_FINISHED",
+                        "message": "분석이 종료된 뒤 검토할 수 있습니다.",
+                        "stage": null,
+                        "retryable": false
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}/reviews": {
+      "get": {
+        "tags": [
+          "05. 전문가 검토"
+        ],
+        "summary": "전문가 검토 이력 조회",
+        "description": "### 목적\n\n분석에 등록된 전문가 검토 기록을 리비전 순서의 감사 이력으로 제공합니다.\n\n### 요청\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n\n### 응답\n\n`items`에는 검토자의 식별자, 판정, 메모, 저장 시각, 수정 번호가 담깁니다.\n빈 `items`는 등록된 검토가 없음을 의미하며, 보류 의견의 판정값은 `null`입니다.\n현재 적용된 전문가 판정, 승인 상태 및 `review_revision`은 종합 분석 결과에서 제공합니다.",
+        "operationId": "list_reviews_analyses__analysis_id__reviews_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "examples": [
+                "analysis_example_001"
+              ],
+              "title": "Analysis Id"
+            },
+            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewHistoryResponse"
+                },
+                "examples": {
+                  "empty": {
+                    "summary": "아직 검토 의견이 없는 경우",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "items": []
+                    }
+                  },
+                  "reviewed": {
+                    "summary": "검토 이력 1건이 있는 경우",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "items": [
+                        {
+                          "analysis_id": "analysis_example_001",
+                          "revision": 1,
+                          "analyst_final_verdict": null,
+                          "analyst_notes": "증거 간 상충이 해소되지 않아 추가 분석 결과 검토가 필요합니다.",
+                          "reviewer_id": "reviewer.example",
+                          "reviewed_at": "2026-09-08T09:05:00Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "ANALYSIS_NOT_FOUND",
+                    "message": "해당 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AnalysisAccepted": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id",
+            "description": "접수한 파일 분석 1건의 번호입니다. 상태·결과·검토 조회에 사용합니다."
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id",
+            "description": "일괄 접수한 묶음의 번호입니다. 파일을 단독 접수했다면 null입니다."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "description": "파일 내용으로 계산한 64자리 해시입니다. analysis_id와 달리 같은 내용의 파일이면 같습니다."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "접수 시각입니다. Z는 UTC를 뜻하며 한국 시각은 UTC보다 9시간 빠릅니다."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus",
+            "description": "접수 시점의 진행 상태입니다. 접수 직후에는 보통 QUEUED입니다."
+          },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of",
+            "description": "같은 SHA-256의 이전 분석 번호. 이번 요청은 독립된 작업입니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "sha256",
+          "created_at",
+          "status"
+        ],
+        "title": "AnalysisAccepted",
+        "description": "분석 식별자와 접수 시점의 작업 상태를 제공하는 파일 접수 응답입니다."
+      },
+      "AnalysisListResponse": {
+        "properties": {
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "description": "검색 조건에 맞는 전체 분석 개수입니다."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "한 페이지에 요청한 개수입니다."
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "앞에서 건너뛴 개수입니다."
+          },
+          "analyses": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResponse"
+            },
+            "type": "array",
+            "title": "Analyses",
+            "description": "이번 페이지의 분석 목록입니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total_count",
+          "limit",
+          "offset",
+          "analyses"
+        ],
+        "title": "AnalysisListResponse"
+      },
+      "AnalysisProgress": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id",
+            "description": "접수한 파일 분석 1건의 번호입니다. 상태·결과·검토 조회에 사용합니다."
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id",
+            "description": "일괄 접수한 묶음의 번호입니다. 파일을 단독 접수했다면 null입니다."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "description": "파일 내용으로 계산한 64자리 해시입니다. analysis_id와 달리 같은 내용의 파일이면 같습니다."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "접수 시각입니다. Z는 UTC를 뜻하며 한국 시각은 UTC보다 9시간 빠릅니다."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus",
+            "description": "전체 분석의 대기·진행·완료·실패 상태입니다. 분석 완료 여부는 이 값으로 판단합니다."
+          },
+          "current_stage": {
+            "$ref": "#/components/schemas/CurrentStage",
+            "description": "현재 수행 중이거나 마지막으로 기록한 분석 단계입니다."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At",
+            "description": "분석 상태가 마지막으로 갱신된 시각입니다."
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At",
+            "description": "완료 또는 실패로 종료된 시각입니다. 진행 중이면 null입니다."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "분석 실패 정보입니다. code는 오류 유형을, message는 세부 원인을 나타냅니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "sha256",
+          "created_at",
+          "status",
+          "current_stage",
+          "updated_at"
+        ],
+        "title": "AnalysisProgress",
+        "description": "HTTP 요청 결과와 독립적으로 관리되는 전체 분석 수명주기 상태입니다."
+      },
+      "AnalysisResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id",
+            "description": "접수한 파일 분석 1건의 번호입니다. 상태·결과·검토 조회에 사용합니다."
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id",
+            "description": "일괄 접수한 묶음의 번호입니다. 파일을 단독 접수했다면 null입니다."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "description": "파일 내용으로 계산한 64자리 해시입니다. analysis_id와 달리 같은 내용의 파일이면 같습니다."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "접수 시각입니다. Z는 UTC를 뜻하며 한국 시각은 UTC보다 9시간 빠릅니다."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus",
+            "description": "전체 분석의 대기·진행·완료·실패 상태입니다. 분석 완료 여부는 이 값으로 판단합니다."
+          },
+          "current_stage": {
+            "$ref": "#/components/schemas/CurrentStage",
+            "description": "현재 수행 중이거나 마지막으로 기록한 분석 단계입니다."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At",
+            "description": "분석 상태가 마지막으로 갱신된 시각입니다."
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At",
+            "description": "완료 또는 실패로 종료된 시각입니다. 진행 중이면 null입니다."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorDetail"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "분석 실패 정보입니다. code는 오류 유형을, message는 세부 원인을 나타냅니다."
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename",
+            "description": "접수한 파일 이름입니다."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "description": "원본 파일 크기입니다. 단위는 bytes입니다."
+          },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of"
+          },
+          "prediction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Prediction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "risk_signals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskSignals"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initial_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InitialVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "FINAL",
+                  "DEEP_ANALYSIS"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "top_features": {
+            "items": {
+              "$ref": "#/components/schemas/TopFeature"
+            },
+            "type": "array",
+            "title": "Top Features"
+          },
+          "deep_analysis_status": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AnalysisStatus"
+            },
+            "type": "object",
+            "title": "Deep Analysis Status"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/TechniqueEvidence"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "llm_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LLMSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "final_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FinalVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "시스템의 최종 판정입니다. 아직 최종 처리 전이면 null입니다."
+          },
+          "final_assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FinalAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "시스템 판정의 이유, 처리 제안, 전문가 검토 필요 여부입니다."
+          },
+          "analyst_final_verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "BENIGN",
+                  "MALICIOUS"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analyst Final Verdict",
+            "description": "전문가가 확정한 판정입니다. 검토 전이거나 보류 중이면 null입니다."
+          },
+          "approval_status": {
+            "type": "string",
+            "enum": [
+              "AUTO_POLICY",
+              "PENDING",
+              "APPROVED",
+              "MODIFIED"
+            ],
+            "title": "Approval Status",
+            "description": "AUTO_POLICY: 자동 처리, PENDING: 검토 대기·보류, APPROVED: 시스템 판정과 일치, MODIFIED: 전문가가 다른 판정으로 수정."
+          },
+          "review_revision": {
+            "type": "integer",
+            "title": "Review Revision",
+            "description": "현재 검토 수정 번호입니다. 검토 저장 시 expected_revision에 그대로 넣습니다.",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "sha256",
+          "created_at",
+          "status",
+          "current_stage",
+          "updated_at",
+          "filename",
+          "size_bytes",
+          "deep_analysis_status",
+          "approval_status"
+        ],
+        "title": "AnalysisResponse",
+        "description": "파일 한 건의 종합 결과입니다. 초기·시스템·전문가 판정을 별도 필드로 보존합니다."
+      },
+      "AnalysisStatus": {
+        "type": "string",
+        "enum": [
+          "QUEUED",
+          "RUNNING",
+          "COMPLETED",
+          "FAILED",
+          "NOT_REQUIRED"
+        ],
+        "title": "AnalysisStatus",
+        "description": "QUEUED: 대기, RUNNING: 진행, COMPLETED: 완료, FAILED: 실패, NOT_REQUIRED: 해당 단계 생략."
+      },
+      "BatchAccepted": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Batch Id",
+            "description": "묶음 전체를 조회할 때 사용하는 번호입니다."
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "description": "이번 묶음으로 접수한 파일 수입니다."
+          },
+          "analyses": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisAccepted"
+            },
+            "type": "array",
+            "title": "Analyses",
+            "description": "파일별 접수 결과입니다. 각 항목에 고유한 analysis_id가 있습니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "batch_id",
+          "total_count",
+          "analyses"
+        ],
+        "title": "BatchAccepted"
+      },
+      "BatchResponse": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Batch Id",
+            "description": "조회한 묶음의 번호입니다."
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "description": "묶음에 포함된 전체 파일 수입니다."
+          },
+          "finished_count": {
+            "type": "integer",
+            "title": "Finished Count",
+            "description": "COMPLETED와 FAILED를 합한 종료 파일 수입니다. 성공한 파일 수와는 다를 수 있습니다."
+          },
+          "status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Status Counts",
+            "description": "QUEUED, RUNNING, COMPLETED, FAILED에 해당하는 파일 수입니다."
+          },
+          "analyses": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResponse"
+            },
+            "type": "array",
+            "title": "Analyses",
+            "description": "묶음 안의 파일별 종합 결과입니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "batch_id",
+          "total_count",
+          "finished_count",
+          "status_counts",
+          "analyses"
+        ],
+        "title": "BatchResponse"
+      },
+      "CurrentStage": {
+        "type": "string",
+        "enum": [
+          "UPLOAD",
+          "INITIAL_ANALYSIS",
+          "JRR",
+          "CAPA_FLOSS",
+          "SPEAKEASY",
+          "LLM",
+          "FINAL_ASSESSMENT"
+        ],
+        "title": "CurrentStage",
+        "description": "UPLOAD: 접수, INITIAL_ANALYSIS: 초기 분석, JRR: 경로 선택, CAPA_FLOSS/SPEAKEASY: 추가 분석, LLM: 증거 설명, FINAL_ASSESSMENT: 최종 처리."
+      },
+      "DeepAnalysisResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id",
+            "description": "접수한 파일 분석 1건의 번호입니다. 상태·결과·검토 조회에 사용합니다."
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id",
+            "description": "일괄 접수한 묶음의 번호입니다. 파일을 단독 접수했다면 null입니다."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "description": "파일 내용으로 계산한 64자리 해시입니다. analysis_id와 달리 같은 내용의 파일이면 같습니다."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "접수 시각입니다. Z는 UTC를 뜻하며 한국 시각은 UTC보다 9시간 빠릅니다."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus",
+            "description": "심층 분석의 종합 상태입니다. 전체 파일 분석 상태와 구분합니다."
+          },
+          "deep_analysis_status": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AnalysisStatus"
+            },
+            "type": "object",
+            "title": "Deep Analysis Status",
+            "description": "capa, floss, speakeasy, cape의 개별 상태입니다. 현재 cape는 NOT_REQUIRED입니다."
+          },
+          "tool_details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Tool Details",
+            "description": "원래 도구 상태와 버전. TIMEOUT 등을 완료 상태와 구분합니다."
+          },
+          "capa": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capa"
+          },
+          "floss": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Floss"
+          },
+          "speakeasy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speakeasy"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/TechniqueEvidence"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "description": "ATT&CK 기법별로 묶은 분석 증거입니다. SHAP 특성과는 별개입니다."
+          },
+          "evidence_details": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Evidence Details",
+            "description": "증거별 식별자, 출처, 신뢰도 등을 담은 상세 목록입니다."
+          },
+          "llm_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LLMSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "증거에 대한 LLM 참고 설명입니다. 아직 없거나 생성되지 않았다면 null입니다."
+          },
+          "llm_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "sha256",
+          "created_at",
+          "status",
+          "deep_analysis_status"
+        ],
+        "title": "DeepAnalysisResponse",
+        "description": "선택적으로 수행한 도구 분석 결과입니다. 필요한 단계의 결과만 채워집니다."
+      },
+      "ErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "오류 유형을 식별하는 안정적인 코드입니다. 로그 상관관계 분석과 장애 지원에 사용합니다."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "무엇이 잘못됐는지 설명하는 메시지입니다."
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage",
+            "description": "오류가 발생한 단계입니다. 특정 단계와 관련 없으면 null입니다."
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable",
+            "description": "서버가 일시적 오류로 분류했는지 나타냅니다. true여도 즉시 성공을 보장하지 않습니다.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorDetail"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse"
+      },
+      "FinalAssessment": {
+        "properties": {
+          "final_verdict": {
+            "$ref": "#/components/schemas/FinalVerdict",
+            "description": "시스템이 제안한 정상·악성·불확실 판정입니다."
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "AUTO_ALLOW_RECOMMENDED",
+              "ALERT_RECOMMENDED",
+              "MANUAL_REVIEW",
+              "ANALYSIS_FAILED"
+            ],
+            "title": "Disposition",
+            "description": "AUTO_ALLOW_RECOMMENDED: 정상 처리 제안, ALERT_RECOMMENDED: 악성 경보 제안, MANUAL_REVIEW: 전문가 검토, ANALYSIS_FAILED: 분석 실패."
+          },
+          "requires_human_review": {
+            "type": "boolean",
+            "title": "Requires Human Review",
+            "description": "true이면 전문가의 검토가 필요합니다."
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "이 판정과 처리 방식을 제안한 이유입니다."
+          },
+          "policy_version": {
+            "type": "string",
+            "title": "Policy Version",
+            "default": "backend-review-first-v1"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "final_verdict",
+          "disposition",
+          "requires_human_review",
+          "reason"
+        ],
+        "title": "FinalAssessment",
+        "description": "시스템이 제안한 최종 판정과 처리 방식입니다."
+      },
+      "FinalVerdict": {
+        "type": "string",
+        "enum": [
+          "BENIGN",
+          "MALICIOUS",
+          "UNCERTAIN"
+        ],
+        "title": "FinalVerdict",
+        "description": "시스템 최종 판정. BENIGN: 정상, MALICIOUS: 악성, UNCERTAIN: 확정하기 어려워 검토 필요."
+      },
+      "InitialVerdict": {
+        "type": "string",
+        "enum": [
+          "AUTO_BENIGN",
+          "AUTO_MALICIOUS",
+          "HIGH_RISK_UNCERTAIN"
+        ],
+        "title": "InitialVerdict",
+        "description": "JRR 초기 판정. AUTO_BENIGN: 정상 경로, AUTO_MALICIOUS: 악성 경보 경로, HIGH_RISK_UNCERTAIN: 심층 분석 필요."
+      },
+      "LLMSummary": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "suspicious_behaviors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Suspicious Behaviors"
+          },
+          "analyst_notes": {
+            "type": "string",
+            "title": "Analyst Notes",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "summary"
+        ],
+        "title": "LLMSummary"
+      },
+      "Prediction": {
+        "properties": {
+          "lgbm_raw_probability": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Lgbm Raw Probability",
+            "description": "LightGBM 모델이 산출한 보정 전 악성 확률입니다."
+          },
+          "xgb_raw_probability": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Xgb Raw Probability",
+            "description": "비교용 XGBoost 모델이 계산한 악성 확률입니다."
+          },
+          "calibrated_probability": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Calibrated Probability",
+            "description": "LightGBM의 확률을 Calibration으로 보정한 값입니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "lgbm_raw_probability",
+          "xgb_raw_probability",
+          "calibrated_probability"
+        ],
+        "title": "Prediction",
+        "description": "악성 확률은 0~1 범위입니다. 예를 들어 0.72는 72%입니다."
+      },
+      "ReviewHistoryResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "items"
+        ],
+        "title": "ReviewHistoryResponse",
+        "description": "검토 이력입니다. items가 비어 있으면 아직 저장한 의견이 없습니다."
+      },
+      "ReviewRequest": {
+        "properties": {
+          "analyst_final_verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "BENIGN",
+                  "MALICIOUS"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analyst Final Verdict",
+            "description": "null은 검토 보류이며 시스템 판정을 변경하지 않습니다."
+          },
+          "analyst_notes": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Analyst Notes",
+            "description": "판정 또는 보류의 근거입니다. 허용 길이는 최대 4,000자입니다.",
+            "default": ""
+          },
+          "reviewer_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.@-]+$",
+            "title": "Reviewer Id",
+            "description": "감사 이력에 기록되는 검토자 식별자입니다. 영문, 숫자 및 _ . @ - 문자를 허용하며 인증 키와는 별개입니다."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "description": "종합 결과에서 조회한 review_revision입니다. 서버의 최신 값과 다르면 409가 반환되며 저장되지 않습니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analyst_final_verdict",
+          "reviewer_id",
+          "expected_revision"
+        ],
+        "title": "ReviewRequest",
+        "description": "전문가 판정 또는 보류 의견을 등록하는 요청입니다."
+      },
+      "ReviewResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "analyst_final_verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "BENIGN",
+                  "MALICIOUS"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analyst Final Verdict"
+          },
+          "analyst_notes": {
+            "type": "string",
+            "title": "Analyst Notes"
+          },
+          "reviewer_id": {
+            "type": "string",
+            "title": "Reviewer Id"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "revision",
+          "analyst_final_verdict",
+          "analyst_notes",
+          "reviewer_id",
+          "reviewed_at"
+        ],
+        "title": "ReviewResponse",
+        "description": "저장된 전문가 의견입니다. revision은 저장 후 새로 발급한 수정 번호입니다."
+      },
+      "RiskSignals": {
+        "properties": {
+          "disagreement": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Disagreement",
+            "description": "두 모델의 악성 확률 차이입니다. 클수록 두 모델의 의견 차이가 큽니다."
+          },
+          "ood_score": {
+            "type": "number",
+            "title": "Ood Score",
+            "description": "Isolation Forest decision_function 원값. 음수도 정상적인 값입니다."
+          },
+          "difficulty_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Difficulty Score",
+            "description": "정적 Feature에서 계산한 분석 난이도 신호입니다. 악성 확률이 아닙니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "disagreement",
+          "ood_score",
+          "difficulty_score"
+        ],
+        "title": "RiskSignals",
+        "description": "추가 분석 필요성을 판단하는 신호입니다. 각 점수가 모두 악성 확률인 것은 아닙니다."
+      },
+      "TechniqueEvidence": {
+        "properties": {
+          "technique_id": {
+            "type": "string",
+            "title": "Technique Id"
+          },
+          "technique_name": {
+            "type": "string",
+            "title": "Technique Name"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "technique_id",
+          "technique_name",
+          "sources",
+          "summary"
+        ],
+        "title": "TechniqueEvidence"
+      },
+      "TopFeature": {
+        "properties": {
+          "feature_name": {
+            "type": "string",
+            "title": "Feature Name",
+            "description": "모델 입력 Schema에 정의된 특성 이름입니다."
+          },
+          "feature_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature Value",
+            "description": "원본 결측값은 null로 표시합니다."
+          },
+          "shap_value": {
+            "type": "number",
+            "title": "Shap Value",
+            "description": "이 특성이 모델 원출력에 미친 영향입니다. 확률이나 백분율이 아닙니다."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "MALICIOUS",
+              "BENIGN",
+              "NEUTRAL"
+            ],
+            "title": "Direction",
+            "description": "영향 방향입니다. MALICIOUS는 악성 쪽, BENIGN은 정상 쪽, NEUTRAL은 중립입니다."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "feature_name",
+          "shap_value",
+          "direction"
+        ],
+        "title": "TopFeature",
+        "description": "한 Feature가 LightGBM 원출력에 미친 SHAP 영향입니다."
+      },
+      "TriageResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id",
+            "description": "접수한 파일 분석 1건의 번호입니다. 상태·결과·검토 조회에 사용합니다."
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id",
+            "description": "일괄 접수한 묶음의 번호입니다. 파일을 단독 접수했다면 null입니다."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "description": "파일 내용으로 계산한 64자리 해시입니다. analysis_id와 달리 같은 내용의 파일이면 같습니다."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "접수 시각입니다. Z는 UTC를 뜻하며 한국 시각은 UTC보다 9시간 빠릅니다."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus",
+            "description": "초기 분석 단계의 상태입니다. 전체 분석 상태는 /status에서 확인합니다."
+          },
+          "prediction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Prediction"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "모델별 악성 확률과 보정 확률입니다."
+          },
+          "risk_signals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskSignals"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "모델 불일치, OOD, 분석 난이도입니다."
+          },
+          "initial_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InitialVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JRR의 초기 판정입니다. 전문가 최종 의견과 별도로 보존합니다."
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "FINAL",
+                  "DEEP_ANALYSIS"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route",
+            "description": "다음 경로입니다. FINAL은 최종 처리, DEEP_ANALYSIS는 심층 분석입니다."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "JRR이 이 경로를 선택한 이유입니다."
+          },
+          "feature_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "sha256",
+          "created_at",
+          "status"
+        ],
+        "title": "TriageResponse",
+        "description": "초기 모델·위험 신호·JRR 결과입니다. 초기 분석 전의 결과는 null입니다."
+      },
+      "XAIResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Analysis Id",
+            "description": "접수한 파일 분석 1건의 번호입니다. 상태·결과·검토 조회에 사용합니다."
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id",
+            "description": "일괄 접수한 묶음의 번호입니다. 파일을 단독 접수했다면 null입니다."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "description": "파일 내용으로 계산한 64자리 해시입니다. analysis_id와 달리 같은 내용의 파일이면 같습니다."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "접수 시각입니다. Z는 UTC를 뜻하며 한국 시각은 UTC보다 9시간 빠릅니다."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus",
+            "description": "SHAP 설명 단계의 상태입니다. 실패했으면 error를 함께 확인합니다."
+          },
+          "explained_output": {
+            "type": "string",
+            "const": "LIGHTGBM_RAW_OUTPUT",
+            "title": "Explained Output",
+            "description": "SHAP이 설명하는 대상입니다. 보정 확률이 아닌 LightGBM 원출력을 설명합니다.",
+            "default": "LIGHTGBM_RAW_OUTPUT"
+          },
+          "top_features": {
+            "items": {
+              "$ref": "#/components/schemas/TopFeature"
+            },
+            "type": "array",
+            "title": "Top Features",
+            "description": "영향이 큰 특성 목록입니다. 기본 최대 5개이며 서버 설정에 따라 달라집니다."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "sha256",
+          "created_at",
+          "status"
+        ],
+        "title": "XAIResponse",
+        "description": "LightGBM 원출력에 대한 SHAP 기반 특성 기여도입니다."
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "description": "API 접근 인증에 사용하는 X-API-Key 헤더입니다. 서버의 API 키 검증이 비활성화된 환경에서는 생략할 수 있습니다.",
+        "in": "header",
+        "name": "X-API-Key"
+      },
+      "ReviewerKeyAuth": {
+        "type": "apiKey",
+        "description": "전문가 검토 등록 권한을 검증하는 X-Reviewer-Key 헤더입니다. API 키 검증도 활성화된 환경에서는 두 인증 헤더가 모두 필요합니다.",
+        "in": "header",
+        "name": "X-Reviewer-Key"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "01. 서비스 상태",
+      "description": "서비스 프로세스의 생존 상태와 데이터베이스 준비 상태를 진단합니다."
+    },
+    {
+      "name": "02. 분석 접수",
+      "description": "단일 Windows PE 파일을 비동기 분석 작업으로 등록합니다."
+    },
+    {
+      "name": "03. 분석 조회",
+      "description": "분석 수명주기, 모델 판정, 위험 신호, 설명 및 심층 분석 증거를 조회합니다."
+    },
+    {
+      "name": "04. 배치 분석",
+      "description": "여러 PE 파일을 하나의 배치로 등록하고 파일별 처리 결과를 집계합니다."
+    },
+    {
+      "name": "05. 전문가 검토",
+      "description": "완료된 분석에 대한 전문가 판정과 근거를 기록하고 변경 이력을 조회합니다."
+    }
+  ]
+}
