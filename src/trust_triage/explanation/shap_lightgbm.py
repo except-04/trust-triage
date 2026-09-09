@@ -6,7 +6,7 @@ NumPy artifact로 학습 당시의 원본 index 순서를 독립적으로 검증
 
 모델 입력 순서(중요: artifact 자체에는 기록되지 않음)
 -------------------------------------------------------
-학습된 ``.pkl``(예: ``baseline_model_lightgbm_tuned_500_v4_9120.pkl``)에는
+학습된 ``.pkl``(현재 ``baseline_model_lightgbm_tuned_500_4way.pkl``)에는
 feature 이름이나 원본 index metadata가 없다. LightGBM sklearn wrapper가 booster에
 자동 생성한 열 이름(``Column_0`` .. ``Column_499``)만 저장하므로, 모델 파일만으로는
 각 열이 원본 500개 index 중 어디에 해당하는지 증명할 수 없다.
@@ -43,7 +43,7 @@ stack 없이 explainer만 사용하는 구성(예: 저장된 벡터를 읽는 �
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -73,6 +73,7 @@ class ShapContribution:
     """한 모델 입력 feature가 악성 raw score에 미친 기여도."""
 
     name: str
+    feature_value: float
     contribution: float
     direction: Direction
     group: str
@@ -80,9 +81,17 @@ class ShapContribution:
     source_index: int
 
     def to_dict(self) -> dict[str, str | float | int]:
-        """JSON으로 직렬화할 수 있는 dict를 반환한다."""
+        """공개 XAI 필드와 내부 추적 metadata를 JSON dict로 반환한다."""
 
-        return asdict(self)
+        return {
+            "feature_name": self.name,
+            "feature_value": self.feature_value,
+            "shap_value": self.contribution,
+            "direction": self.direction,
+            "group": self.group,
+            "model_input_index": self.model_input_index,
+            "source_index": self.source_index,
+        }
 
 
 class LightGBMShapExplainer:
@@ -168,7 +177,10 @@ class LightGBMShapExplainer:
         self._validate_raw_score_additivity(values, contributions, base_value)
 
         ranked = np.argsort(-np.abs(contributions), kind="stable")[:top_k]
-        return [self._build_contribution(int(index), contributions) for index in ranked]
+        return [
+            self._build_contribution(int(index), values, contributions)
+            for index in ranked
+        ]
 
     @staticmethod
     def _load_manifest(path: Path) -> dict[str, Any]:
@@ -356,6 +368,7 @@ class LightGBMShapExplainer:
     def _build_contribution(
         self,
         index: int,
+        model_input: np.ndarray,
         contributions: np.ndarray,
     ) -> ShapContribution:
         contribution = float(contributions[index])
@@ -367,6 +380,7 @@ class LightGBMShapExplainer:
             direction = "NEUTRAL"
         return ShapContribution(
             name=self.feature_names[index],
+            feature_value=float(model_input[0, index]),
             contribution=contribution,
             direction=direction,
             group=self.feature_groups[index],
