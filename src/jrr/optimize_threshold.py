@@ -156,9 +156,23 @@ def main():
         # mlflow.log_param("calib_tau_low", 0.60)
         # mlflow.log_param("calib_tau_diff", 5.0)
         # mlflow.log_metric("calib_review_yield_final", final_yield)
-        
-        print(f"\n[최종 성능] tau_low=0.60, tau_diff=5.0 적용 시 Review Yield: {final_yield:.2f}%")
-        print("[완료] 최적화 튜닝 결과를 확인하시고 최종 보고서에 반영하십시오.")
+        n_total = len(routes_final)
+        n_uncertain = np.sum(routes_final == "HIGH_RISK_UNCERTAIN")
+        pct_uncertain = n_uncertain / n_total * 100
+        auto_benign_mask = (routes_final == "AUTO_BENIGN")
+        leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
+        leaked_rate = leaked_malware / np.sum(y_true == 1) * 100
+
+        print("==================================================")
+        print("[완료] Calibration 기준 최적 라우팅 임계값 확정")
+        print(f" - [확정] 자동 차단 상한선(Upper Bound): {fixed_upper_bound:.6f} (FPR 0.1% 기준 고정)")
+        print(f" - [확정] 심층 분석 하한선(Lower Bound): 0.60 (Review Yield 최고점 방어)")
+        print(f" - [확정] 분석 난이도 임계값(Difficulty): 5.0 (심층 분석 병목 해소)")
+        print(f" - [확인] Calibration 심층분석 비율: {pct_uncertain:.2f}% ({n_uncertain:,}건)")
+        print(f" - [확인] Calibration 분석가 가성비(Yield): {final_yield:.2f}%")
+        print(f" - [확인] Calibration 악성 누락: {leaked_malware:,}건 ({leaked_rate:.2f}%)")
+        print("==================================================")
+        print("[안내] 위 산출된 하한선(tau_low=0.60, tau_difficulty=5.0)을 확인하시고, jrr_router.py로 Eval 최종 라우팅을 실행하세요.")
 
 if __name__ == "__main__":
     main()
