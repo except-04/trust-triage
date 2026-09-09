@@ -19,6 +19,7 @@ from trust_triage.backend_api.repository import (
     MAX_STATE_BYTES,
     PostgresAnalysisRepository,
 )
+from trust_triage.backend_api.schemas import BatchInputEntry, BatchInputReport
 
 from .fake_repository import MemoryAnalysisRepository
 
@@ -148,6 +149,205 @@ def test_registration_and_initial_state_survive_reconnect(case):
     assert restored.to_dict()["sha256"] == item["sha256"]
     assert repository.location_referenced(item["file_location"])
     assert not repository.location_referenced("s3://backend-test-only/unknown.bin")
+
+
+def _batch_report(inputs, *, archive=False):
+    return BatchInputReport(
+        source_type="ZIP" if archive else "MULTIPLE_FILES",
+        archive_filename="inputs.zip" if archive else None,
+        archive_sha256="a" * 64 if archive else None,
+        archive_size_bytes=1024 if archive else None,
+        entries=[
+            BatchInputEntry(
+                input_index=index,
+                status="ACCEPTED",
+                **{
+                    name: item[name]
+                    for name in ("filename", "analysis_id", "sha256", "size_bytes")
+                },
+            )
+            for index, item in enumerate(inputs)
+        ]
+        + [
+            BatchInputEntry(
+                input_index=len(inputs),
+                filename="ignored.txt",
+                status="SKIPPED",
+                sha256="b" * 64,
+                size_bytes=10,
+                reason_code="UNSUPPORTED_FILE_TYPE",
+                reason="Text is not supported",
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "count,archive", [(0, False), (0, True), (2, False), (2, True)]
+)
+def test_batch_receipt_survives_reconnect_and_replay_without_new_jobs(
+    case, count, archive
+):
+    inputs = [_input(index) for index in range(count)]
+    report = _batch_report(inputs, archive=archive)
+    first = case.repository.register_batch(
+        inputs,
+        batch_id="batch-original",
+        input_report=report,
+        idempotency_key="receipt-replay",
+    )
+    assert first.input_report == report
+    restored = case.reconnect().batch_record(first.batch_id)
+    assert restored == first
+    assert case.reconnect().get_batch(first.batch_id) == first.analyses
+    replacements = [
+        _input(index + 10, sha256=item["sha256"], filename=item["filename"])
+        for index, item in enumerate(inputs)
+    ]
+    replay = case.reconnect().register_batch(
+        replacements,
+        batch_id="batch-retry",
+        input_report=_batch_report(replacements, archive=archive),
+        idempotency_key="receipt-replay",
+    )
+    assert replay == first
+    assert case.reconnect().batch_record("batch-retry") is None
+    assert case.reconnect().list_analyses(
+        batch_id=first.batch_id, verdict="HIGH_RISK_UNCERTAIN"
+    ) == ([], 0)
+    changed = report.model_copy(deep=True)
+    if archive:
+        changed.archive_sha256 = "c" * 64
+    else:
+        changed.entries[-1].sha256 = "c" * 64
+    with pytest.raises(BackendError) as error:
+        case.repository.register_batch(
+            inputs,
+            batch_id="batch-changed",
+            input_report=changed,
+            idempotency_key="receipt-replay",
+        )
+    assert error.value.code == "IDEMPOTENCY_CONFLICT"
+    assert case.repository.batch_record("batch-changed") is None
+
+
+def test_input_report_validation_prevents_mismatched_analysis_registration(case):
+    inputs = [_input()]
+    report = _batch_report(inputs)
+    report.entries[0].sha256 = "d" * 64
+    with pytest.raises(ValueError, match="identity"):
+        case.repository.register_batch(
+            inputs, batch_id="invalid-report", input_report=report
+        )
+    assert case.repository.batch_record("invalid-report") is None
+    assert case.repository.list_analyses() == ([], 0)
+
+
+def test_postgres_priority_and_filters_apply_before_offset_with_independent_final(case):
+    repository = case.repository
+    inputs = [_input(index) for index in range(6)]
+    repository.register(inputs, batch_id="batch-filter")
+    # Different initial verdicts, including a later failure after a high-risk initial result.
+    for index, verdict in enumerate(
+        [
+            "HIGH_RISK_UNCERTAIN",
+            "AUTO_BENIGN",
+            "AUTO_MALICIOUS",
+            "HIGH_RISK_UNCERTAIN",
+            None,
+            "HIGH_RISK_UNCERTAIN",
+        ]
+    ):
+        if verdict is None:
+            continue
+        item = inputs[index]
+        claim = repository.claim(item["analysis_id"], 600)
+        repository.save_initial(
+            item["analysis_id"],
+            claim.token,
+            {**_initial(item), "initial_verdict": verdict},
+            False,
+        )
+        if index in {1, 3, 5}:
+            repository.finish(
+                item["analysis_id"],
+                claim.token,
+                {**_final(item), "final_verdict": "BENIGN"},
+                error={"code": "FAILED", "message": "test failure"}
+                if index == 5
+                else None,
+            )
+    repository.register([_input(99)], batch_id="other-batch")
+    ids = [item["analysis_id"] for item in inputs]
+    restored = case.reconnect()
+    all_rows, total = restored.list_analyses(
+        batch_id="batch-filter", sort="high_risk_first"
+    )
+    assert total == 6 and [row.analysis_id for row in all_rows] == [
+        ids[3],
+        ids[0],
+        ids[2],
+        ids[1],
+        ids[4],
+        ids[5],
+    ]
+    page, total = restored.list_analyses(
+        limit=1,
+        offset=1,
+        batch_id="batch-filter",
+        verdict="HIGH_RISK_UNCERTAIN",
+        sort="high_risk_first",
+    )
+    assert total == 3 and [row.analysis_id for row in page] == [ids[0]]
+    completed, total = restored.list_analyses(
+        status="COMPLETED", batch_id="batch-filter", verdict="HIGH_RISK_UNCERTAIN"
+    )
+    assert total == 1 and completed[0].analysis_id == ids[3]
+    assert completed[0].final_assessment["final_verdict"] == "BENIGN"
+    filtered, total = restored.list_analyses(
+        sha256=inputs[0]["sha256"],
+        batch_id="batch-filter",
+        verdict="HIGH_RISK_UNCERTAIN",
+    )
+    assert total == 1 and filtered[0].analysis_id == ids[0]
+    assert restored.list_analyses(offset=100, batch_id="batch-filter")[1] == 6
+    for sort, expected in (("input_order", ids), ("newest", list(reversed(ids)))):
+        assert [
+            row.analysis_id
+            for row in restored.list_analyses(batch_id="batch-filter", sort=sort)[0]
+        ] == expected
+    with pytest.raises(BackendError) as error:
+        restored.list_analyses(batch_id="missing")
+    assert error.value.code == "BATCH_NOT_FOUND"
+
+
+def test_additive_input_report_migration_preserves_previous_requests(case):
+    if not case.dsn:
+        pytest.skip("schema upgrade requires PostgreSQL")
+    old = case.repository.register(
+        [_input()], batch_id="batch-before-upgrade", idempotency_key="old-key"
+    )
+    with psycopg.connect(case.dsn) as connection:
+        connection.execute("ALTER TABLE api_batches DROP COLUMN input_report")
+    with pytest.raises(BackendError):
+        case.repository.check()
+    case.repository.initialize()
+    case.repository.initialize()
+    case.repository.check()
+    restored = case.reconnect().batch_record("batch-before-upgrade")
+    assert restored.analyses == old and restored.input_report is None
+    assert (
+        case.repository.register(
+            [_input(2, sha256=old[0].sha256, filename=old[0].filename)],
+            batch_id="new-id",
+            idempotency_key="old-key",
+        )
+        == old
+    )
+    result = case.repository.register_batch(
+        [], batch_id="empty-after-upgrade", input_report=_batch_report([])
+    )
+    assert case.reconnect().batch_record(result.batch_id) == result
 
 
 def test_batch_preserves_input_order_and_independent_new_duplicates(case):

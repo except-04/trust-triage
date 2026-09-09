@@ -109,6 +109,8 @@ backend-api/
 │  ├─ api_docs.py          ← Swagger 안내 문구와 예시
 │  ├─ schemas.py           ← 요청·응답 데이터 형식
 │  ├─ service.py           ← 접수·조회·검토 업무
+│  ├─ batch_inputs.py      ← 다중·ZIP 입력 검사와 제외 내역
+│  ├─ batch_results.py     ← 배치 요약·진행 상태·결과 정렬
 │  ├─ processor.py         ← 분석 단계 진행
 │  ├─ repository.py        ← DB 읽기·쓰기
 │  ├─ schema.sql           ← DB 테이블 설계
@@ -129,6 +131,7 @@ backend-api/
    ├─ api-reference.md      ← API 종류와 설명
    ├─ openapi.json          ← 자동 생성된 상세 API 명세
    ├─ verification.md      ← 기존 검증 기록
+   ├─ batch-verification.md ← 배치 요약·필터·ZIP 확장 검증
    └─ usage.md.bak          ← 이전 사용 안내 원문 백업
 ```
 
@@ -140,6 +143,8 @@ backend-api/
 | [api_docs.py](../../src/trust_triage/backend_api/api_docs.py) | Swagger 안에서 읽는 사용 설명서 | 첫 화면 안내, API 그룹·설명, 요청·응답 예시, 오류별 안내 |
 | [schemas.py](../../src/trust_triage/backend_api/schemas.py) | 주고받을 데이터의 이름·자료형·허용 값에 대한 약속 | `AnalysisResponse`, `ReviewRequest`, 판정·상태 Enum |
 | [service.py](../../src/trust_triage/backend_api/service.py) | 접수·조회·검토·원본 정리 같은 업무 처리 | `BackendService.submit()`, `get()`, `review()`, `cleanup()` |
+| [batch_inputs.py](../../src/trust_triage/backend_api/batch_inputs.py) | 다중·ZIP 입력을 제한된 임시 공간에서 검사 | `BatchInputHandler.prepare()`, PE 접수·SKIPPED 사유, ZIP 경로·용량·압축률 검사 |
+| [batch_results.py](../../src/trust_triage/backend_api/batch_results.py) | 접수 내역과 배치 전체 진행 현황을 응답으로 정리 | `accepted()`, `response()`, 초기 판정별 요약·고위험 우선 정렬 |
 | [processor.py](../../src/trust_triage/backend_api/processor.py) | 다음 분석 단계를 실행하는 담당 | `BackendProcessor.resume()`, `resume_ready()`, 최종 처리 규칙 `assess()` |
 | [repository.py](../../src/trust_triage/backend_api/repository.py) | DB에 읽고 쓰는 작업을 모은 파일 | `PostgresAnalysisRepository`, 등록·단계 저장·검토 이력 메서드 |
 | [schema.sql](../../src/trust_triage/backend_api/schema.sql) | DB 테이블을 만드는 설계도 | 테이블, 필드, 중복 방지·상태 제약 조건 |
@@ -299,11 +304,15 @@ PostgreSQL → repository → service → app.py
 
 | 테이블 | 저장하는 내용 |
 |---|---|
-| `api_batches` | 한 번의 접수 요청 정보. 단일·일괄 요청 구분과 `Idempotency-Key` 재전송 확인 정보도 보관 |
+| `api_batches` | 한 번의 접수 요청 정보. 단일·일괄 요청 구분, `Idempotency-Key`, ZIP 식별 정보와 파일별 접수·제외 내역(`input_report`) |
 | `api_analyses` | 파일별 분석 번호, SHA-256, 내부 원본 위치, 단계·상태, 초기·심층 결과, 최종 제안 |
 | `api_reviews` | 전문가별 검토 의견과 판정, 수정 번호, 검토 시각 |
 
 `api_batches`라는 이름이지만 단일 파일 접수도 요청 단위 기록을 남긴다. 여러 파일을 한 번에 올린 경우에만 공개 `batch_id`가 생긴다.
+
+다중 파일과 ZIP 입력에서는 `batch_inputs.py`가 파일을 검사한다. 지원하지 않는 파일은 `SKIPPED`와 사유를 남기고 `service.py`가 지원 PE의 분석 작업과 접수 내역을 같은 DB 트랜잭션에 등록한다. 모두 제외돼도 `api_batches`에는 접수 내역이 남고 `api_analyses`는 추가되지 않는다. ZIP 자체는 영구 보관하지 않는다.
+
+`batch_results.py`는 전체 배치의 진행 상태·초기 판정 요약을 만들고 고위험 결과를 먼저 표시한다. 필터·페이지 API는 `repository.py`에서 전체 결과를 필터링·정렬한 다음 페이지를 가져온다. 원본 접수 내역 순서는 결과 정렬과 별도로 유지한다. 현재 Streamlit은 Mock 화면이므로 실제 화면 연결 시 이 응답을 사용한다.
 
 원본 파일은 로컬 저장소 또는 S3에 있고, DB에는 그 위치를 보관한다. 화면용 응답은 `views.py`가 필요한 필드를 골라 만들며 내부 원본 저장 위치는 공개 응답에서 제외한다.
 
@@ -406,7 +415,7 @@ Copy-Item .env.backend.example .env
 
 | 명령 | 역할 |
 |---|---|
-| `init-db` | 준비된 PostgreSQL DB 안에 백엔드 테이블 생성 |
+| `init-db` | 준비된 PostgreSQL DB 안에 백엔드 테이블 생성 또는 추가 필드 갱신 |
 | `check` | DB·저장소 연결 확인. `--analysis`는 모델 파일·의존성 존재, `--deep`은 심층 환경도 확인 |
 | `serve` | HTTP 서버 실행 |
 | `run` | 분석 처리기 실행 |
@@ -414,6 +423,14 @@ Copy-Item .env.backend.example .env
 | `export-openapi` | DB 연결 없이 API 명세 JSON 생성 |
 
 `--env-file`을 생략하면 `.env`를 자동으로 읽지 않는다. `usage.md.bak`은 이전 안내를 그대로 보관한 백업이므로 예전 설정 파일 경로를 참조하는 문장이 남아 있다.
+
+배치 확장을 적용한 기존 DB에는 API 서버를 갱신하기 전에 아래 명령을 실행한다. `input_report` 열과 배치·초기 판정 조회용 인덱스를 추가하며 기존 접수·분석·검토 기록은 보존한다. 이전 배치는 기존 분석 목록에서 접수 내역을 구성해 조회한다.
+
+```powershell
+.\trust-triage-env\Scripts\python.exe -m trust_triage.backend_api --env-file .env init-db
+```
+
+ZIP 제한은 [.env.backend.example](../../.env.backend.example)의 `BACKEND_MAX_ZIP_*`, `BACKEND_ZIP_TIMEOUT_SECONDS`를 사용한다. Python 표준 `zipfile`을 사용하므로 새 설치 의존성은 없다.
 
 | 바꾸려는 내용 | 먼저 볼 파일 |
 |---|---|

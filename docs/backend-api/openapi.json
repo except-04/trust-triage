@@ -368,7 +368,7 @@
           "03. 분석 조회"
         ],
         "summary": "분석 목록 조회",
-        "description": "### 목적\n\n접수된 분석을 최신순으로 조회하며 상태 또는 파일 해시 기준 필터와 offset 기반 페이지네이션을 제공합니다.\n\n### 쿼리 매개변수\n\n| 이름 | 기본값 | 의미 |\n| --- | --- | --- |\n| `limit` | `20` | 페이지당 결과 수. 허용 범위는 1~100 |\n| `offset` | `0` | 결과 집합에서 건너뛸 항목 수 |\n| `status` | 없음 | `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` 중 하나로 필터링 |\n| `sha256` | 없음 | 64자리 소문자 SHA-256과 일치하는 파일로 필터링 |\n\n### 응답 및 페이지네이션\n\n`total_count`는 필터 조건에 일치하는 전체 건수이고 `analyses`는 현재 페이지의 결과입니다.\n다음 페이지의 offset은 현재 `offset + limit`으로 계산합니다. SHA-256은 파일 내용 식별자이며 작업 식별자인 `analysis_id`와 별개입니다.",
+        "description": "### 목적\n\n접수된 분석을 고위험 우선으로 조회하며 상태·초기 판정·배치·파일 해시 필터와 offset 기반 페이지네이션을 제공합니다.\n\n### 쿼리 매개변수\n\n| 이름 | 기본값 | 의미 |\n| --- | --- | --- |\n| `limit` | `20` | 페이지당 결과 수. 허용 범위는 1~100 |\n| `offset` | `0` | 결과 집합에서 건너뛸 항목 수 |\n| `status` | 없음 | `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` 중 하나로 필터링 |\n| `sha256` | 없음 | 64자리 소문자 SHA-256과 일치하는 파일로 필터링 |\n| `verdict` | 없음 | 초기 JRR 판정. `HIGH_RISK_UNCERTAIN`, `AUTO_MALICIOUS`, `AUTO_BENIGN` |\n| `batch_id` | 없음 | 특정 배치에 속한 분석만 조회 |\n| `sort` | `high_risk_first` | 고위험 우선. `newest`를 지정하면 최신 접수순 |\n\n### 응답 및 페이지네이션\n\n`total_count`는 필터 조건에 일치하는 전체 건수이고 `analyses`는 현재 페이지의 결과입니다.\n다음 페이지의 offset은 현재 `offset + limit`으로 계산합니다. SHA-256은 파일 내용 식별자이며 작업 식별자인 `analysis_id`와 별개입니다.\n필터와 정렬은 전체 검색 결과에 적용한 다음 페이지를 자릅니다.\n고위험 우선 순서는 `HIGH_RISK_UNCERTAIN` → `AUTO_MALICIOUS` → `AUTO_BENIGN` → 미판정 → `FAILED`입니다.\n동순위는 최신 접수순입니다. 이 순서는 조회 표시용이며 분석 실행 순서를 변경하지 않습니다.\n`verdict`는 초기 판정이므로 후속 분석 결과나 전문가 판정이 바뀌어도 해당 초기 판정으로 조회됩니다.",
         "operationId": "list_analyses_analyses_get",
         "security": [
           {
@@ -377,6 +377,41 @@
         ],
         "parameters": [
           {
+            "name": "batch_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "특정 배치에 포함된 결과만 조회합니다.",
+              "title": "Batch Id"
+            },
+            "description": "특정 배치에 포함된 결과만 조회합니다."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "high_risk_first",
+                "newest"
+              ],
+              "type": "string",
+              "description": "기본 high_risk_first는 고위험 우선이며 실패는 마지막입니다. newest는 최신 접수순입니다. 실행 순서는 바꾸지 않습니다.",
+              "default": "high_risk_first",
+              "title": "Sort"
+            },
+            "description": "기본 high_risk_first는 고위험 우선이며 실패는 마지막입니다. newest는 최신 접수순입니다. 실행 순서는 바꾸지 않습니다."
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -384,11 +419,11 @@
               "type": "integer",
               "maximum": 100,
               "minimum": 1,
-              "description": "페이지당 분석 결과 수입니다. 기본값은 20이고 최댓값은 100입니다.",
+              "description": "페이지당 결과 수입니다. 기본 20, 최대 100입니다.",
               "default": 20,
               "title": "Limit"
             },
-            "description": "페이지당 분석 결과 수입니다. 기본값은 20이고 최댓값은 100입니다."
+            "description": "페이지당 결과 수입니다. 기본 20, 최대 100입니다."
           },
           {
             "name": "offset",
@@ -397,11 +432,11 @@
             "schema": {
               "type": "integer",
               "minimum": 0,
-              "description": "결과 집합 시작점의 0 기반 offset입니다. 다음 페이지는 현재 offset + limit으로 계산합니다.",
+              "description": "앞에서 건너뛸 결과 수입니다. 다음 페이지는 offset + limit입니다.",
               "default": 0,
               "title": "Offset"
             },
-            "description": "결과 집합 시작점의 0 기반 offset입니다. 다음 페이지는 현재 offset + limit으로 계산합니다."
+            "description": "앞에서 건너뛸 결과 수입니다. 다음 페이지는 offset + limit입니다."
           },
           {
             "name": "status",
@@ -422,10 +457,10 @@
                   "type": "null"
                 }
               ],
-              "description": "분석 수명주기 상태 필터입니다. 생략하면 모든 상태를 조회합니다.",
+              "description": "분석 진행 상태 필터입니다. 생략하면 모든 상태를 조회합니다.",
               "title": "Status"
             },
-            "description": "분석 수명주기 상태 필터입니다. 생략하면 모든 상태를 조회합니다."
+            "description": "분석 진행 상태 필터입니다. 생략하면 모든 상태를 조회합니다."
           },
           {
             "name": "sha256",
@@ -441,10 +476,28 @@
                   "type": "null"
                 }
               ],
-              "description": "파일 내용의 64자리 소문자 SHA-256 필터입니다. 생략하면 해시 조건을 적용하지 않습니다.",
+              "description": "64자리 소문자 SHA-256 필터입니다.",
               "title": "Sha256"
             },
-            "description": "파일 내용의 64자리 소문자 SHA-256 필터입니다. 생략하면 해시 조건을 적용하지 않습니다."
+            "description": "64자리 소문자 SHA-256 필터입니다."
+          },
+          {
+            "name": "verdict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/InitialVerdict"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JRR 초기 판정 필터입니다. 최종 시스템 판정·전문가 판정과 별개입니다.",
+              "title": "Verdict"
+            },
+            "description": "JRR 초기 판정 필터입니다. 최종 시스템 판정·전문가 판정과 별개입니다."
           }
         ],
         "responses": {
@@ -559,6 +612,24 @@
               }
             }
           },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "BATCH_NOT_FOUND",
+                    "message": "해당 일괄 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
             "content": {
@@ -604,7 +675,7 @@
           "04. 배치 분석"
         ],
         "summary": "배치 분석 접수",
-        "description": "### 목적\n\n여러 Windows PE 파일을 단일 배치로 등록하고 배치 수준의 추적 식별자를 발급합니다.\n\n### 요청\n\n- Content-Type: `multipart/form-data`\n- 필수 필드: 반복 가능한 `files`\n- 파일 수 상한: **10개**\n- 파일별 크기 상한: **50 MiB (52,428,800 bytes)**\n- `Idempotency-Key`: 동일한 파일 집합과 순서로 구성된 요청의 재전송을 식별하는 선택 헤더\n\n### 응답\n\nHTTP `202 Accepted`는 배치와 파일별 작업이 등록되었음을 의미합니다.\n`batch_id`는 배치 집계 조회에 사용하고, `analyses[].analysis_id`는 개별 파일 조회에 사용합니다.\n\n### 원자성 및 멱등성\n\n모든 파일이 입력 검증을 통과한 경우에만 배치가 등록됩니다. 하나 이상의 파일이 실패하면 배치 전체가 생성되지 않습니다.\n동일한 멱등성 키에 다른 파일 집합 또는 순서를 사용하면 `409`가 반환됩니다.",
+        "description": "### 목적\n\n여러 Windows PE 파일을 단일 배치로 등록하고 배치 수준의 추적 식별자를 발급합니다.\n\n### 요청\n\n- Content-Type: `multipart/form-data`\n- 필수 필드: 반복 가능한 `files`\n- 파일 수 상한: **10개**\n- 파일별 크기 상한: **50 MiB (52,428,800 bytes)**\n- `Idempotency-Key`: 동일한 파일 집합과 순서로 구성된 요청의 재전송을 식별하는 선택 헤더\n\n### 응답\n\nHTTP `202 Accepted`는 배치와 파일별 작업이 등록되었음을 의미합니다.\n`batch_id`는 배치 집계 조회에 사용하고, `analyses[].analysis_id`는 개별 파일 조회에 사용합니다.\n\n### 입력별 처리 및 멱등성\n\n지원하지 않는 확장자·잘못된 PE·미지원 PE 형식은 `entries`에 `SKIPPED`와 사유를 기록하고 유효한 PE만 작업으로 등록합니다.\n`input_count = accepted_count + skipped_count`이고 `total_count`는 등록한 분석 수(`accepted_count`)입니다.\n모두 제외된 입력도 배치 접수 내역을 보존하며 `analyses`는 빈 목록입니다. 접수 제한 초과나 저장소·DB 장애는 요청 전체 오류입니다.\n접수 후 개별 분석 실패는 다른 파일의 분석을 중단하지 않습니다.\n동일한 멱등성 키에 다른 파일 집합 또는 순서를 사용하면 `409`가 반환됩니다.",
         "operationId": "upload_batch_batches_post",
         "security": [
           {
@@ -646,6 +717,22 @@
                     "value": {
                       "batch_id": "batch_example_001",
                       "total_count": 1,
+                      "input_count": 1,
+                      "accepted_count": 1,
+                      "skipped_count": 0,
+                      "archive_file_count": null,
+                      "entries": [
+                        {
+                          "input_index": 0,
+                          "filename": "example.exe",
+                          "status": "ACCEPTED",
+                          "analysis_id": "analysis_example_001",
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "size_bytes": 14848,
+                          "reason_code": null,
+                          "reason": null
+                        }
+                      ],
                       "analyses": [
                         {
                           "analysis_id": "analysis_example_001",
@@ -833,6 +920,263 @@
         }
       }
     },
+    "/batches/zip": {
+      "post": {
+        "tags": [
+          "04. 배치 분석"
+        ],
+        "summary": "ZIP 배치 분석 접수",
+        "description": "### 목적과 요청\n\n`multipart/form-data`의 `file` 필드로 ZIP 한 개를 접수합니다. ZIP 안의 `.exe`와 `.dll`을 기존과 같은 분석 처리기로 전달합니다.\n`Idempotency-Key`를 지정하면 동일한 ZIP 바이트와 이름의 재전송은 기존 배치와 접수 내역을 반환합니다.\n\n### 입력 제한\n\n- ZIP 크기: 52,428,800 bytes\n- 전체 ZIP 항목: 최대 100개(폴더 포함), 분석 대상 PE: 최대 10개\n- 파일별 PE 크기: 50 MiB (52,428,800 bytes), 선언된 해제 후 총 크기: 209,715,200 bytes\n- 항목별 최대 압축률: 200, ZIP 처리 제한 시간: 60초\n\nSTORED와 DEFLATE를 지원합니다. 중첩 ZIP, 다른 확장자, 암호화 파일, 미지원 압축·패치 데이터 기능, 크기 초과 PE 및 잘못된 PE는 `SKIPPED`로 기록합니다.\n빈 ZIP, 손상된 PE 항목의 압축 데이터·체크섬, 위험 경로·링크, 압축률·총량·항목 수 제한 위반은 전체 접수를 거절합니다.\n분할 ZIP과 ZIP64는 지원하지 않습니다. 지원하지 않는 항목의 본문은 해제하거나 분석하지 않습니다.\n\n### 응답\n\n`batch_id`, `input_count`, `accepted_count`, `skipped_count`, `archive_file_count`와 파일별 `entries`를 반환합니다.\n`input_index`는 ZIP 항목 순서이며 동명 파일을 구분합니다. 폴더는 파일 수와 `entries`에서 제외됩니다.\n`entries[].analysis_id`는 접수된 파일에만 발급하고, `SKIPPED`는 분석 실패 수에 포함하지 않습니다.\n모두 제외돼도 배치는 저장되며 등록된 분석 수가 0이므로 조회 상태는 `COMPLETED`입니다.",
+        "operationId": "upload_zip_batches_zip_post",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "선택적 멱등성 키. 동일한 업로드 요청을 재전송할 때 같은 값을 사용하면 중복 작업 생성을 방지합니다. 동일한 키에 다른 파일 집합을 사용하면 409가 반환됩니다.",
+              "title": "Idempotency-Key"
+            },
+            "description": "선택적 멱등성 키. 동일한 업로드 요청을 재전송할 때 같은 값을 사용하면 중복 작업 생성을 방지합니다. 동일한 키에 다른 파일 집합을 사용하면 409가 반환됩니다."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "비동기 분석 작업이 접수되었습니다. 응답 식별자로 상태와 결과를 조회할 수 있습니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchAccepted"
+                },
+                "examples": {
+                  "mixed": {
+                    "summary": "ZIP의 PE 1건 접수, 텍스트 1건 제외",
+                    "value": {
+                      "batch_id": "batch_example_001",
+                      "total_count": 1,
+                      "input_count": 2,
+                      "accepted_count": 1,
+                      "skipped_count": 1,
+                      "archive_file_count": 2,
+                      "entries": [
+                        {
+                          "input_index": 0,
+                          "filename": "example.exe",
+                          "status": "ACCEPTED",
+                          "analysis_id": "analysis_example_001",
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "size_bytes": 14848,
+                          "reason_code": null,
+                          "reason": null
+                        },
+                        {
+                          "input_index": 1,
+                          "filename": "readme.txt",
+                          "status": "SKIPPED",
+                          "analysis_id": null,
+                          "sha256": null,
+                          "size_bytes": 30,
+                          "reason_code": "UNSUPPORTED_FILE_TYPE",
+                          "reason": ".exe와 .dll 파일만 분석합니다."
+                        }
+                      ],
+                      "analyses": [
+                        {
+                          "analysis_id": "analysis_example_001",
+                          "batch_id": "batch_example_001",
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "created_at": "2026-09-08T09:00:00Z",
+                          "status": "QUEUED",
+                          "duplicate_of": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "요청 본문을 해석할 수 없습니다. 경로, HTTP 메서드 또는 multipart 형식이 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_HTTP_REQUEST",
+                    "message": "요청 경로, 메서드 또는 multipart 형식이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "설정된 제한 시간 안에 파일 전송이 완료되지 않았습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UPLOAD_TIMEOUT",
+                    "message": "요청 본문 업로드 시간이 초과되었습니다.",
+                    "stage": "UPLOAD",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "현재 리소스 상태 또는 멱등성 키에 연결된 기존 요청과 충돌합니다. error.code가 충돌 유형을 구분합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "IDEMPOTENCY_CONFLICT",
+                    "message": "같은 접수 키에 다른 파일이 연결되어 있습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "파일 또는 전체 요청 본문이 서버의 업로드 제한을 초과했습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "파일이 허용 크기를 초과했습니다.",
+                    "stage": "UPLOAD",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "multipart/form-data 형식의 ZIP 본문입니다.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "분석할 .exe/.dll 파일이 들어 있는 ZIP 한 개입니다."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/analyses/{analysis_id}": {
       "get": {
         "tags": [
@@ -854,13 +1198,13 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
               "examples": [
                 "analysis_example_001"
               ],
               "title": "Analysis Id"
             },
-            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+            "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
           }
         ],
         "responses": {
@@ -1046,13 +1390,13 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
               "examples": [
                 "analysis_example_001"
               ],
               "title": "Analysis Id"
             },
-            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+            "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
           }
         ],
         "responses": {
@@ -1242,13 +1586,13 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
               "examples": [
                 "analysis_example_001"
               ],
               "title": "Analysis Id"
             },
-            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+            "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
           }
         ],
         "responses": {
@@ -1401,13 +1745,13 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
               "examples": [
                 "analysis_example_001"
               ],
               "title": "Analysis Id"
             },
-            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+            "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
           }
         ],
         "responses": {
@@ -1561,13 +1905,13 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
               "examples": [
                 "analysis_example_001"
               ],
               "title": "Analysis Id"
             },
-            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+            "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
           }
         ],
         "responses": {
@@ -1701,7 +2045,7 @@
           "04. 배치 분석"
         ],
         "summary": "배치 처리 상태 및 결과 조회",
-        "description": "### 목적\n\n배치에 포함된 파일별 분석 상태와 종합 결과를 집계하여 제공합니다.\n\n### 요청\n\n경로 매개변수 `batch_id`에는 `POST /batches` 응답에서 반환된 배치 식별자를 사용합니다.\n`batch_id`는 개별 파일의 `analysis_id`와 별개의 네임스페이스를 가집니다.\n\n### 완료 조건\n\n`total_count`는 전체 파일 수, `finished_count`는 **COMPLETED와 FAILED를 합한 종료 파일 수**입니다.\n두 값이 같으면 모든 파일이 종료 상태에 도달한 것이며, 모든 분석이 성공했다는 의미는 아닙니다.\n\n`status_counts`는 상태별 파일 수를, `analyses`는 파일별 결과와 오류를 제공합니다.\n개별 분석의 상세 리소스는 각 항목의 `analysis_id`로 조회할 수 있습니다.",
+        "description": "### 목적\n\n배치에 포함된 파일별 분석 상태와 종합 결과를 집계하여 제공합니다.\n\n### 요청\n\n경로 매개변수 `batch_id`에는 `POST /batches` 또는 `POST /batches/zip` 응답의 배치 식별자를 사용합니다.\n`batch_id`는 개별 파일의 `analysis_id`와 별개의 네임스페이스를 가집니다.\n\n### 완료 조건\n\n`total_count`는 등록된 분석 수, `finished_count`는 **COMPLETED와 FAILED를 합한 종료 분석 수**입니다.\n두 값이 같으면 모든 파일이 종료 상태에 도달한 것이며, 모든 분석이 성공했다는 의미는 아닙니다.\n\n`status_counts`는 상태별 파일 수를, `analyses`는 파일별 결과와 오류를 제공합니다.\n개별 분석의 상세 리소스는 각 항목의 `analysis_id`로 조회할 수 있습니다.\n\n### 요약과 입력 내역\n\n`summary`의 `queued/running/completed/failed`는 작업 상태 집계이며 합계는 `total`입니다.\n`auto_benign/auto_malicious/high_risk_uncertain/unclassified`는 초기 판정 집계이며 합계는 같은 `total`입니다. 두 집계는 서로 독립적입니다.\n`entries`는 최초 접수 내역으로, 제외된 파일의 사유도 보존합니다. `SKIPPED`는 분석 작업과 실패 수에 포함하지 않습니다.\n\n배치 `status`는 전부 대기하면 `QUEUED`, 진행 중이면 `RUNNING`, 일부 종료 후 나머지가 활성 상태면 `PARTIALLY_COMPLETED`입니다.\n전부 실패하면 `FAILED`이며, 그 외 모두 종료한 경우(일부 실패 포함) 또는 전부 제외된 경우는 `COMPLETED`입니다.\n기본 `sort=high_risk_first`는 고위험 우선, `newest`는 최신순, `input_order`는 입력순입니다.\n이 API는 배치의 모든 등록 분석을 반환합니다. 필터·페이지 조회는 `GET /batches/{batch_id}/analyses`를 사용합니다.",
         "operationId": "get_batch_batches__batch_id__get",
         "security": [
           {
@@ -1716,13 +2060,30 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "배치 리소스 식별자. POST /batches 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다.",
+              "description": "배치 리소스 식별자. POST /batches 또는 POST /batches/zip 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다.",
               "examples": [
                 "batch_example_001"
               ],
               "title": "Batch Id"
             },
-            "description": "배치 리소스 식별자. POST /batches 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다."
+            "description": "배치 리소스 식별자. POST /batches 또는 POST /batches/zip 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "high_risk_first",
+                "newest",
+                "input_order"
+              ],
+              "type": "string",
+              "description": "기본 high_risk_first는 고위험→자동 악성→자동 정상→미판정→실패 순서입니다. newest는 최신 접수순, input_order는 배치 입력순입니다. 실행 순서는 바꾸지 않습니다.",
+              "default": "high_risk_first",
+              "title": "Sort"
+            },
+            "description": "기본 high_risk_first는 고위험→자동 악성→자동 정상→미판정→실패 순서입니다. newest는 최신 접수순, input_order는 배치 입력순입니다. 실행 순서는 바꾸지 않습니다."
           }
         ],
         "responses": {
@@ -1739,6 +2100,34 @@
                     "value": {
                       "batch_id": "batch_example_001",
                       "total_count": 1,
+                      "input_count": 1,
+                      "accepted_count": 1,
+                      "skipped_count": 0,
+                      "archive_file_count": null,
+                      "entries": [
+                        {
+                          "input_index": 0,
+                          "filename": "example.exe",
+                          "status": "ACCEPTED",
+                          "analysis_id": "analysis_example_001",
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "size_bytes": 14848,
+                          "reason_code": null,
+                          "reason": null
+                        }
+                      ],
+                      "status": "COMPLETED",
+                      "summary": {
+                        "total": 1,
+                        "queued": 0,
+                        "running": 0,
+                        "completed": 1,
+                        "failed": 0,
+                        "auto_benign": 1,
+                        "auto_malicious": 0,
+                        "high_risk_uncertain": 0,
+                        "unclassified": 0
+                      },
                       "finished_count": 1,
                       "status_counts": {
                         "QUEUED": 0,
@@ -1900,6 +2289,305 @@
         }
       }
     },
+    "/batches/{batch_id}/analyses": {
+      "get": {
+        "tags": [
+          "04. 배치 분석"
+        ],
+        "summary": "배치 내 분석 목록 필터 조회",
+        "description": "### 목적과 쿼리\n\n배치 안의 등록된 분석만 조회합니다. `verdict=HIGH_RISK_UNCERTAIN`으로 초기 고위험 파일을 모아 볼 수 있습니다.\n`status`, `sha256`, `limit`(기본 20, 최대 100), `offset`(기본 0)을 함께 사용할 수 있습니다.\n`sort`는 `high_risk_first`(기본), `newest`, `input_order` 중 하나입니다.\n고위험 우선은 초기 고위험→자동 악성→자동 정상→미판정→실패 순서이며, 동순위는 최신순입니다.\n조회 정렬은 실제 분석 실행 순서를 바꾸지 않습니다.\n\n### 응답\n\n`total_count`는 모든 필터에 맞는 전체 분석 수이고 `analyses`는 정렬 후 선택된 페이지입니다.\n초기 판정은 시스템 최종 판정·전문가 판정과 별개로 보존됩니다.\n존재하는 배치에서 일치 결과가 없거나 모든 입력이 제외된 경우 빈 목록을 반환합니다. 배치 자체가 없으면 `404`입니다.\n전체 요약과 `SKIPPED` 입력 내역은 `GET /batches/{batch_id}`에서 조회합니다.",
+        "operationId": "list_batch_analyses_batches__batch_id__analyses_get",
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "description": "배치 리소스 식별자. POST /batches 또는 POST /batches/zip 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다.",
+              "examples": [
+                "batch_example_001"
+              ],
+              "title": "Batch Id"
+            },
+            "description": "배치 리소스 식별자. POST /batches 또는 POST /batches/zip 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "high_risk_first",
+                "newest",
+                "input_order"
+              ],
+              "type": "string",
+              "description": "기본 high_risk_first는 고위험→자동 악성→자동 정상→미판정→실패 순서입니다. newest는 최신 접수순, input_order는 배치 입력순입니다. 실행 순서는 바꾸지 않습니다.",
+              "default": "high_risk_first",
+              "title": "Sort"
+            },
+            "description": "기본 high_risk_first는 고위험→자동 악성→자동 정상→미판정→실패 순서입니다. newest는 최신 접수순, input_order는 배치 입력순입니다. 실행 순서는 바꾸지 않습니다."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "페이지당 결과 수입니다. 기본 20, 최대 100입니다.",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "페이지당 결과 수입니다. 기본 20, 최대 100입니다."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "앞에서 건너뛸 결과 수입니다. 다음 페이지는 offset + limit입니다.",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "앞에서 건너뛸 결과 수입니다. 다음 페이지는 offset + limit입니다."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "QUEUED",
+                    "RUNNING",
+                    "COMPLETED",
+                    "FAILED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "분석 진행 상태 필터입니다. 생략하면 모든 상태를 조회합니다.",
+              "title": "Status"
+            },
+            "description": "분석 진행 상태 필터입니다. 생략하면 모든 상태를 조회합니다."
+          },
+          {
+            "name": "sha256",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "64자리 소문자 SHA-256 필터입니다.",
+              "title": "Sha256"
+            },
+            "description": "64자리 소문자 SHA-256 필터입니다."
+          },
+          {
+            "name": "verdict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/InitialVerdict"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JRR 초기 판정 필터입니다. 최종 시스템 판정·전문가 판정과 별개입니다.",
+              "title": "Verdict"
+            },
+            "description": "JRR 초기 판정 필터입니다. 최종 시스템 판정·전문가 판정과 별개입니다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "요청이 정상 처리되었습니다. 예시는 응답 스키마의 대표 값을 나타냅니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchAnalysisListResponse"
+                },
+                "examples": {
+                  "high_risk": {
+                    "summary": "고위험 초기 판정으로 필터링한 목록",
+                    "value": {
+                      "batch_id": "batch_example_001",
+                      "total_count": 1,
+                      "limit": 20,
+                      "offset": 0,
+                      "analyses": [
+                        {
+                          "analysis_id": "analysis_example_001",
+                          "batch_id": "batch_example_001",
+                          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          "created_at": "2026-09-08T09:00:00Z",
+                          "status": "RUNNING",
+                          "current_stage": "CAPA_FLOSS",
+                          "updated_at": "2026-09-08T09:00:00Z",
+                          "completed_at": null,
+                          "error": null,
+                          "filename": "example.exe",
+                          "size_bytes": 14848,
+                          "duplicate_of": null,
+                          "prediction": {
+                            "lgbm_raw_probability": 0.04,
+                            "xgb_raw_probability": 0.08,
+                            "calibrated_probability": 0.05
+                          },
+                          "risk_signals": {
+                            "disagreement": 0.04,
+                            "ood_score": 0.12,
+                            "difficulty_score": 0.08
+                          },
+                          "initial_verdict": "HIGH_RISK_UNCERTAIN",
+                          "route": "DEEP_ANALYSIS",
+                          "reason": "설명용 예시: 위험 신호로 추가 분석을 수행합니다.",
+                          "top_features": [
+                            {
+                              "feature_name": "general[0]",
+                              "feature_value": 14848.0,
+                              "shap_value": -0.42,
+                              "direction": "BENIGN"
+                            }
+                          ],
+                          "deep_analysis_status": {
+                            "capa": "RUNNING",
+                            "floss": "RUNNING",
+                            "speakeasy": "QUEUED",
+                            "cape": "NOT_REQUIRED"
+                          },
+                          "evidence": [],
+                          "llm_summary": null,
+                          "final_verdict": null,
+                          "final_assessment": null,
+                          "analyst_final_verdict": null,
+                          "approval_status": "PENDING",
+                          "review_revision": 0
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 내부 오류입니다. 장애 분석에는 error.code와 요청 시각이 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 처리 중 오류가 발생했습니다.",
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증에 실패했습니다. 유효한 X-API-Key가 필요합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "유효한 X-API-Key가 필요합니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 리소스가 존재하지 않습니다. 접수 응답에서 반환된 실제 식별자를 기준으로 조회합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "BATCH_NOT_FOUND",
+                    "message": "해당 일괄 분석을 찾을 수 없습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "요청 값이 API 계약을 충족하지 않습니다. 필수 필드, 식별자 형식, 파일 형식 또는 숫자 범위가 유효하지 않습니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "요청 필드 형식 또는 필수 값이 유효하지 않습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 의존성이 준비되지 않았습니다. error.code가 데이터베이스, 저장소 등 실패한 의존성을 식별합니다.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "DATABASE_NOT_CONFIGURED",
+                    "message": "BACKEND_DATABASE_URL이 설정되지 않았습니다.",
+                    "stage": null,
+                    "retryable": false
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/analyses/{analysis_id}/verdict": {
       "patch": {
         "tags": [
@@ -1922,13 +2610,13 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
               "examples": [
                 "analysis_example_001"
               ],
               "title": "Analysis Id"
             },
-            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+            "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
           }
         ],
         "requestBody": {
@@ -2159,13 +2847,13 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{1,128}$",
-              "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
+              "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다.",
               "examples": [
                 "analysis_example_001"
               ],
               "title": "Analysis Id"
             },
-            "description": "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
+            "description": "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. 문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
           }
         ],
         "responses": {
@@ -2749,6 +3437,43 @@
       },
       "BatchAccepted": {
         "properties": {
+          "input_count": {
+            "type": "integer",
+            "title": "Input Count",
+            "description": "접수 전에 검사한 파일 수입니다. 폴더는 제외합니다.",
+            "default": 0
+          },
+          "accepted_count": {
+            "type": "integer",
+            "title": "Accepted Count",
+            "description": "독립 분석 작업을 등록한 파일 수입니다.",
+            "default": 0
+          },
+          "skipped_count": {
+            "type": "integer",
+            "title": "Skipped Count",
+            "description": "분석 작업을 만들지 않은 파일 수입니다.",
+            "default": 0
+          },
+          "archive_file_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive File Count",
+            "description": "ZIP 내부 파일 수. 일반 다중 입력이면 null입니다."
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/BatchInputEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
           "batch_id": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{1,128}$",
@@ -2758,7 +3483,7 @@
           "total_count": {
             "type": "integer",
             "title": "Total Count",
-            "description": "이번 묶음으로 접수한 파일 수입니다."
+            "description": "이번 묶음으로 등록한 분석 수입니다. accepted_count와 같으며 SKIPPED는 제외합니다."
           },
           "analyses": {
             "items": {
@@ -2778,8 +3503,179 @@
         ],
         "title": "BatchAccepted"
       },
+      "BatchAnalysisListResponse": {
+        "properties": {
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "description": "검색 조건에 맞는 전체 분석 개수입니다."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "한 페이지에 요청한 개수입니다."
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "앞에서 건너뛴 개수입니다."
+          },
+          "analyses": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResponse"
+            },
+            "type": "array",
+            "title": "Analyses",
+            "description": "이번 페이지의 분석 목록입니다."
+          },
+          "batch_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Batch Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total_count",
+          "limit",
+          "offset",
+          "analyses",
+          "batch_id"
+        ],
+        "title": "BatchAnalysisListResponse"
+      },
+      "BatchInputEntry": {
+        "properties": {
+          "input_index": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Input Index",
+            "description": "입력 순서. 이름이 같은 파일도 구분합니다."
+          },
+          "filename": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Filename"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACCEPTED",
+              "SKIPPED"
+            ],
+            "title": "Status"
+          },
+          "analysis_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Id"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "input_index",
+          "filename",
+          "status"
+        ],
+        "title": "BatchInputEntry"
+      },
       "BatchResponse": {
         "properties": {
+          "input_count": {
+            "type": "integer",
+            "title": "Input Count",
+            "description": "접수 전에 검사한 파일 수입니다. 폴더는 제외합니다.",
+            "default": 0
+          },
+          "accepted_count": {
+            "type": "integer",
+            "title": "Accepted Count",
+            "description": "독립 분석 작업을 등록한 파일 수입니다.",
+            "default": 0
+          },
+          "skipped_count": {
+            "type": "integer",
+            "title": "Skipped Count",
+            "description": "분석 작업을 만들지 않은 파일 수입니다.",
+            "default": 0
+          },
+          "archive_file_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive File Count",
+            "description": "ZIP 내부 파일 수. 일반 다중 입력이면 null입니다."
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/BatchInputEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
           "batch_id": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{1,128}$",
@@ -2789,7 +3685,7 @@
           "total_count": {
             "type": "integer",
             "title": "Total Count",
-            "description": "묶음에 포함된 전체 파일 수입니다."
+            "description": "묶음에 등록된 분석 수입니다. accepted_count와 같으며 SKIPPED는 제외합니다."
           },
           "finished_count": {
             "type": "integer",
@@ -2811,6 +3707,14 @@
             "type": "array",
             "title": "Analyses",
             "description": "묶음 안의 파일별 종합 결과입니다."
+          },
+          "status": {
+            "$ref": "#/components/schemas/BatchStatus",
+            "description": "배치 진행 상태입니다. COMPLETED는 처리가 모두 종료됐다는 의미이며 일부 실패 또는 전체 SKIPPED를 포함할 수 있습니다.",
+            "default": "QUEUED"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/BatchSummary"
           }
         },
         "additionalProperties": false,
@@ -2823,6 +3727,70 @@
           "analyses"
         ],
         "title": "BatchResponse"
+      },
+      "BatchStatus": {
+        "type": "string",
+        "enum": [
+          "QUEUED",
+          "RUNNING",
+          "PARTIALLY_COMPLETED",
+          "COMPLETED",
+          "FAILED"
+        ],
+        "title": "BatchStatus"
+      },
+      "BatchSummary": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "queued": {
+            "type": "integer",
+            "title": "Queued",
+            "default": 0
+          },
+          "running": {
+            "type": "integer",
+            "title": "Running",
+            "default": 0
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          },
+          "auto_benign": {
+            "type": "integer",
+            "title": "Auto Benign",
+            "default": 0
+          },
+          "auto_malicious": {
+            "type": "integer",
+            "title": "Auto Malicious",
+            "default": 0
+          },
+          "high_risk_uncertain": {
+            "type": "integer",
+            "title": "High Risk Uncertain",
+            "default": 0
+          },
+          "unclassified": {
+            "type": "integer",
+            "title": "Unclassified",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BatchSummary",
+        "description": "상태 개수와 초기 판정 개수는 서로 독립된 집계다."
       },
       "CurrentStage": {
         "type": "string",

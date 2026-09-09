@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS api_batches (
         OR (request_kind = 'BATCH' AND batch_id IS NOT NULL))
 );
 
+-- Additive migration: init-db can be rerun against the previous API schema.
+ALTER TABLE api_batches ADD COLUMN IF NOT EXISTS input_report jsonb
+    CHECK (input_report IS NULL OR (
+        jsonb_typeof(input_report) = 'object'
+        AND octet_length(input_report::text) <= 8388608
+    ));
+
 CREATE TABLE IF NOT EXISTS api_analyses (
     analysis_id text PRIMARY KEY,
     request_id uuid NOT NULL REFERENCES api_batches(request_id),
@@ -85,6 +92,8 @@ CREATE INDEX IF NOT EXISTS api_analyses_sha256_idx
     ON api_analyses (sha256, created_at, analysis_id);
 CREATE INDEX IF NOT EXISTS api_analyses_listing_idx
     ON api_analyses (created_at DESC, analysis_id DESC);
+CREATE INDEX IF NOT EXISTS api_analyses_batch_verdict_idx
+    ON api_analyses (batch_id, (initial_result ->> 'initial_verdict'), created_at DESC, analysis_id DESC);
 CREATE INDEX IF NOT EXISTS api_analyses_pending_idx
     ON api_analyses (updated_at, analysis_id)
     WHERE status IN ('QUEUED', 'RUNNING');

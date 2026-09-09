@@ -18,6 +18,7 @@ from trust_triage.backend_api.repository import PostgresAnalysisRepository
 from trust_triage.backend_api.service import BackendService
 from trust_triage.backend_api.storage import LocalSampleStorage
 
+from .test_batch_inputs import archive_bytes
 from .test_service_processor import (
     FakeDeep,
     FakeInitial,
@@ -39,7 +40,11 @@ def flow(tmp_path):
         connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
     scoped = make_conninfo(dsn, options=f"-c search_path={schema}")
     try:
-        config = BackendConfig(database_url=scoped, storage_root=tmp_path / "samples")
+        config = BackendConfig(
+            database_url=scoped,
+            storage_root=tmp_path / "samples",
+            temp_root=tmp_path / "temp",
+        )
         repository = PostgresAnalysisRepository(scoped)
         repository.initialize()
         storage = LocalSampleStorage(config.storage_root)
@@ -53,6 +58,68 @@ def flow(tmp_path):
             connection.execute(
                 sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
             )
+
+
+def test_zip_http_receipt_and_summary_survive_service_restart(flow):
+    service, scoped = flow
+    data = archive_bytes(
+        [("folder/valid.exe", harmless_pe_header()), ("notes.txt", b"notes")]
+    )
+    with TestClient(create_app(service)) as client:
+        response = client.post(
+            "/batches/zip",
+            files={"file": ("inputs.zip", data)},
+            headers={"Idempotency-Key": "zip-http"},
+        )
+        assert response.status_code == 202, response.text
+        accepted = response.json()
+        assert (
+            accepted["input_count"] == 2
+            and accepted["accepted_count"] == accepted["skipped_count"] == 1
+        )
+    restarted = BackendService(
+        PostgresAnalysisRepository(scoped), service.storage, service.config
+    )
+    with TestClient(create_app(restarted)) as client:
+        assert (
+            client.post(
+                "/batches/zip",
+                files={"file": ("inputs.zip", data)},
+                headers={"Idempotency-Key": "zip-http"},
+            ).json()
+            == accepted
+        )
+        identity = accepted["analyses"][0]["analysis_id"]
+        claim = restarted.repository.claim(identity, 600)
+        restarted.repository.save_initial(
+            identity, claim.token, initial_result("HIGH_RISK_UNCERTAIN"), True
+        )
+        batch = client.get("/batches/" + accepted["batch_id"]).json()
+        assert batch["status"] == "RUNNING"
+        assert (
+            batch["summary"]["high_risk_uncertain"] == batch["summary"]["running"] == 1
+        )
+        assert (
+            batch["summary"]["failed"] == 0 and batch["entries"] == accepted["entries"]
+        )
+        page = client.get(
+            f"/batches/{accepted['batch_id']}/analyses?verdict=HIGH_RISK_UNCERTAIN"
+        ).json()
+        assert (
+            page["total_count"] == 1 and page["analyses"][0]["analysis_id"] == identity
+        )
+        all_skipped = client.post(
+            "/batches/zip",
+            files={
+                "file": ("empty-jobs.zip", archive_bytes([("notes.txt", b"notes")]))
+            },
+        ).json()
+        assert (
+            client.get("/batches/" + all_skipped["batch_id"]).json()["status"]
+            == "COMPLETED"
+        )
+    assert len(list(service.config.storage_root.glob("*/sample.bin"))) == 1
+    assert not list(service.config.temp_root.glob("batch-*"))
 
 
 @pytest.mark.parametrize(

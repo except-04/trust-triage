@@ -12,9 +12,11 @@ from uuid import uuid4
 from trust_triage.backend_api.errors import BackendError
 from trust_triage.backend_api.repository import (
     AnalysisRecord,
+    BatchRecord,
     Claim,
     json_object,
     registration_input,
+    validate_listing,
     validate_review,
 )
 
@@ -27,6 +29,7 @@ class MemoryAnalysisRepository:
     def __init__(self):
         self.rows = {}
         self.batches = {}
+        self.input_reports = {}
         self.idempotency = {}
         self.leases = {}
         self.retries = {}
@@ -61,9 +64,24 @@ class MemoryAnalysisRepository:
         self._fault("check")
 
     def register(self, analyses, *, batch_id=None, idempotency_key=None):
+        return self._register(
+            analyses, batch_id=batch_id, idempotency_key=idempotency_key
+        ).analyses
+
+    def register_batch(self, analyses, *, batch_id, input_report, idempotency_key=None):
+        return self._register(
+            analyses,
+            batch_id=batch_id,
+            input_report=input_report,
+            idempotency_key=idempotency_key,
+        )
+
+    def _register(
+        self, analyses, *, batch_id=None, idempotency_key=None, input_report=None
+    ):
         self._fault("register")
         inputs, fingerprint, kind = registration_input(
-            analyses, batch_id, idempotency_key
+            analyses, batch_id, idempotency_key, input_report
         )
         with self._lock:
             previous = (
@@ -78,7 +96,12 @@ class MemoryAnalysisRepository:
                         "Idempotency key was already used for a different request",
                         http_status=409,
                     )
-                return [self.get(key) for key in previous[2]]
+                report = self.input_reports.get(previous[3])
+                return BatchRecord(
+                    previous[3],
+                    [self.get(key) for key in previous[2]],
+                    report.model_copy(deep=True) if report else None,
+                )
             locations = {row.file_location for row in self.rows.values()}
             if (batch_id is not None and batch_id in self.batches) or any(
                 item["analysis_id"] in self.rows or item["file_location"] in locations
@@ -111,9 +134,16 @@ class MemoryAnalysisRepository:
                 ids.append(record.analysis_id)
             if batch_id is not None:
                 self.batches[batch_id] = ids
+                self.input_reports[batch_id] = (
+                    input_report.model_copy(deep=True) if input_report else None
+                )
             if idempotency_key is not None:
-                self.idempotency[idempotency_key] = (fingerprint, kind, ids)
-            return [self.get(key) for key in ids]
+                self.idempotency[idempotency_key] = (fingerprint, kind, ids, batch_id)
+            return BatchRecord(
+                batch_id,
+                [self.get(key) for key in ids],
+                input_report.model_copy(deep=True) if input_report else None,
+            )
 
     def get(self, analysis_id):
         self._fault("get")
@@ -131,28 +161,81 @@ class MemoryAnalysisRepository:
                 error=_copy(row.error),
             )
 
-    def list_analyses(self, limit=20, offset=0, status=None, sha256=None):
+    def list_analyses(
+        self,
+        limit=20,
+        offset=0,
+        status=None,
+        sha256=None,
+        *,
+        batch_id=None,
+        verdict=None,
+        sort="newest",
+    ):
         self._fault("list_analyses")
+        validate_listing(batch_id, verdict, sort)
         with self._lock:
+            if batch_id is not None and batch_id not in self.batches:
+                raise BackendError(
+                    "BATCH_NOT_FOUND", "Batch was not found", http_status=404
+                )
             records = sorted(
                 (
                     row
                     for row in self.rows.values()
                     if (status is None or row.status == status)
                     and (sha256 is None or row.sha256 == sha256)
+                    and (batch_id is None or row.batch_id == batch_id)
+                    and (
+                        verdict is None
+                        or (row.initial_result or {}).get("initial_verdict") == verdict
+                    )
                 ),
                 key=lambda row: (row.created_at, row.analysis_id),
                 reverse=True,
             )
+            if sort == "high_risk_first":
+                priorities = {
+                    "HIGH_RISK_UNCERTAIN": 0,
+                    "AUTO_MALICIOUS": 1,
+                    "AUTO_BENIGN": 2,
+                }
+                records.sort(
+                    key=lambda row: (
+                        4
+                        if row.status == "FAILED"
+                        else priorities.get(
+                            (row.initial_result or {}).get("initial_verdict"), 3
+                        )
+                    )
+                )
+            elif sort == "input_order":
+                positions = {
+                    key: index for index, key in enumerate(self.batches[batch_id])
+                }
+                records.sort(key=lambda row: positions[row.analysis_id])
             return [
                 self.get(row.analysis_id) for row in records[offset : offset + limit]
             ], len(records)
 
     def get_batch(self, batch_id):
+        result = self.batch_record(batch_id)
+        return None if result is None else result.analyses
+
+    def batch_record(self, batch_id):
         self._fault("get_batch")
         with self._lock:
             ids = self.batches.get(batch_id)
-            return None if ids is None else [self.get(key) for key in ids]
+            report = self.input_reports.get(batch_id)
+            return (
+                None
+                if ids is None
+                else BatchRecord(
+                    batch_id,
+                    [self.get(key) for key in ids],
+                    report.model_copy(deep=True) if report else None,
+                )
+            )
 
     def _ready(self, row):
         lease = self.leases.get(row.analysis_id)

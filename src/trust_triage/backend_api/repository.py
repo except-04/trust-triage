@@ -19,7 +19,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from .errors import BackendError
-from .schemas import CurrentStage
+from .schemas import BatchInputReport, CurrentStage, InitialVerdict
 
 MAX_STATE_BYTES = 8 * 1024 * 1024
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
@@ -77,6 +77,13 @@ class Claim:
     token: str | None = None
 
 
+@dataclass(frozen=True)
+class BatchRecord:
+    batch_id: str | None
+    analyses: list[AnalysisRecord]
+    input_report: BatchInputReport | None = None
+
+
 class AnalysisRepository(Protocol):
     def initialize(self) -> None: ...
     def check(self) -> None: ...
@@ -87,6 +94,15 @@ class AnalysisRepository(Protocol):
         batch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> list[AnalysisRecord]: ...
+    def register_batch(
+        self,
+        analyses,
+        *,
+        batch_id: str,
+        input_report: BatchInputReport,
+        idempotency_key: str | None = None,
+    ) -> BatchRecord: ...
+    def batch_record(self, batch_id: str) -> BatchRecord | None: ...
     def get(self, analysis_id: str) -> AnalysisRecord | None: ...
     def list_analyses(
         self,
@@ -94,6 +110,10 @@ class AnalysisRepository(Protocol):
         offset: int = 0,
         status: str | None = None,
         sha256: str | None = None,
+        *,
+        batch_id: str | None = None,
+        verdict: str | None = None,
+        sort: str = "newest",
     ) -> tuple[list[AnalysisRecord], int]: ...
     def get_batch(self, batch_id: str) -> list[AnalysisRecord] | None: ...
     def pending_ids(self, limit: int = 10) -> list[str]: ...
@@ -207,6 +227,7 @@ class PostgresAnalysisRepository:
             for table in ("api_batches", "api_analyses", "api_reviews"):
                 # These table names are constants, never user input.
                 connection.execute(f"SELECT * FROM {table} LIMIT 0")
+            connection.execute("SELECT input_report FROM api_batches LIMIT 0")
 
     def register(
         self,
@@ -215,21 +236,47 @@ class PostgresAnalysisRepository:
         batch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> list[AnalysisRecord]:
+        return self._register(
+            analyses, batch_id=batch_id, idempotency_key=idempotency_key
+        ).analyses
+
+    def register_batch(
+        self, analyses, *, batch_id, input_report, idempotency_key=None
+    ) -> BatchRecord:
+        return self._register(
+            analyses,
+            batch_id=batch_id,
+            input_report=input_report,
+            idempotency_key=idempotency_key,
+        )
+
+    def _register(
+        self, analyses, *, batch_id=None, idempotency_key=None, input_report=None
+    ) -> BatchRecord:
         inputs, fingerprint, kind = registration_input(
-            analyses, batch_id, idempotency_key
+            analyses, batch_id, idempotency_key, input_report
         )
         request_id = str(uuid4())
         with self._connection() as connection:
             row = connection.execute(
                 """INSERT INTO api_batches
-                   (request_id, batch_id, request_kind, idempotency_key, input_fingerprint)
-                   VALUES (%s::uuid, %s, %s, %s, %s)
+                   (request_id, batch_id, request_kind, idempotency_key, input_fingerprint, input_report)
+                   VALUES (%s::uuid, %s, %s, %s, %s, %s)
                    ON CONFLICT (idempotency_key) DO NOTHING RETURNING request_id""",
-                (request_id, batch_id, kind, idempotency_key, fingerprint),
+                (
+                    request_id,
+                    batch_id,
+                    kind,
+                    idempotency_key,
+                    fingerprint,
+                    Jsonb(input_report.model_dump(mode="json"))
+                    if input_report
+                    else None,
+                ),
             ).fetchone()
             if row is None:
                 previous = connection.execute(
-                    "SELECT request_id, request_kind, input_fingerprint FROM api_batches WHERE idempotency_key = %s",
+                    "SELECT request_id, request_kind, input_fingerprint, batch_id, input_report FROM api_batches WHERE idempotency_key = %s",
                     (idempotency_key,),
                 ).fetchone()
                 if (
@@ -242,13 +289,20 @@ class PostgresAnalysisRepository:
                         "Idempotency key was already used for a different request",
                         http_status=409,
                     )
-                return [
+                records = [
                     _record(item)
                     for item in connection.execute(
                         _SELECT + " WHERE request_id = %s ORDER BY batch_position",
                         (previous["request_id"],),
                     ).fetchall()
                 ]
+                return BatchRecord(
+                    previous["batch_id"],
+                    records,
+                    BatchInputReport.model_validate(previous["input_report"])
+                    if previous["input_report"]
+                    else None,
+                )
 
             # Consistent hash-lock ordering avoids opposite-order batch deadlocks.
             # A concurrent duplicate registration sees the first committed analysis.
@@ -279,13 +333,18 @@ class PostgresAnalysisRepository:
                         duplicate["analysis_id"] if duplicate else None,
                     ),
                 )
-            return [
+            records = [
                 _record(item)
                 for item in connection.execute(
                     _SELECT + " WHERE request_id = %s::uuid ORDER BY batch_position",
                     (request_id,),
                 ).fetchall()
             ]
+            return BatchRecord(
+                batch_id,
+                records,
+                input_report.model_copy(deep=True) if input_report else None,
+            )
 
     def get(self, analysis_id: str) -> AnalysisRecord | None:
         with self._connection() as connection:
@@ -300,10 +359,15 @@ class PostgresAnalysisRepository:
         offset: int = 0,
         status: str | None = None,
         sha256: str | None = None,
+        *,
+        batch_id: str | None = None,
+        verdict: str | None = None,
+        sort: str = "newest",
     ) -> tuple[list[AnalysisRecord], int]:
         _limit(limit)
         if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
+        validate_listing(batch_id, verdict, sort)
         conditions, params = [], []
         if status is not None:
             if status not in {"QUEUED", "RUNNING", "COMPLETED", "FAILED"}:
@@ -314,37 +378,73 @@ class PostgresAnalysisRepository:
             _hash(sha256)
             conditions.append("sha256 = %s")
             params.append(sha256)
+        if batch_id is not None:
+            conditions.append("batch_id = %s")
+            params.append(batch_id)
+        if verdict is not None:
+            conditions.append("initial_result ->> 'initial_verdict' = %s")
+            params.append(verdict)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         with self._connection() as connection:
             # One MVCC snapshot keeps count and page consistent under concurrent writes.
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
             )
+            if (
+                batch_id is not None
+                and connection.execute(
+                    "SELECT 1 FROM api_batches WHERE batch_id = %s", (batch_id,)
+                ).fetchone()
+                is None
+            ):
+                raise BackendError(
+                    "BATCH_NOT_FOUND",
+                    "해당 일괄 분석을 찾을 수 없습니다.",
+                    http_status=404,
+                )
             total = connection.execute(
                 "SELECT count(*) AS total FROM api_analyses" + where, params
             ).fetchone()["total"]
             rows = connection.execute(
                 _SELECT
                 + where
-                + " ORDER BY created_at DESC, analysis_id DESC LIMIT %s OFFSET %s",
+                + " ORDER BY "
+                + _LIST_ORDER[sort]
+                + " LIMIT %s OFFSET %s",
                 (*params, limit, offset),
             ).fetchall()
             return [_record(row) for row in rows], total
 
     def get_batch(self, batch_id: str) -> list[AnalysisRecord] | None:
+        result = self.batch_record(batch_id)
+        return None if result is None else result.analyses
+
+    def batch_record(self, batch_id: str) -> BatchRecord | None:
+        _identifier(batch_id, "batch_id")
         with self._connection() as connection:
+            connection.execute(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+            )
             batch = connection.execute(
-                "SELECT request_id FROM api_batches WHERE batch_id = %s", (batch_id,)
+                "SELECT request_id, input_report FROM api_batches WHERE batch_id = %s",
+                (batch_id,),
             ).fetchone()
             if batch is None:
                 return None
-            return [
+            records = [
                 _record(row)
                 for row in connection.execute(
                     _SELECT + " WHERE request_id = %s ORDER BY batch_position",
                     (batch["request_id"],),
                 ).fetchall()
             ]
+            return BatchRecord(
+                batch_id,
+                records,
+                BatchInputReport.model_validate(batch["input_report"])
+                if batch["input_report"]
+                else None,
+            )
 
     def pending_ids(self, limit: int = 10) -> list[str]:
         _limit(limit)
@@ -608,10 +708,11 @@ class PostgresAnalysisRepository:
             ]
 
 
-def registration_input(analyses, batch_id, idempotency_key):
+def registration_input(analyses, batch_id, idempotency_key, input_report=None):
     """Validate before DB access; IDs/locations intentionally do not define replay identity."""
-    if not isinstance(analyses, list) or not 1 <= len(analyses) <= 100:
-        raise ValueError("registration requires between 1 and 100 analyses")
+    minimum = 0 if batch_id is not None and input_report is not None else 1
+    if not isinstance(analyses, list) or not minimum <= len(analyses) <= 100:
+        raise ValueError("invalid number of registered analyses")
     if batch_id is None and len(analyses) != 1:
         raise ValueError("multiple analyses require a batch_id")
     if batch_id is not None:
@@ -666,10 +767,73 @@ def registration_input(analyses, batch_id, idempotency_key):
             for item in normalized
         ],
     }
+    if input_report is not None:
+        if batch_id is None or not isinstance(input_report, BatchInputReport):
+            raise ValueError("input reports require a batch and a validated report")
+        report = BatchInputReport.model_validate(input_report.model_dump(mode="json"))
+        accepted = [entry for entry in report.entries if entry.status == "ACCEPTED"]
+        if not report.entries or len(accepted) != len(normalized):
+            raise ValueError("input report must account for every accepted analysis")
+        for entry, item in zip(accepted, normalized):
+            if (entry.analysis_id, entry.sha256, entry.size_bytes) != (
+                item["analysis_id"],
+                item["sha256"],
+                item["size_bytes"],
+            ):
+                raise ValueError(
+                    "input report identity does not match registered analyses"
+                )
+        if report.source_type == "ZIP":
+            # Archive bytes bind ALL entries, including encrypted/unsupported ones.
+            # Admission limits may change between retries; they do not change input identity.
+            identity = {
+                "kind": kind,
+                "archive": {
+                    name: getattr(report, name)
+                    for name in (
+                        "archive_filename",
+                        "archive_sha256",
+                        "archive_size_bytes",
+                    )
+                },
+            }
+        elif any(entry.status == "SKIPPED" for entry in report.entries):
+            if any(
+                entry.sha256 is None or entry.size_bytes is None
+                for entry in report.entries
+            ):
+                raise ValueError("direct batch entries require content hashes")
+            identity["all_inputs"] = [
+                {
+                    name: getattr(entry, name)
+                    for name in ("filename", "sha256", "size_bytes")
+                }
+                for entry in report.entries
+            ]
     encoded = json.dumps(
         identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     return normalized, hashlib.sha256(encoded.encode("utf-8")).hexdigest(), kind
+
+
+_LIST_ORDER = {
+    "newest": "created_at DESC, analysis_id DESC",
+    "input_order": "batch_position, analysis_id",
+    "high_risk_first": """CASE WHEN status = 'FAILED' THEN 4
+        WHEN initial_result ->> 'initial_verdict' = 'HIGH_RISK_UNCERTAIN' THEN 0
+        WHEN initial_result ->> 'initial_verdict' = 'AUTO_MALICIOUS' THEN 1
+        WHEN initial_result ->> 'initial_verdict' = 'AUTO_BENIGN' THEN 2
+        ELSE 3 END, created_at DESC, analysis_id DESC""",
+}
+
+
+def validate_listing(batch_id, verdict, sort):
+    if batch_id is not None:
+        _identifier(batch_id, "batch_id")
+    if verdict is not None and verdict not in {item.value for item in InitialVerdict}:
+        raise ValueError("unknown initial verdict")
+    if sort not in _LIST_ORDER or (sort == "input_order" and batch_id is None):
+        raise ValueError("invalid result sort order")
 
 
 def json_object(value: Mapping[str, Any]) -> dict[str, Any]:

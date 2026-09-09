@@ -28,8 +28,10 @@ from .schemas import (
     AnalysisProgress,
     AnalysisResponse,
     BatchAccepted,
+    BatchAnalysisListResponse,
     BatchResponse,
     DeepAnalysisResponse,
+    InitialVerdict,
     ReviewHistoryResponse,
     ReviewRequest,
     ReviewResponse,
@@ -72,6 +74,57 @@ BatchIdentifier = Annotated[
 IdempotencyKey = Annotated[
     str | None, Header(max_length=200, description=api_docs.IDEMPOTENCY_HELP)
 ]
+BatchSort = Annotated[
+    Literal["high_risk_first", "newest", "input_order"],
+    Query(
+        description="기본 high_risk_first는 고위험→자동 악성→자동 정상→미판정→실패 순서입니다. newest는 최신 접수순, input_order는 배치 입력순입니다. 실행 순서는 바꾸지 않습니다."
+    ),
+]
+
+
+def _listing_filters(
+    limit: Annotated[
+        int,
+        Query(
+            ge=1, le=100, description="페이지당 결과 수입니다. 기본 20, 최대 100입니다."
+        ),
+    ] = 20,
+    offset: Annotated[
+        int,
+        Query(
+            ge=0,
+            description="앞에서 건너뛸 결과 수입니다. 다음 페이지는 offset + limit입니다.",
+        ),
+    ] = 0,
+    status: Annotated[
+        Literal["QUEUED", "RUNNING", "COMPLETED", "FAILED"] | None,
+        Query(
+            description="분석 진행 상태 필터입니다. 생략하면 모든 상태를 조회합니다."
+        ),
+    ] = None,
+    sha256: Annotated[
+        str | None,
+        Query(
+            pattern=r"^[0-9a-f]{64}$", description="64자리 소문자 SHA-256 필터입니다."
+        ),
+    ] = None,
+    verdict: Annotated[
+        InitialVerdict | None,
+        Query(
+            description="JRR 초기 판정 필터입니다. 최종 시스템 판정·전문가 판정과 별개입니다."
+        ),
+    ] = None,
+):
+    return {
+        "limit": limit,
+        "offset": offset,
+        "status": status,
+        "sha256": sha256,
+        "verdict": verdict,
+    }
+
+
+ListingFilters = Annotated[dict, Depends(_listing_filters)]
 
 
 class RequestBoundary:
@@ -106,11 +159,15 @@ class RequestBoundary:
             )(scope, receive, send)
             return
         max_bytes = (
-            config.max_file_bytes
-            * (config.max_batch_files if path == "/batches" else 1)
-            + 1024 * 1024
-            if path in {"/analyses", "/batches"}
-            else 64 * 1024
+            config.max_zip_bytes + 1024 * 1024
+            if path == "/batches/zip"
+            else (
+                config.max_file_bytes
+                * (config.max_batch_files if path == "/batches" else 1)
+                + 1024 * 1024
+                if path in {"/analyses", "/batches"}
+                else 64 * 1024
+            )
         )
         received, started, response_started = 0, time.monotonic(), False
 
@@ -190,12 +247,14 @@ class RequestBoundary:
             )(scope, receive, send)
 
 
-def _upload_schema(multiple: bool) -> dict:
+def _upload_schema(multiple: bool, *, archive: bool = False) -> dict:
     key = "files" if multiple else "file"
     value = {
         "type": "string",
         "format": "binary",
-        "description": "분석 대상 Windows PE 파일입니다. 지원 확장자는 .exe와 .dll입니다.",
+        "description": "분석할 .exe/.dll 파일이 들어 있는 ZIP 한 개입니다."
+        if archive
+        else "분석 대상 Windows PE 파일입니다. 지원 확장자는 .exe와 .dll입니다.",
     }
     if multiple:
         value = {
@@ -206,7 +265,9 @@ def _upload_schema(multiple: bool) -> dict:
     return {
         "requestBody": {
             "required": True,
-            "description": "multipart/form-data 형식의 PE 파일 본문입니다. 바이너리를 JSON으로 인코딩하지 않습니다.",
+            "description": "multipart/form-data 형식의 ZIP 본문입니다."
+            if archive
+            else "multipart/form-data 형식의 PE 파일 본문입니다. 바이너리를 JSON으로 인코딩하지 않습니다.",
             "content": {
                 "multipart/form-data": {
                     "schema": {
@@ -334,8 +395,8 @@ def create_app(
         svc.repository.check()
         return {"status": "ready"}
 
-    async def submit(request: Request, svc, batch, key):
-        expected = "files" if batch else "file"
+    async def submit(request: Request, svc, batch, key, *, archive=False):
+        expected = "files" if batch and not archive else "file"
         if (
             request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             != "multipart/form-data"
@@ -347,9 +408,9 @@ def create_app(
                 stage="UPLOAD",
             )
         async with request.form(
-            max_files=config.max_batch_files if batch else 1,
+            max_files=config.max_batch_files if batch and not archive else 1,
             max_fields=0,
-            max_part_size=config.max_file_bytes,
+            max_part_size=config.max_zip_bytes if archive else config.max_file_bytes,
         ) as form:
             entries = list(form.multi_items())
             if not entries or any(
@@ -358,13 +419,18 @@ def create_app(
             ):
                 raise BackendError(
                     "INVALID_UPLOAD",
-                    f"multipart/form-data의 {expected} 필드에 PE 파일을 넣어주세요.",
+                    f"multipart/form-data의 {expected} 파일 필드를 확인해주세요.",
                     http_status=422,
                     stage="UPLOAD",
                 )
+            uploads = [(value.file, value.filename or "") for _, value in entries]
+            if archive:
+                return await run_in_threadpool(
+                    svc.submit_zip, uploads, idempotency_key=key
+                )
             return await run_in_threadpool(
                 svc.submit,
-                [(value.file, value.filename or "") for _, value in entries],
+                uploads,
                 batch=batch,
                 idempotency_key=key,
             )
@@ -399,6 +465,21 @@ def create_app(
     ):
         return await submit(request, svc, True, idempotency_key)
 
+    @app.post(
+        "/batches/zip",
+        status_code=202,
+        response_model=BatchAccepted,
+        dependencies=dependencies,
+        openapi_extra=_upload_schema(False, archive=True),
+        **docs["upload_zip"],
+    )
+    async def upload_zip(
+        request: Request,
+        svc: Annotated[BackendService, Depends(backend)],
+        idempotency_key: IdempotencyKey = None,
+    ):
+        return await submit(request, svc, True, idempotency_key, archive=True)
+
     @app.get(
         "/analyses",
         response_model=AnalysisListResponse,
@@ -407,38 +488,22 @@ def create_app(
     )
     def list_analyses(
         svc: Annotated[BackendService, Depends(backend)],
-        limit: Annotated[
-            int,
-            Query(
-                ge=1,
-                le=100,
-                description="페이지당 분석 결과 수입니다. 기본값은 20이고 최댓값은 100입니다.",
-            ),
-        ] = 20,
-        offset: Annotated[
-            int,
-            Query(
-                ge=0,
-                description="결과 집합 시작점의 0 기반 offset입니다. 다음 페이지는 현재 offset + limit으로 계산합니다.",
-            ),
-        ] = 0,
-        status: Annotated[
-            Literal["QUEUED", "RUNNING", "COMPLETED", "FAILED"] | None,
-            Query(
-                description="분석 수명주기 상태 필터입니다. 생략하면 모든 상태를 조회합니다."
-            ),
-        ] = None,
-        sha256: Annotated[
+        filters: ListingFilters,
+        batch_id: Annotated[
             str | None,
             Query(
-                pattern=r"^[0-9a-f]{64}$",
-                description="파일 내용의 64자리 소문자 SHA-256 필터입니다. 생략하면 해시 조건을 적용하지 않습니다.",
+                pattern=_IDENTIFIER_PATTERN,
+                description="특정 배치에 포함된 결과만 조회합니다.",
             ),
         ] = None,
+        sort: Annotated[
+            Literal["high_risk_first", "newest"],
+            Query(
+                description="기본 high_risk_first는 고위험 우선이며 실패는 마지막입니다. newest는 최신 접수순입니다. 실행 순서는 바꾸지 않습니다."
+            ),
+        ] = "high_risk_first",
     ):
-        return svc.list_analyses(
-            limit=limit, offset=offset, status=status, sha256=sha256
-        )
+        return svc.list_analyses(batch_id=batch_id, sort=sort, **filters)
 
     @app.get(
         "/analyses/{analysis_id}",
@@ -502,9 +567,25 @@ def create_app(
         **docs["get_batch"],
     )
     def get_batch(
-        batch_id: BatchIdentifier, svc: Annotated[BackendService, Depends(backend)]
+        batch_id: BatchIdentifier,
+        svc: Annotated[BackendService, Depends(backend)],
+        sort: BatchSort = "high_risk_first",
     ):
-        return svc.get_batch(batch_id)
+        return svc.get_batch(batch_id, sort=sort)
+
+    @app.get(
+        "/batches/{batch_id}/analyses",
+        response_model=BatchAnalysisListResponse,
+        dependencies=dependencies,
+        **docs["list_batch_analyses"],
+    )
+    def list_batch_analyses(
+        batch_id: BatchIdentifier,
+        svc: Annotated[BackendService, Depends(backend)],
+        filters: ListingFilters,
+        sort: BatchSort = "high_risk_first",
+    ):
+        return svc.list_batch_analyses(batch_id, sort=sort, **filters)
 
     @app.patch(
         "/analyses/{analysis_id}/verdict",

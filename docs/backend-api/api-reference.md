@@ -1,6 +1,6 @@
 # API 종류와 설명
 
-이 문서는 **화면에서 어떤 API를 언제 호출하고, 어떤 데이터를 주고받는지** 설명한다. 현재 `app.py`와 [openapi.json](openapi.json)에 정의된 HTTP API 13개를 기준으로 한다. 소스 파일별 역할은 [백엔드 구조 설명](backend-structure.md)을 참고한다.
+이 문서는 **화면에서 어떤 API를 언제 호출하고, 어떤 데이터를 주고받는지** 설명한다. 현재 `app.py`와 [openapi.json](openapi.json)에 정의된 HTTP API 15개를 기준으로 한다. 소스 파일별 역할은 [백엔드 구조 설명](backend-structure.md)을 참고한다.
 
 먼저 화면에서 할 일을 떠올리면 API 이름을 읽기 쉬워진다.
 
@@ -61,6 +61,7 @@ Streamlit / Swagger / 다른 클라이언트
 | 서버 상태 | GET | `/ready` | 백엔드 DB 테이블에 접근 가능한지 확인 | 200 |
 | 단일 접수 | POST | `/analyses` | PE 파일 한 개 분석 접수 | 202 |
 | 일괄 접수 | POST | `/batches` | 여러 PE 파일을 한 묶음으로 접수 | 202 |
+| ZIP 접수 | POST | `/batches/zip` | ZIP 내부의 지원 PE를 한 묶음으로 접수 | 202 |
 | 목록 조회 | GET | `/analyses` | 분석 목록과 총 개수 조회 | 200 |
 | 결과 조회 | GET | `/analyses/{analysis_id}` | 한 분석의 화면용 결과 조회 | 200 |
 | 진행 조회 | GET | `/analyses/{analysis_id}/status` | 전체 진행 상태·현재 단계 조회 | 200 |
@@ -68,6 +69,7 @@ Streamlit / Swagger / 다른 클라이언트
 | 심층 분석 | GET | `/analyses/{analysis_id}/deep-analysis` | 도구 결과·Evidence·LLM 설명 조회 | 200 |
 | 모델 설명 | GET | `/analyses/{analysis_id}/xai` | SHAP 설명 조회 | 200 |
 | 일괄 조회 | GET | `/batches/{batch_id}` | 묶음에 포함된 분석과 처리 현황 조회 | 200 |
+| 일괄 필터 조회 | GET | `/batches/{batch_id}/analyses` | 묶음 안의 초기 판정·상태 필터와 페이지 조회 | 200 |
 | 전문가 검토 | PATCH | `/analyses/{analysis_id}/verdict` | 전문가 판정·의견 저장 | 200 |
 | 검토 이력 | GET | `/analyses/{analysis_id}/reviews` | 해당 분석의 검토 이력 조회 | 200 |
 
@@ -101,6 +103,7 @@ Streamlit / Swagger / 다른 클라이언트
 두 토큰이 모두 설정됐다면 전문가 검토 요청에는 두 헤더를 함께 보낸다. `reviewer_id`는 기록에 남길 검토자 식별자이며, 접근 권한 확인은 토큰이 맡는다.
 
 같은 `Idempotency-Key`로 같은 접수를 다시 보내면 기존 분석 번호를 반환한다. 파일 순서·SHA-256·크기·이름·단일/일괄 종류가 바뀌면 `409` 충돌이다. 키는 공백 없는 ASCII 문자열 1~200자를 사용한다.
+ZIP 요청은 ZIP 전체 바이트의 SHA-256·크기·이름으로 구분한다. 제외된 내부 파일의 내용도 이 해시에 포함된다. 내용이 같은 파일을 다시 압축했더라도 ZIP 바이트가 달라지면 다른 요청이다.
 
 ```text
 첫 접수
@@ -199,7 +202,7 @@ GET /analyses/analysis_abc123/status
 
 ### POST /batches
 
-여러 파일을 한 묶음으로 접수한다. multipart 본문의 **`files` 필드를 파일 개수만큼 반복**해서 보낸다. 기본 최대 개수는 10개이고 한 파일의 크기 제한은 단일 업로드와 같다. ZIP 업로드는 지원하지 않는다.
+여러 파일을 한 묶음으로 접수한다. multipart 본문의 **`files` 필드를 파일 개수만큼 반복**해서 보낸다. 기본 최대 개수는 10개이고 한 파일의 크기 제한은 단일 업로드와 같다. ZIP은 아래의 `/batches/zip`으로 접수한다.
 
 응답의 `batch_id`는 묶음 번호, `total_count`는 접수 파일 수, `analyses`는 파일별 접수 결과 목록이다. 각 파일에는 별도의 `analysis_id`가 생긴다.
 
@@ -215,7 +218,52 @@ POST /batches
                 └─ analysis_id C
 ```
 
-입력 검증과 DB 등록은 묶음 단위로 처리한다. 파일 하나가 잘못되면 해당 묶음을 일부만 등록하지 않는다. 접수된 뒤 실제 분석을 진행할 때는 파일별 성공·실패 상태가 각각 생긴다.
+지원하지 않는 확장자·유효하지 않은 PE·미지원 PE 형식은 `SKIPPED`로 기록하고, 유효한 PE만 분석 작업으로 등록한다. 접수 후 파일별 성공·실패 상태도 독립적으로 관리한다. 파일 수·업로드 크기 제한 초과나 저장소·DB 장애는 묶음 전체 접수 오류다.
+
+### POST /batches/zip
+
+`multipart/form-data`의 **`file` 필드로 ZIP 한 개**를 보낸다. 하위 폴더의 `.exe`·`.dll`도 검사하고, 지원 PE는 단일·다중 입력과 같은 `BackendService`와 분석 처리기를 사용한다. 분석이 필요한 파일만 이후 심층 분석으로 전달된다.
+
+두 배치 접수 API의 공통 응답은 다음과 같다.
+
+| 필드 | 의미 |
+|---|---|
+| `batch_id` | 접수 묶음 번호 |
+| `input_count` | 검사한 입력 파일 수. ZIP의 폴더 제외 |
+| `accepted_count` / `total_count` | 실제 분석 작업을 등록한 수 |
+| `skipped_count` | 분석 작업을 만들지 않은 수 |
+| `archive_file_count` | ZIP 내부 파일 수. 일반 다중 입력이면 `null` |
+| `entries` | 입력 순서·이름·`ACCEPTED`/`SKIPPED`·사유·분석 번호 |
+| `analyses` | 등록한 파일별 분석 접수 결과 |
+
+`input_count = accepted_count + skipped_count`다. `entries[].input_index`는 같은 이름의 파일도 구분하며, ZIP 폴더가 빠진 자리는 번호가 건너뛸 수 있다. ZIP 항목의 원래 경로는 `entries[].filename`에, 개별 분석의 파일명은 경로를 제거한 이름으로 저장한다. 접수 항목의 `ACCEPTED`는 최초 접수 사실을 뜻하므로 이후 분석이 실패해도 바뀌지 않는다.
+
+`SKIPPED`에는 `analysis_id`를 발급하지 않고 `reason_code`와 `reason`을 남긴다. 모두 제외돼도 조회할 수 있는 배치를 저장한다. 이 경우 `analyses=[]`, `total_count=0`, 조회 `status=COMPLETED`다. 빈 ZIP이나 폴더만 있는 ZIP은 `422 / EMPTY_ZIP`다.
+ZIP에서 해제하지 않고 제외한 항목은 `sha256=null`이고 `size_bytes`는 ZIP에 선언된 크기다. 지원 PE는 실제 읽은 크기와 SHA-256을 확인한 뒤 등록한다.
+
+| 제외 코드 | 대상 |
+|---|---|
+| `UNSUPPORTED_FILE_TYPE` | `.exe`·`.dll` 이외의 파일 |
+| `NESTED_ZIP_UNSUPPORTED` | ZIP 안의 ZIP |
+| `INVALID_PE` / `UNSUPPORTED_PE_ARCH` | 잘못된 헤더 또는 미지원 PE 형식 |
+| `ENCRYPTED_ENTRY_UNSUPPORTED` | 암호화 항목 |
+| `ZIP_COMPRESSION_UNSUPPORTED` | STORED·DEFLATE 이외의 압축 방식 |
+| `ZIP_FEATURE_UNSUPPORTED` | 패치 데이터 기능을 사용하는 항목 |
+| `FILE_TOO_LARGE` | ZIP 내부 PE가 파일별 크기 제한을 초과함 |
+
+ZIP의 기본 제한은 압축 파일 50 MiB, 전체 항목 100개(폴더 포함), 분석 대상 PE 10개, 파일별 50 MiB, 선언된 해제 후 총 크기 200 MiB, 항목별 압축률 200배, ZIP 처리 60초다. 제외 대상도 선언된 총량·압축률·항목 수 검사에 포함한다. 실제 해제 중에도 읽은 크기와 경과 시간을 검사한다. 시간 검사는 청크 처리 사이에서 수행한다.
+
+위험 경로(`..`, 절대 경로 등), 링크·특수 파일, 손상된 중앙 디렉터리, 분석 대상 항목의 압축 데이터·CRC 오류, 총량·압축률·항목 제한 위반은 **배치 전체 접수를 거절**한다. 분할 ZIP과 ZIP64는 지원하지 않는다. 제외 대상의 본문은 해제하지 않으므로 그 본문의 CRC까지 검사하지는 않는다.
+
+ZIP 내부 이름은 추출 경로로 사용하지 않는다. 임시 폴더의 고정 이름으로 읽고 검증이 끝난 PE만 원본 저장소에 보관한다. ZIP 자체와 임시 파일은 처리 후 정리한다. Python 표준 라이브러리 [zipfile](https://docs.python.org/3/library/zipfile.html)을 사용하며 추가 패키지는 없다.
+
+로컬 클라이언트 호출 예시:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/batches/zip -F "file=@C:/approved-fixtures/demo.zip" -H "Idempotency-Key: demo-zip-001"
+```
+
+위 경로는 사용할 승인된 입력 파일의 실제 경로로 바꾼다. API 인증이 설정됐다면 `X-API-Key`도 필요하다.
 
 ## 6. 목록·진행·결과 조회 API
 
@@ -229,8 +277,13 @@ POST /batches
 | `offset` | 0 | 앞에서 건너뛸 개수, 0 이상 |
 | `status` | 지정하지 않음 | `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` 중 하나 |
 | `sha256` | 지정하지 않음 | 소문자 16진수 64자리 해시 |
+| `verdict` | 지정하지 않음 | 초기 JRR 판정: `HIGH_RISK_UNCERTAIN`, `AUTO_MALICIOUS`, `AUTO_BENIGN` |
+| `batch_id` | 지정하지 않음 | 특정 배치에 속한 결과만 조회 |
+| `sort` | `high_risk_first` | 고위험 우선. `newest`로 최신 접수순 선택 가능 |
 
 예: `GET /analyses?limit=20&offset=20&status=COMPLETED`는 완료된 분석의 앞 20개를 건너뛴 다음 목록을 가져온다. 응답에는 조건에 맞는 `total_count`, 적용된 `limit`·`offset`, `analyses` 목록이 있다.
+
+기본 표시 순서는 **초기 고위험 → 자동 악성 → 자동 정상 → 미판정 → 실패**다. `FAILED`이면 초기 판정과 관계없이 마지막으로 표시하며, 같은 우선순위는 최신 접수순이다. 필터·정렬을 먼저 적용하고 그 결과를 페이지로 나눈다. 조회 정렬은 작업 실행 순서를 바꾸지 않는다. `verdict`는 초기 판정만 조회하므로 이후 시스템·전문가 판정이 달라져도 초기 고위험 결과를 다시 모아 볼 수 있다.
 
 ### GET /analyses/{analysis_id}/status
 
@@ -271,10 +324,13 @@ POST /batches
 
 | 필드 | 뜻 |
 |---|---|
-| `total_count` | 묶음에 포함된 파일 수 |
+| `total_count` | 묶음에 등록된 분석 수. `SKIPPED` 제외 |
 | `finished_count` | `COMPLETED` 또는 `FAILED`로 종료된 파일 수 |
 | `status_counts` | 각 상태별 파일 수 |
 | `analyses` | 파일별 종합 결과 목록 |
+| `status` | 묶음의 진행 상태 |
+| `summary` | 분석 상태별 개수와 초기 판정별 개수 |
+| `input_count` / `accepted_count` / `skipped_count` / `entries` | 최초 접수 내역. 제외 사유도 보존 |
 
 예를 들어 완료 3개·실패 1개면 `finished_count`는 4다. 이 숫자가 정상 파일 수를 뜻하지는 않는다.
 
@@ -287,6 +343,33 @@ POST /batches
 total_count    = 5
 finished_count = 4       → 화면에 "5개 중 4개 처리 종료" 표시
 ```
+
+`summary`는 다음 두 집계를 독립적으로 제공한다.
+
+- 작업 상태: `queued`, `running`, `completed`, `failed`의 합계 = `total`
+- 초기 판정: `auto_benign`, `auto_malicious`, `high_risk_uncertain`, `unclassified`의 합계 = `total`
+
+고위험 파일이 심층 분석 중이면 `running`과 `high_risk_uncertain`에 각각 포함된다. 분석 실패는 악성 판정을 뜻하지 않으며 `SKIPPED`는 실패 분석 수에 포함하지 않는다.
+
+| 배치 `status` | 의미 |
+|---|---|
+| `QUEUED` | 등록된 분석이 모두 대기 중 |
+| `RUNNING` | 진행 중이며 아직 종료된 분석 없음 |
+| `PARTIALLY_COMPLETED` | 일부가 종료됐고 나머지는 대기 또는 진행 중 |
+| `COMPLETED` | 모두 종료됨. 일부 실패나 전체 입력 제외도 포함 |
+| `FAILED` | 등록된 분석이 1건 이상이고 모두 실패 |
+
+기본 `sort=high_risk_first`이며, `newest`와 `input_order`도 지원한다. 이 API의 `analyses`에는 배치에 등록된 전체 분석이 담긴다. 요약은 아래의 필터 조회 결과와 관계없이 항상 배치 전체를 집계한다.
+
+### GET /batches/{batch_id}/analyses
+
+배치 내부의 결과만 필터링하고 페이지로 가져온다. `GET /analyses`의 `status`, `sha256`, `verdict`, `limit`, `offset`을 지원하며, `sort`는 `high_risk_first`, `newest`, `input_order` 중 하나다.
+
+```text
+GET /batches/batch_abc123/analyses?verdict=HIGH_RISK_UNCERTAIN&limit=20&offset=0
+```
+
+응답은 `batch_id`, 필터에 맞는 `total_count`, `limit`, `offset`, `analyses`다. 일치 결과가 없거나 모든 입력이 제외된 배치는 빈 목록, 존재하지 않는 배치는 `404 / BATCH_NOT_FOUND`를 반환한다.
 
 ## 7. 분석별 상세 API
 
@@ -471,7 +554,7 @@ Swagger UI는 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)에서 제
 
 문서 화면과 `/health`는 데이터베이스 설정 없이 사용할 수 있다. 분석 접수 및 저장 결과 조회에는 데이터베이스가 필요하고, 비동기 분석 수행에는 모델·도구 환경과 별도의 `run` 처리기가 필요하다. `202 Accepted`는 분석 완료가 아니라 작업 등록을 의미한다.
 
-문서 관련 주소는 업무 API 13개와 별도다.
+문서 관련 주소는 업무 API 15개와 별도다.
 
 | 주소 | 용도 |
 |---|---|

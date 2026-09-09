@@ -38,6 +38,11 @@ class BackendConfig:
     port: int = 8000
     max_file_bytes: int = 50 * 1024 * 1024
     max_batch_files: int = 10
+    max_zip_bytes: int = 50 * 1024 * 1024
+    max_zip_entries: int = 100
+    max_zip_expanded_bytes: int = 200 * 1024 * 1024
+    max_zip_ratio: float = 200
+    zip_timeout_seconds: float = 60
     upload_timeout_seconds: float = 120
     download_timeout_seconds: float = 60
     lease_seconds: int = 900
@@ -61,6 +66,24 @@ class BackendConfig:
             raise ValueError("invalid upload limits")
         if not 1 <= self.port <= 65535 or not 1 <= self.retention_hours <= 720:
             raise ValueError("invalid server port or retention hours")
+        if (
+            any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in (
+                    self.max_zip_bytes,
+                    self.max_zip_entries,
+                    self.max_zip_expanded_bytes,
+                )
+            )
+            or not 1 <= self.max_zip_bytes <= 512 * 1024 * 1024
+            or not 1 <= self.max_zip_entries <= 1000
+            or not 1 <= self.max_zip_expanded_bytes <= 2 * 1024 * 1024 * 1024
+            or not math.isfinite(self.max_zip_ratio)
+            or not 1 <= self.max_zip_ratio <= 1000
+            or not math.isfinite(self.zip_timeout_seconds)
+            or not 0 < self.zip_timeout_seconds <= 300
+        ):
+            raise ValueError("invalid ZIP limits")
         if not 0 < self.heartbeat_seconds < self.lease_seconds / 2:
             raise ValueError("heartbeat must be shorter than half the job lease")
         if not 0 < self.operation_timeout_seconds < self.lease_seconds <= 43200:
@@ -106,6 +129,13 @@ class BackendConfig:
             port=_integer("BACKEND_PORT", 8000),
             max_file_bytes=_integer("BACKEND_MAX_FILE_BYTES", 50 * 1024 * 1024),
             max_batch_files=_integer("BACKEND_MAX_BATCH_FILES", 10),
+            max_zip_bytes=_integer("BACKEND_MAX_ZIP_BYTES", 50 * 1024 * 1024),
+            max_zip_entries=_integer("BACKEND_MAX_ZIP_ENTRIES", 100),
+            max_zip_expanded_bytes=_integer(
+                "BACKEND_MAX_ZIP_EXPANDED_BYTES", 200 * 1024 * 1024
+            ),
+            max_zip_ratio=_positive("BACKEND_MAX_ZIP_RATIO", 200),
+            zip_timeout_seconds=_positive("BACKEND_ZIP_TIMEOUT_SECONDS", 60),
             upload_timeout_seconds=_positive("BACKEND_UPLOAD_TIMEOUT_SECONDS", 120),
             download_timeout_seconds=_positive("BACKEND_DOWNLOAD_TIMEOUT_SECONDS", 60),
             lease_seconds=_integer("BACKEND_LEASE_SECONDS", 900),

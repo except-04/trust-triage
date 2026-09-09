@@ -32,9 +32,21 @@ def test_defaults_and_environment(monkeypatch):
     monkeypatch.setenv("BACKEND_MAX_BATCH_FILES", "3")
     monkeypatch.setenv("BACKEND_MAX_FILE_BYTES", "2048")
     monkeypatch.setenv("BACKEND_API_TOKEN", "private-token" * 3)
+    monkeypatch.setenv("BACKEND_MAX_ZIP_BYTES", "4096")
+    monkeypatch.setenv("BACKEND_MAX_ZIP_ENTRIES", "20")
+    monkeypatch.setenv("BACKEND_MAX_ZIP_EXPANDED_BYTES", "8192")
+    monkeypatch.setenv("BACKEND_MAX_ZIP_RATIO", "30")
+    monkeypatch.setenv("BACKEND_ZIP_TIMEOUT_SECONDS", "5")
     actual = BackendConfig.from_env()
     assert actual.max_batch_files == 3 and actual.max_file_bytes == 2048
     assert "private-token" not in repr(actual)
+    assert (
+        actual.max_zip_bytes,
+        actual.max_zip_entries,
+        actual.max_zip_expanded_bytes,
+        actual.max_zip_ratio,
+        actual.zip_timeout_seconds,
+    ) == (4096, 20, 8192, 30, 5)
 
 
 @pytest.mark.parametrize(
@@ -51,6 +63,13 @@ def test_defaults_and_environment(monkeypatch):
         ("BACKEND_STORAGE_MODE", "other"),
         ("BACKEND_STORAGE_MODE", "s3"),
         ("BACKEND_RETENTION_HOURS", "721"),
+        ("BACKEND_MAX_ZIP_BYTES", "0"),
+        ("BACKEND_MAX_ZIP_ENTRIES", "1001"),
+        ("BACKEND_MAX_ZIP_ENTRIES", "2.5"),
+        ("BACKEND_MAX_ZIP_EXPANDED_BYTES", "2147483649"),
+        ("BACKEND_MAX_ZIP_RATIO", "NaN"),
+        ("BACKEND_MAX_ZIP_RATIO", "1001"),
+        ("BACKEND_ZIP_TIMEOUT_SECONDS", "301"),
     ],
 )
 def test_invalid_environment_rejected(monkeypatch, key, value):

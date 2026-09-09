@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import BinaryIO
 from uuid import uuid4
 
-from . import views
+from . import batch_results, views
+from .batch_inputs import BatchInputHandler
 from .config import BackendConfig
 from .errors import BackendError
 from .repository import AnalysisRecord, AnalysisRepository
 from .schemas import (
     AnalysisListResponse,
-    BatchAccepted,
+    BatchAnalysisListResponse,
     BatchResponse,
     ReviewHistoryResponse,
     ReviewRequest,
@@ -29,6 +29,19 @@ def stored_sample(record: AnalysisRecord) -> StoredSample:
     return StoredSample(
         **{key: getattr(record, key) for key in StoredSample.__dataclass_fields__}
     )
+
+
+def _validate_idempotency_key(key):
+    if key is not None and (
+        not isinstance(key, str)
+        or not 1 <= len(key) <= 200
+        or any(ord(c) < 33 or ord(c) > 126 for c in key)
+    ):
+        raise BackendError(
+            "INVALID_IDEMPOTENCY_KEY",
+            "Idempotency-Key는 1~200자의 공백 없는 ASCII 문자열이어야 합니다.",
+            http_status=422,
+        )
 
 
 class BackendService:
@@ -69,16 +82,9 @@ class BackendService:
                 http_status=422,
                 stage="UPLOAD",
             )
-        if idempotency_key is not None and (
-            not 1 <= len(idempotency_key) <= 200
-            or any(ord(c) < 33 or ord(c) > 126 for c in idempotency_key)
-        ):
-            raise BackendError(
-                "INVALID_IDEMPOTENCY_KEY",
-                "Idempotency-Key는 1~200자의 공백 없는 ASCII 문자열이어야 합니다.",
-                http_status=422,
-            )
-        batch_id = f"batch_{uuid4().hex}" if batch else None
+        _validate_idempotency_key(idempotency_key)
+        if batch:
+            return self._submit_batch(files, idempotency_key=idempotency_key)
         uploaded: list[StoredSample] = []
         try:
             for stream, filename in files:
@@ -89,7 +95,7 @@ class BackendService:
                 )
             records = self.repository.register(
                 [asdict(sample) for sample in uploaded],
-                batch_id=batch_id,
+                batch_id=None,
                 idempotency_key=idempotency_key,
             )
         except BaseException:
@@ -100,13 +106,54 @@ class BackendService:
         for sample in uploaded:
             if sample.file_location not in retained:
                 self._discard_unreferenced(sample)
-        if batch:
-            return BatchAccepted(
-                batch_id=records[0].batch_id,
-                total_count=len(records),
-                analyses=[views.accepted(row) for row in records],
-            )
         return views.accepted(records[0])
+
+    def submit_zip(self, files: list[tuple[BinaryIO, str]], *, idempotency_key=None):
+        _validate_idempotency_key(idempotency_key)
+        return self._submit_batch(files, archive=True, idempotency_key=idempotency_key)
+
+    def _submit_batch(self, files, *, archive=False, idempotency_key=None):
+        uploaded: list[StoredSample] = []
+        try:
+            with BatchInputHandler(self.config).prepare(
+                files, archive=archive
+            ) as prepared:
+                report = prepared.report.model_copy(deep=True)
+                for entry in report.entries:
+                    if entry.status != "ACCEPTED":
+                        continue
+                    with prepared.paths[entry.input_index].open("rb") as stream:
+                        sample = self.storage.ingest(
+                            stream,
+                            analysis_id=f"analysis_{uuid4().hex}",
+                            filename=entry.filename,
+                        )
+                    uploaded.append(sample)
+                    if (sample.sha256, sample.size_bytes) != (
+                        entry.sha256,
+                        entry.size_bytes,
+                    ):
+                        raise BackendError(
+                            "INPUT_CHANGED",
+                            "입력 검증 후 파일 내용이 달라졌습니다.",
+                            stage="UPLOAD",
+                        )
+                    entry.analysis_id = sample.analysis_id
+                batch = self.repository.register_batch(
+                    [asdict(sample) for sample in uploaded],
+                    batch_id=f"batch_{uuid4().hex}",
+                    input_report=report,
+                    idempotency_key=idempotency_key,
+                )
+        except BaseException:
+            for sample in uploaded:
+                self._discard_unreferenced(sample)
+            raise
+        retained = {row.file_location for row in batch.analyses}
+        for sample in uploaded:
+            if sample.file_location not in retained:
+                self._discard_unreferenced(sample)
+        return batch_results.accepted(batch)
 
     def get(self, analysis_id: str) -> AnalysisRecord:
         record = self.repository.get(analysis_id)
@@ -117,9 +164,19 @@ class BackendService:
         return record
 
     def list_analyses(
-        self, *, limit=20, offset=0, status=None, sha256=None
+        self,
+        *,
+        limit=20,
+        offset=0,
+        status=None,
+        sha256=None,
+        batch_id=None,
+        verdict=None,
+        sort="high_risk_first",
     ) -> AnalysisListResponse:
-        rows, total = self.repository.list_analyses(limit, offset, status, sha256)
+        rows, total = self.repository.list_analyses(
+            limit, offset, status, sha256, batch_id=batch_id, verdict=verdict, sort=sort
+        )
         return AnalysisListResponse(
             total_count=total,
             limit=limit,
@@ -127,21 +184,19 @@ class BackendService:
             analyses=[views.analysis(row) for row in rows],
         )
 
-    def get_batch(self, batch_id: str) -> BatchResponse:
-        rows = self.repository.get_batch(batch_id)
-        if rows is None:
+    def list_batch_analyses(
+        self, batch_id: str, **filters
+    ) -> BatchAnalysisListResponse:
+        result = self.list_analyses(batch_id=batch_id, **filters)
+        return BatchAnalysisListResponse(batch_id=batch_id, **result.model_dump())
+
+    def get_batch(self, batch_id: str, *, sort="high_risk_first") -> BatchResponse:
+        batch = self.repository.batch_record(batch_id)
+        if batch is None:
             raise BackendError(
                 "BATCH_NOT_FOUND", "해당 일괄 분석을 찾을 수 없습니다.", http_status=404
             )
-        counts = {state: 0 for state in ("QUEUED", "RUNNING", "COMPLETED", "FAILED")}
-        counts.update(Counter(row.status for row in rows))
-        return BatchResponse(
-            batch_id=batch_id,
-            total_count=len(rows),
-            finished_count=sum(row.terminal for row in rows),
-            status_counts=counts,
-            analyses=[views.analysis(row) for row in rows],
-        )
+        return batch_results.response(batch, sort=sort)
 
     def review(self, analysis_id: str, request: ReviewRequest):
         return views.review(

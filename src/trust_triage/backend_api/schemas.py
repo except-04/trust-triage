@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 AnalysisId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -380,19 +380,119 @@ class AnalysisListResponse(APIModel):
     )
 
 
-class BatchAccepted(APIModel):
+class BatchAnalysisListResponse(AnalysisListResponse):
+    batch_id: AnalysisId
+
+
+class BatchStatus(str, Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    PARTIALLY_COMPLETED = "PARTIALLY_COMPLETED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class BatchSummary(APIModel):
+    """상태 개수와 초기 판정 개수는 서로 독립된 집계다."""
+
+    total: int = 0
+    queued: int = 0
+    running: int = 0
+    completed: int = 0
+    failed: int = 0
+    auto_benign: int = 0
+    auto_malicious: int = 0
+    high_risk_uncertain: int = 0
+    unclassified: int = 0
+
+
+class BatchInputEntry(APIModel):
+    input_index: int = Field(
+        ge=0, description="입력 순서. 이름이 같은 파일도 구분합니다."
+    )
+    filename: str = Field(min_length=1, max_length=512)
+    status: Literal["ACCEPTED", "SKIPPED"]
+    analysis_id: AnalysisId | None = None
+    sha256: Sha256 | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    reason_code: str | None = Field(default=None, max_length=64)
+    reason: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode="after")
+    def consistent_outcome(self):
+        if self.status == "ACCEPTED":
+            if (
+                self.analysis_id is None
+                or self.sha256 is None
+                or self.size_bytes is None
+            ):
+                raise ValueError("accepted entries require analysis identity and size")
+            if self.reason_code is not None or self.reason is not None:
+                raise ValueError("accepted entries cannot have a skip reason")
+        elif self.analysis_id is not None or not self.reason_code or not self.reason:
+            raise ValueError("skipped entries require a reason and no analysis_id")
+        return self
+
+
+class BatchInputReport(APIModel):
+    source_type: Literal["MULTIPLE_FILES", "ZIP"]
+    archive_filename: str | None = Field(default=None, min_length=1, max_length=512)
+    archive_sha256: Sha256 | None = None
+    archive_size_bytes: int | None = Field(default=None, ge=0)
+    entries: list[BatchInputEntry] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def consistent_source(self):
+        archive_fields = (
+            self.archive_filename,
+            self.archive_sha256,
+            self.archive_size_bytes,
+        )
+        if self.source_type == "ZIP" and any(value is None for value in archive_fields):
+            raise ValueError("ZIP requests require archive identity")
+        if self.source_type != "ZIP" and any(
+            value is not None for value in archive_fields
+        ):
+            raise ValueError("non-archive requests cannot contain archive identity")
+        indexes = [entry.input_index for entry in self.entries]
+        if indexes != sorted(set(indexes)):
+            raise ValueError("input indexes must be ordered and unique")
+        return self
+
+
+class BatchInputReceipt(APIModel):
+    input_count: int = Field(
+        default=0, description="접수 전에 검사한 파일 수입니다. 폴더는 제외합니다."
+    )
+    accepted_count: int = Field(
+        default=0, description="독립 분석 작업을 등록한 파일 수입니다."
+    )
+    skipped_count: int = Field(
+        default=0, description="분석 작업을 만들지 않은 파일 수입니다."
+    )
+    archive_file_count: int | None = Field(
+        default=None, description="ZIP 내부 파일 수. 일반 다중 입력이면 null입니다."
+    )
+    entries: list[BatchInputEntry] = Field(default_factory=list)
+
+
+class BatchAccepted(BatchInputReceipt):
     batch_id: AnalysisId = Field(
         description="묶음 전체를 조회할 때 사용하는 번호입니다."
     )
-    total_count: int = Field(description="이번 묶음으로 접수한 파일 수입니다.")
+    total_count: int = Field(
+        description="이번 묶음으로 등록한 분석 수입니다. accepted_count와 같으며 SKIPPED는 제외합니다."
+    )
     analyses: list[AnalysisAccepted] = Field(
         description="파일별 접수 결과입니다. 각 항목에 고유한 analysis_id가 있습니다."
     )
 
 
-class BatchResponse(APIModel):
+class BatchResponse(BatchInputReceipt):
     batch_id: AnalysisId = Field(description="조회한 묶음의 번호입니다.")
-    total_count: int = Field(description="묶음에 포함된 전체 파일 수입니다.")
+    total_count: int = Field(
+        description="묶음에 등록된 분석 수입니다. accepted_count와 같으며 SKIPPED는 제외합니다."
+    )
     finished_count: int = Field(
         description="COMPLETED와 FAILED를 합한 종료 파일 수입니다. 성공한 파일 수와는 다를 수 있습니다."
     )
@@ -402,3 +502,8 @@ class BatchResponse(APIModel):
     analyses: list[AnalysisResponse] = Field(
         description="묶음 안의 파일별 종합 결과입니다."
     )
+    status: BatchStatus = Field(
+        default=BatchStatus.QUEUED,
+        description="배치 진행 상태입니다. COMPLETED는 처리가 모두 종료됐다는 의미이며 일부 실패 또는 전체 SKIPPED를 포함할 수 있습니다.",
+    )
+    summary: BatchSummary = Field(default_factory=BatchSummary)

@@ -67,10 +67,10 @@ document.addEventListener("click", function (event) {
 """
 
 ANALYSIS_ID_HELP = (
-    "분석 리소스 식별자. POST /analyses 또는 POST /batches 응답의 analysis_id를 사용합니다. "
+    "분석 리소스 식별자. POST /analyses, POST /batches 또는 POST /batches/zip 응답의 analysis_id를 사용합니다. "
     "문서에 표시된 예시 식별자는 실제 조회 대상이 아닙니다."
 )
-BATCH_ID_HELP = "배치 리소스 식별자. POST /batches 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다."
+BATCH_ID_HELP = "배치 리소스 식별자. POST /batches 또는 POST /batches/zip 응답의 batch_id를 사용하며, 파일별 analysis_id와 구분됩니다."
 IDEMPOTENCY_HELP = (
     "선택적 멱등성 키. 동일한 업로드 요청을 재전송할 때 같은 값을 사용하면 중복 작업 생성을 방지합니다. "
     "동일한 키에 다른 파일 집합을 사용하면 409가 반환됩니다."
@@ -317,6 +317,42 @@ def response_examples() -> dict:
         "reviewer_id": "reviewer.example",
         "reviewed_at": "2026-09-08T09:05:00Z",
     }
+    receipt = {
+        "input_count": 1,
+        "accepted_count": 1,
+        "skipped_count": 0,
+        "archive_file_count": None,
+        "entries": [
+            {
+                "input_index": 0,
+                "filename": "example.exe",
+                "status": "ACCEPTED",
+                "analysis_id": identity["analysis_id"],
+                "sha256": identity["sha256"],
+                "size_bytes": 14848,
+                "reason_code": None,
+                "reason": None,
+            }
+        ],
+    }
+    high_risk = {
+        **analysis,
+        **running,
+        "batch_id": "batch_example_001",
+        "initial_verdict": "HIGH_RISK_UNCERTAIN",
+        "route": "DEEP_ANALYSIS",
+        "reason": "설명용 예시: 위험 신호로 추가 분석을 수행합니다.",
+        "current_stage": "CAPA_FLOSS",
+        "deep_analysis_status": {
+            "capa": "RUNNING",
+            "floss": "RUNNING",
+            "speakeasy": "QUEUED",
+            "cape": "NOT_REQUIRED",
+        },
+        "final_verdict": None,
+        "final_assessment": None,
+        "approval_status": "PENDING",
+    }
     return {
         "health": {
             "ok": _example(
@@ -383,9 +419,37 @@ def response_examples() -> dict:
                 {
                     "batch_id": "batch_example_001",
                     "total_count": 1,
+                    **receipt,
                     "analyses": [{**accepted, "batch_id": "batch_example_001"}],
                 },
             )
+        },
+        "upload_zip": {
+            "mixed": _example(
+                "ZIP의 PE 1건 접수, 텍스트 1건 제외",
+                {
+                    "batch_id": "batch_example_001",
+                    "total_count": 1,
+                    **receipt,
+                    "input_count": 2,
+                    "skipped_count": 1,
+                    "archive_file_count": 2,
+                    "entries": [
+                        *receipt["entries"],
+                        {
+                            "input_index": 1,
+                            "filename": "readme.txt",
+                            "status": "SKIPPED",
+                            "analysis_id": None,
+                            "sha256": None,
+                            "size_bytes": 30,
+                            "reason_code": "UNSUPPORTED_FILE_TYPE",
+                            "reason": ".exe와 .dll 파일만 분석합니다.",
+                        },
+                    ],
+                    "analyses": [{**accepted, "batch_id": "batch_example_001"}],
+                },
+            ),
         },
         "get_batch": {
             "completed": _example(
@@ -393,6 +457,19 @@ def response_examples() -> dict:
                 {
                     "batch_id": "batch_example_001",
                     "total_count": 1,
+                    **receipt,
+                    "status": "COMPLETED",
+                    "summary": {
+                        "total": 1,
+                        "queued": 0,
+                        "running": 0,
+                        "completed": 1,
+                        "failed": 0,
+                        "auto_benign": 1,
+                        "auto_malicious": 0,
+                        "high_risk_uncertain": 0,
+                        "unclassified": 0,
+                    },
                     "finished_count": 1,
                     "status_counts": {
                         "QUEUED": 0,
@@ -403,6 +480,18 @@ def response_examples() -> dict:
                     "analyses": [{**analysis, "batch_id": "batch_example_001"}],
                 },
             )
+        },
+        "list_batch_analyses": {
+            "high_risk": _example(
+                "고위험 초기 판정으로 필터링한 목록",
+                {
+                    "batch_id": "batch_example_001",
+                    "total_count": 1,
+                    "limit": 20,
+                    "offset": 0,
+                    "analyses": [high_risk],
+                },
+            ),
         },
         "save_review": {"held": _example("전문가 검토 보류 등록", review)},
         "list_reviews": {
@@ -552,7 +641,7 @@ HTTP `202 Accepted`는 작업이 등록되었음을 의미하며 분석 완료�
             """
 ### 목적
 
-접수된 분석을 최신순으로 조회하며 상태 또는 파일 해시 기준 필터와 offset 기반 페이지네이션을 제공합니다.
+접수된 분석을 고위험 우선으로 조회하며 상태·초기 판정·배치·파일 해시 필터와 offset 기반 페이지네이션을 제공합니다.
 
 ### 쿼리 매개변수
 
@@ -562,13 +651,20 @@ HTTP `202 Accepted`는 작업이 등록되었음을 의미하며 분석 완료�
 | `offset` | `0` | 결과 집합에서 건너뛸 항목 수 |
 | `status` | 없음 | `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` 중 하나로 필터링 |
 | `sha256` | 없음 | 64자리 소문자 SHA-256과 일치하는 파일로 필터링 |
+| `verdict` | 없음 | 초기 JRR 판정. `HIGH_RISK_UNCERTAIN`, `AUTO_MALICIOUS`, `AUTO_BENIGN` |
+| `batch_id` | 없음 | 특정 배치에 속한 분석만 조회 |
+| `sort` | `high_risk_first` | 고위험 우선. `newest`를 지정하면 최신 접수순 |
 
 ### 응답 및 페이지네이션
 
 `total_count`는 필터 조건에 일치하는 전체 건수이고 `analyses`는 현재 페이지의 결과입니다.
 다음 페이지의 offset은 현재 `offset + limit`으로 계산합니다. SHA-256은 파일 내용 식별자이며 작업 식별자인 `analysis_id`와 별개입니다.
+필터와 정렬은 전체 검색 결과에 적용한 다음 페이지를 자릅니다.
+고위험 우선 순서는 `HIGH_RISK_UNCERTAIN` → `AUTO_MALICIOUS` → `AUTO_BENIGN` → 미판정 → `FAILED`입니다.
+동순위는 최신 접수순입니다. 이 순서는 조회 표시용이며 분석 실행 순서를 변경하지 않습니다.
+`verdict`는 초기 판정이므로 후속 분석 결과나 전문가 판정이 바뀌어도 해당 초기 판정으로 조회됩니다.
 """,
-            (401, 422, 503),
+            (401, 404, 422, 503),
         ),
         "get_triage": (
             RESULT_TAG,
@@ -662,10 +758,42 @@ JRR이 심층 분석 경로로 전달한 파일에 대해 CAPA, FLOSS, Speakeasy
 HTTP `202 Accepted`는 배치와 파일별 작업이 등록되었음을 의미합니다.
 `batch_id`는 배치 집계 조회에 사용하고, `analyses[].analysis_id`는 개별 파일 조회에 사용합니다.
 
-### 원자성 및 멱등성
+### 입력별 처리 및 멱등성
 
-모든 파일이 입력 검증을 통과한 경우에만 배치가 등록됩니다. 하나 이상의 파일이 실패하면 배치 전체가 생성되지 않습니다.
+지원하지 않는 확장자·잘못된 PE·미지원 PE 형식은 `entries`에 `SKIPPED`와 사유를 기록하고 유효한 PE만 작업으로 등록합니다.
+`input_count = accepted_count + skipped_count`이고 `total_count`는 등록한 분석 수(`accepted_count`)입니다.
+모두 제외된 입력도 배치 접수 내역을 보존하며 `analyses`는 빈 목록입니다. 접수 제한 초과나 저장소·DB 장애는 요청 전체 오류입니다.
+접수 후 개별 분석 실패는 다른 파일의 분석을 중단하지 않습니다.
 동일한 멱등성 키에 다른 파일 집합 또는 순서를 사용하면 `409`가 반환됩니다.
+""",
+            (400, 401, 408, 409, 413, 422, 503),
+        ),
+        "upload_zip": (
+            BATCH_TAG,
+            "ZIP 배치 분석 접수",
+            f"""
+### 목적과 요청
+
+`multipart/form-data`의 `file` 필드로 ZIP 한 개를 접수합니다. ZIP 안의 `.exe`와 `.dll`을 기존과 같은 분석 처리기로 전달합니다.
+`Idempotency-Key`를 지정하면 동일한 ZIP 바이트와 이름의 재전송은 기존 배치와 접수 내역을 반환합니다.
+
+### 입력 제한
+
+- ZIP 크기: {config.max_zip_bytes:,} bytes
+- 전체 ZIP 항목: 최대 {config.max_zip_entries}개(폴더 포함), 분석 대상 PE: 최대 {config.max_batch_files}개
+- 파일별 PE 크기: {file_limit}, 선언된 해제 후 총 크기: {config.max_zip_expanded_bytes:,} bytes
+- 항목별 최대 압축률: {config.max_zip_ratio:g}, ZIP 처리 제한 시간: {config.zip_timeout_seconds:g}초
+
+STORED와 DEFLATE를 지원합니다. 중첩 ZIP, 다른 확장자, 암호화 파일, 미지원 압축·패치 데이터 기능, 크기 초과 PE 및 잘못된 PE는 `SKIPPED`로 기록합니다.
+빈 ZIP, 손상된 PE 항목의 압축 데이터·체크섬, 위험 경로·링크, 압축률·총량·항목 수 제한 위반은 전체 접수를 거절합니다.
+분할 ZIP과 ZIP64는 지원하지 않습니다. 지원하지 않는 항목의 본문은 해제하거나 분석하지 않습니다.
+
+### 응답
+
+`batch_id`, `input_count`, `accepted_count`, `skipped_count`, `archive_file_count`와 파일별 `entries`를 반환합니다.
+`input_index`는 ZIP 항목 순서이며 동명 파일을 구분합니다. 폴더는 파일 수와 `entries`에서 제외됩니다.
+`entries[].analysis_id`는 접수된 파일에만 발급하고, `SKIPPED`는 분석 실패 수에 포함하지 않습니다.
+모두 제외돼도 배치는 저장되며 등록된 분석 수가 0이므로 조회 상태는 `COMPLETED`입니다.
 """,
             (400, 401, 408, 409, 413, 422, 503),
         ),
@@ -679,16 +807,48 @@ HTTP `202 Accepted`는 배치와 파일별 작업이 등록되었음을 의미�
 
 ### 요청
 
-경로 매개변수 `batch_id`에는 `POST /batches` 응답에서 반환된 배치 식별자를 사용합니다.
+경로 매개변수 `batch_id`에는 `POST /batches` 또는 `POST /batches/zip` 응답의 배치 식별자를 사용합니다.
 `batch_id`는 개별 파일의 `analysis_id`와 별개의 네임스페이스를 가집니다.
 
 ### 완료 조건
 
-`total_count`는 전체 파일 수, `finished_count`는 **COMPLETED와 FAILED를 합한 종료 파일 수**입니다.
+`total_count`는 등록된 분석 수, `finished_count`는 **COMPLETED와 FAILED를 합한 종료 분석 수**입니다.
 두 값이 같으면 모든 파일이 종료 상태에 도달한 것이며, 모든 분석이 성공했다는 의미는 아닙니다.
 
 `status_counts`는 상태별 파일 수를, `analyses`는 파일별 결과와 오류를 제공합니다.
 개별 분석의 상세 리소스는 각 항목의 `analysis_id`로 조회할 수 있습니다.
+
+### 요약과 입력 내역
+
+`summary`의 `queued/running/completed/failed`는 작업 상태 집계이며 합계는 `total`입니다.
+`auto_benign/auto_malicious/high_risk_uncertain/unclassified`는 초기 판정 집계이며 합계는 같은 `total`입니다. 두 집계는 서로 독립적입니다.
+`entries`는 최초 접수 내역으로, 제외된 파일의 사유도 보존합니다. `SKIPPED`는 분석 작업과 실패 수에 포함하지 않습니다.
+
+배치 `status`는 전부 대기하면 `QUEUED`, 진행 중이면 `RUNNING`, 일부 종료 후 나머지가 활성 상태면 `PARTIALLY_COMPLETED`입니다.
+전부 실패하면 `FAILED`이며, 그 외 모두 종료한 경우(일부 실패 포함) 또는 전부 제외된 경우는 `COMPLETED`입니다.
+기본 `sort=high_risk_first`는 고위험 우선, `newest`는 최신순, `input_order`는 입력순입니다.
+이 API는 배치의 모든 등록 분석을 반환합니다. 필터·페이지 조회는 `GET /batches/{batch_id}/analyses`를 사용합니다.
+""",
+            (401, 404, 422, 503),
+        ),
+        "list_batch_analyses": (
+            BATCH_TAG,
+            "배치 내 분석 목록 필터 조회",
+            """
+### 목적과 쿼리
+
+배치 안의 등록된 분석만 조회합니다. `verdict=HIGH_RISK_UNCERTAIN`으로 초기 고위험 파일을 모아 볼 수 있습니다.
+`status`, `sha256`, `limit`(기본 20, 최대 100), `offset`(기본 0)을 함께 사용할 수 있습니다.
+`sort`는 `high_risk_first`(기본), `newest`, `input_order` 중 하나입니다.
+고위험 우선은 초기 고위험→자동 악성→자동 정상→미판정→실패 순서이며, 동순위는 최신순입니다.
+조회 정렬은 실제 분석 실행 순서를 바꾸지 않습니다.
+
+### 응답
+
+`total_count`는 모든 필터에 맞는 전체 분석 수이고 `analyses`는 정렬 후 선택된 페이지입니다.
+초기 판정은 시스템 최종 판정·전문가 판정과 별개로 보존됩니다.
+존재하는 배치에서 일치 결과가 없거나 모든 입력이 제외된 경우 빈 목록을 반환합니다. 배치 자체가 없으면 `404`입니다.
+전체 요약과 `SKIPPED` 입력 내역은 `GET /batches/{batch_id}`에서 조회합니다.
 """,
             (401, 404, 422, 503),
         ),
@@ -745,7 +905,7 @@ HTTP `202 Accepted`는 배치와 파일별 작업이 등록되었음을 의미�
     examples = response_examples()
     result = {}
     for name, (tag, summary, description, errors) in descriptions.items():
-        success = 202 if name in {"upload", "upload_batch"} else 200
+        success = 202 if name in {"upload", "upload_batch", "upload_zip"} else 200
         responses = error_responses(*errors)
         responses[success] = {
             "description": "비동기 분석 작업이 접수되었습니다. 응답 식별자로 상태와 결과를 조회할 수 있습니다."
@@ -759,9 +919,10 @@ HTTP `202 Accepted`는 배치와 파일별 작업이 등록되었음을 의미�
             "description": description.strip(),
             "responses": responses,
         }
-    result["get_batch"]["responses"][404]["content"]["application/json"]["example"] = (
-        _error("BATCH_NOT_FOUND", "해당 일괄 분석을 찾을 수 없습니다.")
-    )
+    for name in ("get_batch", "list_batch_analyses", "list_analyses"):
+        result[name]["responses"][404]["content"]["application/json"]["example"] = (
+            _error("BATCH_NOT_FOUND", "해당 일괄 분석을 찾을 수 없습니다.")
+        )
     conflict = result["save_review"]["responses"][409]
     conflict["content"]["application/json"] = {
         "examples": {

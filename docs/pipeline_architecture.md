@@ -82,6 +82,8 @@ trust-triage/
 │  ├─ app.py                               FastAPI Endpoint와 Swagger
 │  ├─ schemas.py                           공개 요청·응답 형식
 │  ├─ service.py                           접수·조회·검토 업무
+│  ├─ batch_inputs.py                      다중·ZIP 입력 검사와 SKIPPED 내역
+│  ├─ batch_results.py                     배치 요약·진행 상태·고위험 우선 정렬
 │  ├─ processor.py                         DB 작업을 가져와 분석 단계 실행
 │  ├─ initial_analysis.py                  Feature→모델→Calibration→JRR→SHAP
 │  ├─ model_bundle.py                      모델 산출물 로딩·검증
@@ -598,13 +600,18 @@ FastAPI는 파일을 받고 작업을 등록한 뒤 `202 Accepted`를 반환합�
 
 주요 공개 기능은 다음과 같습니다.
 
-- 단일·일괄 파일 접수
+- 단일·다중·ZIP 파일 접수와 입력별 접수·제외 사유
+- 배치 상태·초기 판정별 요약, `HIGH_RISK_UNCERTAIN` 필터와 고위험 우선 조회
 - 전체 목록, 종합 결과, 상태, 초기 판정, SHAP, 심층 분석 결과 조회
 - 전문가 판정 또는 보류 의견 등록
 - 전문가 검토 이력 조회
 - `/docs`의 한국어 Swagger 안내와 실행 예시
 
 정확한 Endpoint와 JSON 형식은 [API 종류와 설명](backend-api/api-reference.md)을 기준으로 합니다.
+
+`POST /batches/zip`은 ZIP 안의 지원 PE를 기존 분석 처리기로 전달합니다. 다른 형식·중첩 ZIP·암호화 파일 등은 `SKIPPED`로 기록하며 분석 작업을 만들지 않습니다. 위험 경로·링크·압축률·총량·항목 수 위반은 ZIP 전체 접수를 거절합니다. 모두 제외돼도 배치 접수 내역은 조회할 수 있습니다.
+
+`GET /batches/{batch_id}`는 배치 전체 요약과 접수 내역을 반환하고, `GET /batches/{batch_id}/analyses?verdict=HIGH_RISK_UNCERTAIN`은 초기 고위험 결과를 필터링합니다. 진행 상태와 초기 판정은 별도 집계이며, 고위험 우선 정렬은 조회 표시 순서입니다. 파일별 처리기와 기존 심층 분석·SQS 계약은 그대로 사용합니다. MCP 입력 연결은 후속 범위입니다.
 
 ### Streamlit Dashboard
 
@@ -629,7 +636,7 @@ PostgreSQL을 분석 상태의 기준 저장소로 사용합니다.
 
 | 테이블 | 역할 |
 |---|---|
-| `api_batches` | 접수 요청, 일괄 요청, Idempotency 정보 |
+| `api_batches` | 접수 요청, 일괄 요청, Idempotency 정보, ZIP·파일별 접수/제외 내역 |
 | `api_analyses` | 파일별 식별자, 단계, 초기·심층·최종 결과와 내부 저장 위치 |
 | `api_reviews` | 전문가 판정, 메모, 검토자, revision 이력 |
 
@@ -660,6 +667,7 @@ MLflow는 모델 실험과 성능 지표를 관리합니다. Backend에서 실�
 - [x] PostgreSQL 작업·결과·전문가 검토 Schema 구현
 - [x] Local Storage와 S3 저장 Adapter 구현
 - [x] API 서버와 분석 처리기 프로세스 분리
+- [x] 배치 요약, 고위험 초기 판정 필터·정렬, 제한을 적용한 ZIP 접수
 - [ ] 팀에서 검증한 모델 산출물 6개의 실제 경로와 버전 확정
 - [ ] Deep Analysis 서비스와 Speakeasy Worker 브랜치 통합 검증
 - [ ] 실제 PostgreSQL·S3·SQS·IAM 연결 정보로 개발 환경 검증
@@ -676,3 +684,4 @@ MLflow는 모델 실험과 성능 지표를 관리합니다. Backend에서 실�
 | 2026-08-06 | 최초 작성 (뼈대)                                          | 김정윤 |
 | 2026-08-22 | JRR, 위험 신호, Tiered Deep Analysis, 판정 이력 및 서비스 구조 반영 | 김정윤 |
 | 2026-09-09 | Backend API, PostgreSQL, S3, SQS Worker, 실제 파일·의존성 구조 반영 | 이상욱 |
+| 2026-09-09 | 배치 요약·고위험 필터·ZIP 입력 및 파일별 접수 내역 반영 | 이상욱 |

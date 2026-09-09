@@ -576,19 +576,22 @@ def test_conflicting_idempotency_key_cleans_up_rejected_upload(harness):
     ]
 
 
-def test_batch_upload_is_all_or_none_before_registration(harness):
-    with pytest.raises(BackendError) as error:
-        harness.service.submit(
-            [
-                (io.BytesIO(harmless_pe_header()), "header.exe"),
-                (io.BytesIO(b"invalid harmless text"), "invalid.exe"),
-            ],
-            batch=True,
-        )
-    assert error.value.code == "INVALID_PE"
-    assert harness.repository.rows == {} and harness.repository.batches == {}
-    assert harness.repository.calls["register"] == 0
-    assert list(harness.storage.root.glob("*/sample.bin")) == []
+def test_batch_upload_skips_invalid_pe_and_registers_valid_input(harness):
+    result = harness.service.submit(
+        [
+            (io.BytesIO(harmless_pe_header()), "header.exe"),
+            (io.BytesIO(b"invalid harmless text"), "invalid.exe"),
+        ],
+        batch=True,
+    )
+    assert (
+        result.input_count == 2 and result.accepted_count == result.skipped_count == 1
+    )
+    assert result.entries[1].reason_code == "INVALID_PE"
+    assert result.entries[1].analysis_id is None
+    assert len(harness.repository.rows) == len(harness.repository.batches) == 1
+    assert harness.repository.calls["register"] == 1
+    assert len(list(harness.storage.root.glob("*/sample.bin"))) == 1
 
 
 def test_batch_database_failure_removes_all_unregistered_uploads(harness):
