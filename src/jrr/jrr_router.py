@@ -31,30 +31,42 @@ class JointRiskRouter:
                 "reason": "System Error: NaN values detected (Fail-Closed)"
             }
             
+        decision = None
+        reason = None
+        triggered_signals = []
+
         # 1. OOD Score가 낮으면(학습 분포를 벗어남) 심층 분석으로 격상
         if ood_score < self.tau_ood:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"OOD Detected (Score: {ood_score:.4f})"
+            if not reason: reason = f"OOD Detected (Score: {ood_score:.4f})"
+            triggered_signals.append("OOD")
+            
         # 2. 불일치도가 크면 고확신 오판 방지를 위해 심층 분석으로 격상
-        elif disagreement >= self.tau_disagree:
+        if disagreement >= self.tau_disagree:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"High Model Disagreement ({disagreement:.4f})"
+            if not reason: reason = f"High Model Disagreement ({disagreement:.4f})"
+            triggered_signals.append("DISAGREEMENT")
+            
         # 3. 분석 난이도가 높으면(PE 파싱 경고 등) 심층 분석으로 격상
-        elif difficulty_score >= self.tau_difficulty:
+        if difficulty_score >= self.tau_difficulty:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"High Analysis Difficulty (Score: {difficulty_score:.1f})"
+            if not reason: reason = f"High Analysis Difficulty (Score: {difficulty_score:.1f})"
+            triggered_signals.append("DIFFICULTY")
+            
         # 4. 확률이 애매한 그레이존인 경우
-        elif self.tau_low < p_calib < self.tau_high:
+        if self.tau_low < p_calib < self.tau_high:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"Uncertain Probability ({p_calib:.4f})"
-        # 5. 악성 확신도가 매우 높은 경우
-        elif p_calib >= self.tau_high:
-            decision = "AUTO_MALICIOUS"
-            reason = f"High Malicious Confidence ({p_calib:.4f})"
-        # 6. 정상 확신도가 매우 높은 경우
-        else:
-            decision = "AUTO_BENIGN"
-            reason = f"High Benign Confidence ({p_calib:.4f})"
+            if not reason: reason = f"Uncertain Probability ({p_calib:.4f})"
+            triggered_signals.append("UNCERTAIN_PROBABILITY")
+            
+        # 5, 6. 위험 신호가 없는 경우 (확신도에 따라 정상/악성 분기)
+        if decision is None:
+            if p_calib >= self.tau_high:
+                decision = "AUTO_MALICIOUS"
+                reason = f"High Malicious Confidence ({p_calib:.4f})"
+            else:
+                decision = "AUTO_BENIGN"
+                reason = f"High Benign Confidence ({p_calib:.4f})"
             
         route = (
             "DEEP_ANALYSIS"
@@ -69,7 +81,8 @@ class JointRiskRouter:
             "disagreement": round(float(disagreement), 4),
             "ood_score": round(float(ood_score), 4),
             "difficulty_score": round(float(difficulty_score), 4),
-            "reason": reason
+            "reason": reason,
+            "triggered_signals": triggered_signals
         }
 
     def route_batch(self, p_calib_arr, disagreement_arr, ood_score_arr, difficulty_score_arr):
