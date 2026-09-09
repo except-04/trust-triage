@@ -35,6 +35,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
     print(f"{'tau_low':^9} | {'심층분석 비율':^13} | {'심층분석 건수':^12} | {'Review Yield':^12} | {'자동정상 중 악성 누출 건수 (누출률)':^32}")
     print(f"{'-'*9}-+-{'-'*13}-+-{'-'*12}-+-{'-'*12}-+-{'-'*32}")
     
+    np.random.seed(42)
     n_total = len(y_prob)
     n_total_malicious = np.sum(y_true == 1)  # Calibration 전체 악성 수
     test_bounds = [0.10, 0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.80]
@@ -65,7 +66,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
         
         print(f"  {lb:^7.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {current_yield:>10.2f}% | {leaked_malware:>10,}건 ({leaked_rate_of_all_malware:5.2f}%)")
         
-        # 1. Review Yield(적중률)가 더 높으면 우선 갱신
+        # 1. Review Yield(검토 가성비) 극대화: 더 높은 Yield를 기록하면 최적점 갱신
         if current_yield > best_yield:
             best_yield = current_yield
             best_lower_bound = lb
@@ -79,7 +80,7 @@ def optimize_lower_bound(y_true, y_prob, upper_bound, daily_budget=100):
                 "leaked_malware": leaked_malware,
                 "leaked_rate": leaked_rate_of_all_malware
             }
-        # 2. 만약 Yield가 88%로 똑같다면 (예: 0.60 vs 0.70), 악성 누락(미탐)이 더 적은 쪽(0.60) 최종 선택
+        # 2. Yield 동률 처리 (Trade-off 변곡점): Yield가 동일하다면(예: 0.60 vs 0.80 동률 90%), 악성 누락(미탐)이 더 적은 안전한 쪽(0.60) 최종 선택
         elif current_yield == best_yield:
             if leaked_malware < best_min_leakage:
                 best_lower_bound = lb
