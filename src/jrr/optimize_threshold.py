@@ -98,17 +98,22 @@ def optimize_difficulty(y_true, p_calib, disagreement, ood_scores, difficulty_sc
 
 
 def optimize_lower_bound(y_true, p_calib, disagreement, ood_scores, difficulty_scores, tau_high):
-    print(f"\n=========================================================================================")
+    print(f"\n================================================================================================================")
     print(f" [Phase 2] tau_low 최적화 (Calibration Set)")
     print(f" - 고정 상수: tau_difficulty=5.0, tau_disagree=0.30, tau_ood=0.0")
-    print(f" - 목적: 확률 그레이존의 최적 하한선 도출 (수용 가능한 Leakage 내에서 타율 방어)")
-    print(f"=========================================================================================")
-    print(f"{'tau_low':^8} | {'심층분석 비율':^13} | {'심층분석 건수':^12} | {'Review Yield':^12} | {'정상 중 악성 누출 건수':^16}")
-    print(f"{'-'*8}-+-{'-'*13}-+-{'-'*12}-+-{'-'*12}-+-{'-'*16}")
+    print(f" - 목적: 다목적 효용 점수(Review Yield × 악성 방어율) 기반 최적 균형점 자동 탐색")
+    print(f"================================================================================================================")
+    print(f"{'tau_low':^8} | {'심층분석 비율':^13} | {'심층분석 건수':^12} | {'Review Yield':^12} | {'정상 중 악성 누출 건수 (누출률)':^32} | {'효용 점수':^10}")
+    print(f"{'-'*8}-+-{'-'*13}-+-{'-'*12}-+-{'-'*12}-+-{'-'*32}-+-{'-'*10}")
     
     test_bounds = np.arange(0.50, 0.98, 0.05)
     test_bounds = np.append(test_bounds, [0.60, 0.98, 0.983]) # 주요 구간 추가
     test_bounds = np.sort(np.unique(test_bounds))
+    
+    n_total_malicious = np.sum(y_true == 1)
+    best_lower_bound = 0.60
+    best_utility_score = -1.0
+    best_stats = {}
     
     for tl in test_bounds:
         if tl >= tau_high: continue
@@ -121,11 +126,31 @@ def optimize_lower_bound(y_true, p_calib, disagreement, ood_scores, difficulty_s
         
         auto_benign_mask = (routes == "AUTO_BENIGN")
         leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
+        leaked_rate = (leaked_malware / n_total_malicious * 100) if n_total_malicious > 0 else 0.0
         
         yield_score = calculate_review_yield(y_true, routes)
         
-        print(f"  {tl:^6.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {yield_score:>10.2f}% | {leaked_malware:>14,}건")
-    print(f"=========================================================================================\n")
+        # 다목적 효용 점수 (Net Benefit Score):
+        # 분석가 검토 적중률(Review Yield)과 악성 방어율(1 - 악성누출률)을 동시에 고려한 최적 균형점 산출
+        defense_rate = (1.0 - leaked_rate / 100.0)
+        utility_score = yield_score * defense_rate
+        
+        print(f"  {tl:^6.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {yield_score:>10.2f}% | {leaked_malware:>14,}건 ({leaked_rate:5.2f}%) | {utility_score:>8.2f}")
+        
+        if utility_score > best_utility_score:
+            best_utility_score = utility_score
+            best_lower_bound = tl
+            best_stats = {
+                "pct_uncertain": pct_uncertain,
+                "n_uncertain": n_uncertain,
+                "yield": yield_score,
+                "leaked_malware": leaked_malware,
+                "leaked_rate": leaked_rate,
+                "utility_score": utility_score
+            }
+            
+    print(f"================================================================================================================\n")
+    return float(best_lower_bound), best_stats
 
 
 def main():
@@ -146,16 +171,14 @@ def main():
         # Phase 1: Difficulty Tuning
         optimize_difficulty(y_true, p_calib, disagreement, ood_scores, diff_scores, fixed_upper_bound)
         
-        # Phase 2: tau_low Tuning
-        optimize_lower_bound(y_true, p_calib, disagreement, ood_scores, diff_scores, fixed_upper_bound)
+        # Phase 2: tau_low Tuning (다목적 효용 점수 기반 자동 탐색)
+        optimal_lb, best_stats = optimize_lower_bound(y_true, p_calib, disagreement, ood_scores, diff_scores, fixed_upper_bound)
         
-        # MLflow 기록 (대표값 5.0, 0.60 기준 최종 성능)
+        # 대표값 기준 최종 성능 산출
         routes_final = simulate_full_routing(p_calib, disagreement, ood_scores, diff_scores, 
-                                       tau_low=0.60, tau_high=fixed_upper_bound, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0)
+                                       tau_low=optimal_lb, tau_high=fixed_upper_bound, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0)
         final_yield = calculate_review_yield(y_true, routes_final)
-        # mlflow.log_param("calib_tau_low", 0.60)
-        # mlflow.log_param("calib_tau_diff", 5.0)
-        # mlflow.log_metric("calib_review_yield_final", final_yield)
+        
         n_total = len(routes_final)
         n_uncertain = np.sum(routes_final == "HIGH_RISK_UNCERTAIN")
         pct_uncertain = n_uncertain / n_total * 100
@@ -166,10 +189,10 @@ def main():
         print("==================================================")
         print("[완료] Calibration 기준 최적 라우팅 임계값 확정")
         print(f" - [확정] 자동 차단 상한선(Upper Bound): {fixed_upper_bound:.6f} (FPR 0.1% 기준 고정)")
-        print(f" - [확정] 심층 분석 하한선(Lower Bound): 0.60 (Review Yield 최고점 방어)")
+        print(f" - [확정] 심층 분석 하한선(Lower Bound): {optimal_lb:.2f} (효용 점수 {best_stats.get('utility_score', 0.0):.2f}점 1위)")
         print(f" - [확정] 분석 난이도 임계값(Difficulty): 5.0 (심층 분석 병목 해소)")
         print(f" - [확인] Calibration 심층분석 비율: {pct_uncertain:.2f}% ({n_uncertain:,}건)")
-        print(f" - [확인] Calibration 분석가 가성비(Yield): {final_yield:.2f}%")
+        print(f" - [확인] Calibration 분석가 검토 적중률(Yield): {final_yield:.2f}%")
         print(f" - [확인] Calibration 악성 누락: {leaked_malware:,}건 ({leaked_rate:.2f}%)")
         print("==================================================")
         print("[안내] 위 산출된 하한선(tau_low=0.60, tau_difficulty=5.0)을 확인하시고, jrr_router.py로 Eval 최종 라우팅을 실행하세요.")
