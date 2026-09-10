@@ -28,7 +28,8 @@ class JointRiskRouter:
                 "disagreement": -1.0,
                 "ood_score": 0.0,
                 "difficulty_score": 0.0,
-                "reason": "System Error: NaN values detected (Fail-Closed)"
+                "reason": "System Error: NaN values detected (Fail-Closed)",
+                "triggered_signals": []
             }
             
         decision = None

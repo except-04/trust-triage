@@ -388,7 +388,8 @@ Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구�
   },
   "initial_verdict": "HIGH_RISK_UNCERTAIN",
   "route": "DEEP_ANALYSIS",
-  "reason": "Uncertain Probability (0.8871)"
+  "reason": "Uncertain Probability (0.8871)",
+  "triggered_signals": ["UNCERTAIN_PROBABILITY"]
 }
 ```
 
@@ -423,14 +424,26 @@ Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구�
 | `tau_low` | `0.65` |
 | `tau_high` | `0.983645` |
 | `tau_disagree` | `0.30` |
-| `tau_difficulty` | `5` |
+| `tau_difficulty` | `6.0` |
 | OOD 조건 | `ood_score < 0` |
 
+> `tau_low`와 `tau_difficulty`는 Calibration 세트(48만 건)에서 `tau_low`×`tau_difficulty` 2차원 Grid Search로 동시 탐색해 확정한 값입니다(정의된 후보 grid와 목적함수 범위 내 최적 조합). 두 값이 JRR의 OR 조건에서 서로 상호작용하므로 한쪽을 고정한 채 순차적으로 최적화하지 않습니다. Eval 세트는 이 탐색에 사용되지 않았습니다.
+>
 > Threshold 값이 변경될 경우 코드만 수정하지 말고 관련 설계/평가 문서와 본 명세서를 함께 갱신합니다.
 
-## 4.4 JRR Reason
+## 4.4 JRR Reason / Triggered Signals
 
-JRR은 Priority-ordered Rule-based Router이며, 가장 먼저 만족한 규칙을 대표 `reason`으로 기록합니다.
+JRR은 **Priority-ordered Rule-based Router**입니다. 각 판정 시 아래 순서로 위험 신호를 검사합니다.
+
+```text
+OOD
+  → Disagreement
+    → Difficulty
+      → Probability Gray Zone
+        → AUTO_MALICIOUS / AUTO_BENIGN
+```
+
+`reason`은 이 우선순위상 **가장 먼저 만족한 규칙 1개**를 대표 사유로 기록합니다.
 
 권장 Reason Label:
 
@@ -448,7 +461,63 @@ High Benign Confidence
 > `tau_low < calibrated_probability < tau_high`인 **Calibrated Probability Gray Zone**에 대한 설명용 Reason Label입니다.  
 > 공식 확률 필드명은 계속 `calibrated_probability`를 사용합니다.
 
-## 4.5 Route
+`triggered_signals`는 `reason`과 역할이 다른 **별도의 공식 반환 필드**입니다(`src/jrr/jrr_router.py::route_sample()`). OOD/Disagreement/Difficulty/Probability Gray Zone 4개 신호는 각각 독립적으로 검사되며, 조건을 만족할 때마다 해당 신호가 `triggered_signals` 배열에 추가됩니다 — 즉 이 필드는 **동시에 발현된 모든 위험 신호**를 보존합니다.
+
+가능한 값:
+
+```text
+OOD
+DISAGREEMENT
+DIFFICULTY
+UNCERTAIN_PROBABILITY
+```
+
+| 필드 | 의미 |
+|---|---|
+| `reason` | 우선순위상 최초로 매칭된 대표 사유 1개 (문자열) |
+| `triggered_signals` | 동시에 발현된 모든 위험 신호 (배열, 검사 순서와 동일하게 추가됨) |
+
+예 — OOD·Disagreement·Difficulty가 동시에 발현된 경우, 대표 `reason`은 최초 매칭된 OOD 하나만 기록되지만 `triggered_signals`에는 셋 다 남습니다:
+
+```json
+{
+  "initial_verdict": "HIGH_RISK_UNCERTAIN",
+  "route": "DEEP_ANALYSIS",
+  "reason": "OOD Detected (Score: -0.0310)",
+  "triggered_signals": ["OOD", "DISAGREEMENT", "DIFFICULTY"]
+}
+```
+
+> **Critical**  
+> `AUTO_BENIGN` / `AUTO_MALICIOUS`처럼 위험 신호가 하나도 없는 경우 `triggered_signals`는 빈 배열 `[]`입니다.  
+> `triggered_signals` 도입은 위 Priority-ordered Routing 순서나 대표 `reason` 산출 방식을 변경하지 않습니다 — 어떤 신호가 `AUTO_MALICIOUS`/`AUTO_BENIGN`을 뒤집고 `HIGH_RISK_UNCERTAIN`으로 격상시키는지는 여전히 위 우선순위만으로 결정됩니다. `triggered_signals`는 그 결과를 보조적으로 상세히 기록하는 필드일 뿐입니다.
+
+> **Critical — `risk_score` 미포함**  
+> JRR 공식 output에는 `risk_score` 필드가 없습니다. JRR은 여러 위험 신호를 하나의 가중합(Weighted Risk Score)으로 합산하지 않고, `reason` + `triggered_signals` + Priority-ordered Rule로 라우팅을 결정합니다. "Joint"는 여러 신호를 함께 고려한다는 뜻이며 가중 점수 산출을 의미하지 않습니다.
+
+## 4.5 Fail-Closed Behavior
+
+`p_calib`(`calibrated_probability`) / `disagreement` / `ood_score` / `difficulty_score` 중 **하나라도 NaN이면** 무조건 아래와 같이 반환합니다.
+
+```json
+{
+  "initial_verdict": "HIGH_RISK_UNCERTAIN",
+  "route": "DEEP_ANALYSIS",
+  "calibrated_probability": -1.0,
+  "disagreement": -1.0,
+  "ood_score": 0.0,
+  "difficulty_score": 0.0,
+  "reason": "System Error: NaN values detected (Fail-Closed)",
+  "triggered_signals": []
+}
+```
+
+> **Critical**  
+> NaN 입력에 대해 `AUTO_BENIGN`/`AUTO_MALICIOUS`로 자동 판정하지 않습니다. 항상 `HIGH_RISK_UNCERTAIN` + `route="DEEP_ANALYSIS"`로 보내 심층분석·분석가 검토를 거치도록 하는 Fail-Closed 정책입니다.
+>
+> 이 Fail-Closed 응답도 정상 판정 경로와 동일한 JRR output schema(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)를 유지합니다. `triggered_signals`는 키 자체가 누락되는 것이 아니라 **항상 빈 배열 `[]`**을 반환합니다 — System Error는 위험 신호(risk signal)가 아니므로 `SYSTEM_ERROR` 같은 별도 값을 추가하지 않으며, 오류 원인은 `reason`으로만 표현합니다.
+
+## 4.6 Route
 
 권장 Route 값:
 
@@ -1093,6 +1162,7 @@ Batch ID           → batch_id
 
 JRR 판정            → AUTO_BENIGN / AUTO_MALICIOUS / HIGH_RISK_UNCERTAIN
 JRR 대표 사유         → reason
+JRR 발현 신호 전체     → triggered_signals
 Uncertain Probability → Gray Zone 설명용 Label (별도 확률 필드 아님)
 
 모델 근거           → top_features (SHAP)
