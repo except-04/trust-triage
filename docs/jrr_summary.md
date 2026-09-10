@@ -47,7 +47,7 @@ FPR 0.1% 같은 강한 방어선을 지키면서도(=오탐을 최소화), 확�
 - **의미**: LightGBM 원시 확률(`lgbm_raw_probability`)은 과신(over-confident)되어 있어 실제 정답률과 어긋납니다. 이를 실제 신뢰도로 보정한 값입니다.
 - **산출 방식**: `src/jrr/train_calibrator.py` — `sklearn.isotonic.IsotonicRegression(out_of_bounds="clip")`을 Calibration 세트(`X_calib`/`y_calib`)에서 학습된 LightGBM(`baseline_model_lightgbm_tuned_500_4way.pkl`)의 raw 확률에 대해 fit. 결과는 `jrr_calibrator_4way.pkl`(`{'model':..., 'threshold':...}`)로 저장.
 - **JRR에서 사용 방향**: 값이 낮을수록 정상, 높을수록 악성. `tau_low`/`tau_high` 두 경계값으로 그레이존을 정의.
-- **Threshold**: `tau_low = 0.60`, `tau_high = 0.983645` (3장).
+- **Threshold**: `tau_low = 0.65`, `tau_high = 0.983645` (3장).
 
 ### Model Disagreement
 
@@ -78,7 +78,7 @@ FPR 0.1% 같은 강한 방어선을 지키면서도(=오탐을 최소화), 확�
   difficulty_scores = np.sum(X_eval_500[:, difficulty_indices], axis=1)
   ```
   (`jrr_router.py:107-110`, PEFormatWarnings 경고 발생 여부/개수의 합)
-- **JRR에서 사용 방향 / Threshold**: `difficulty_score >= tau_difficulty`이면 `HIGH_RISK_UNCERTAIN`으로 격상. `tau_difficulty = 5.0`. 악성도 신호가 아니라 **구조 이상/분석 난이도 신호**라는 점은 `docs/pipeline_architecture_v3.md`(⑤ Analysis Difficulty)와 `docs/risk_routing_simulation_test.md`(§2.3) 모두 명시합니다.
+- **JRR에서 사용 방향 / Threshold**: `difficulty_score >= tau_difficulty`이면 `HIGH_RISK_UNCERTAIN`으로 격상. `tau_difficulty = 6.0`. 악성도 신호가 아니라 **구조 이상/분석 난이도 신호**라는 점은 `docs/pipeline_architecture_v3.md`(⑤ Analysis Difficulty)와 `docs/risk_routing_simulation_test.md`(§2.3) 모두 명시합니다.
 
 ---
 
@@ -290,7 +290,7 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 | ECE | 0.0031 | 동일 |
 | Brier Score | 0.0163 | 동일 |
 | Confusion Matrix (Eval, n=480,000) | TP=213,866 / FP=296 / TN=239,704 / FN=26,134 | 동일 |
-| Review Yield (심층분석 큐 전체 기준, 일일 예산 제한 없음) | 76.68% | 동일 |
+| Review Yield (심층분석 큐 전체 기준, 일일 예산 제한 없음) | 74.90% | 동일 |
 | Kill Test FPR | 0.0000 (0%) | 동일 |
 | OOD 방어 성공률(OOD Score < 0.0 샘플 중 `HIGH_RISK_UNCERTAIN` 라우팅 비율) | 100.00% | 동일 |
 | 최종 라우팅 분포 (Eval, n=480,000) | AUTO_BENIGN 228,044건(47.51%) / AUTO_MALICIOUS 174,172건(36.29%) / HIGH_RISK_UNCERTAIN 77,784건(16.20%) | `risk_routing_simulation_test.md` §5 |
@@ -299,7 +299,7 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 
 > **레거시 수치와 혼동 금지**: 구 `docs/pipeline_architecture.md`의 "TPR@FPR 0.1% = 91.20%"는 4-way 분할 이전 구버전 LightGBM의 수치이며 위 Eval 결과와 다른 모델·다른 데이터 분할 기준입니다.
 
-**Review Yield 계산 방식 변경 참고**: `docs_eval_lockbox_policy.md` §7은 원래 "검토예산 1/5/10/20%"별 정책 비교를 요구하지만, 현재 `_jrr_eval_core.py::calculate_review_yield()`는 예산 제한 없이 `HIGH_RISK_UNCERTAIN` 큐 전체를 대상으로 Yield를 계산합니다(함수 docstring: "현재 예산 제한 정책 유보에 따라, 예산 제약 없이 큐 전체를 대상으로 계산"). 즉 예산 기반 비교 정책은 아직 구현되지 않고 **보류(deferred)** 상태이며, 위 76.68%는 예산 제약이 없는 전량 기준 수치입니다.
+**Review Yield 계산 방식 변경 참고**: `docs_eval_lockbox_policy.md` §7은 원래 "검토예산 1/5/10/20%"별 정책 비교를 요구하지만, 현재 `_jrr_eval_core.py::calculate_review_yield()`는 예산 제한 없이 `HIGH_RISK_UNCERTAIN` 큐 전체를 대상으로 Yield를 계산합니다(함수 docstring: "현재 예산 제한 정책 유보에 따라, 예산 제약 없이 큐 전체를 대상으로 계산"). 즉 예산 기반 비교 정책은 아직 구현되지 않고 **보류(deferred)** 상태이며, 위 74.90%는 예산 제약이 없는 전량 기준 수치입니다.
 
 ---
 
@@ -310,7 +310,7 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 - **OOD 유입**: `ood_score < 0.0`인 샘플 **3,384건**(전체의 0.71%)이 식별되었고, 이 중 100%가 `HIGH_RISK_UNCERTAIN`으로 라우팅되었습니다(OOD 방어 성공률 100%, 10장). 이 3,384건 중 "실제로는 정상 파일인데 모델이 0.98 이상으로 확신했던" 사례가 2건 있었고, 이 2건이 OOD 조건으로 격리되어 Kill Test FPR 0%에 기여했습니다.
 - **Disagreement 유입**: `disagreement >= 0.3`인 샘플 **약 11,728건**(전체의 2.44%)이 100% `HIGH_RISK_UNCERTAIN`으로 라우팅되었습니다.
 - **Difficulty 유입**: 9장의 그리드 표에서 `difficulty_score >= 5.0`(다른 3개 신호와 OR 결합된 전체 시스템 기준)일 때 최종 심층분석 큐가 77,784건(16.2%)입니다. 이와 별개로 `difficulty >= 5` **단독** 조건만으로는 정상 파일 9,068건(3.78%)·악성 파일 37,146건(15.48%)이 식별됩니다(`risk_routing_simulation_test.md` §6.2, 4개 조건 결합 이전의 difficulty 단독 통계). 두 수치(결합 총량 vs difficulty 단독)는 서로 다른 집계이므로 혼동하지 않도록 구분해 기록합니다.
-- **Probability Gray-zone 유입**: 문서는 "OOD·Disagreement·Difficulty가 없는 파일 중에서도 그레이존(0.60~0.9836)에 해당하면 100% 안전하게 심층분석으로 분기되었다"고 정성적으로만 서술하며, **정확한 건수는 원문에 명시되어 있지 않습니다 — 확인 필요.**
+- **Probability Gray-zone 유입**: 문서는 "OOD·Disagreement·Difficulty가 없는 파일 중에서도 그레이존(0.65~0.9836)에 해당하면 100% 안전하게 심층분석으로 분기되었다"고 정성적으로만 서술하며, **정확한 건수는 원문에 명시되어 있지 않습니다 — 확인 필요.**
 - **Signal Overlap**: 48만 건 전체 기준
   | 매칭된 조건 수 | 건수 | 비율 |
   |---|---:|---:|

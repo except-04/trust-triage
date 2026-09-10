@@ -19,7 +19,7 @@ Threshold 및 라우팅 정책은 **Calibration 세트에서 결정 후 고정**
 현재 주요 운영 기준:
 
 ```text
-tau_low        = 0.60
+tau_low        = 0.65
 tau_high       = 0.983645
 tau_disagree   = 0.30
 tau_difficulty = 5
@@ -473,7 +473,7 @@ difficulty_score
 ## 현재 운영 Threshold
 
 ```text
-tau_low        = 0.60
+tau_low        = 0.65
 tau_high       = 0.983645
 tau_disagree   = 0.30
 tau_difficulty = 5
