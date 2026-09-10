@@ -388,7 +388,8 @@ Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구�
   },
   "initial_verdict": "HIGH_RISK_UNCERTAIN",
   "route": "DEEP_ANALYSIS",
-  "reason": "Uncertain Probability (0.8871)"
+  "reason": "Uncertain Probability (0.8871)",
+  "triggered_signals": ["UNCERTAIN_PROBABILITY"]
 }
 ```
 
@@ -418,19 +419,21 @@ Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구�
 
 ### 현재 기준값
 
-| 항목 | 현재 값 |
-|---|---:|
-| `tau_low` | `0.65` |
-| `tau_high` | `0.983645` |
-| `tau_disagree` | `0.30` |
-| `tau_difficulty` | `5` |
-| OOD 조건 | `ood_score < 0` |
+| 항목 | 현재 값 | 선정 근거 |
+|---|---:|---|
+| `tau_low` | `0.60` | Calibration 세트(48만 건) 전체 재탐색 결과, Review Yield 최고점(71.83%)을 방어하는 하한선으로 확정. `tau_low`를 더 높이면 `AUTO_BENIGN`으로 누출되는 악성 샘플이 증가함. |
+| `tau_high` | `0.983645` | Calibration 세트에서 목표 FPR ≤ 0.1%를 만족하는 마지막 ROC 지점. |
+| `tau_disagree` | `0.30` | 고정 운영 상수. |
+| `tau_difficulty` | `5.0` | Calibration 세트에서 1.0~10.0 후보를 재탐색해 트래픽(Deep Analysis 유입 14.15%)과 Review Yield(71.83%) 사이의 Elbow Point로 재확정. |
+| OOD 조건 | `ood_score < 0` | `IsolationForest.decision_function()` 표준 이상치 경계. |
 
+> `tau_low`와 `tau_difficulty`는 `src/jrr/optimize_threshold.py`로 Calibration 세트(48만 건) 전체를 대상으로 재탐색되었으며, 두 값 모두 **Calibration 단계에서 확정(freeze)된 값**입니다. Eval 결과로 재조정되지 않습니다.
+>
 > Threshold 값이 변경될 경우 코드만 수정하지 말고 관련 설계/평가 문서와 본 명세서를 함께 갱신합니다.
 
-## 4.4 JRR Reason
+## 4.4 JRR Reason / Triggered Signals
 
-JRR은 Priority-ordered Rule-based Router이며, 가장 먼저 만족한 규칙을 대표 `reason`으로 기록합니다.
+JRR은 Priority-ordered Rule-based Router입니다. 위험 신호(OOD → Disagreement → Difficulty → Probability Gray Zone → AUTO_MALICIOUS/AUTO_BENIGN)는 이 우선순위대로 검사되며, `reason`은 그중 **가장 먼저 만족한 규칙 하나**를 대표 사유로 기록합니다. `triggered_signals` 도입 이후에도 이 Priority-ordered Routing과 대표 `reason` 규칙 자체는 바뀌지 않습니다.
 
 권장 Reason Label:
 
@@ -447,6 +450,37 @@ High Benign Confidence
 > `Uncertain Probability`는 별도의 확률 필드가 아닙니다.  
 > `tau_low < calibrated_probability < tau_high`인 **Calibrated Probability Gray Zone**에 대한 설명용 Reason Label입니다.  
 > 공식 확률 필드명은 계속 `calibrated_probability`를 사용합니다.
+
+`triggered_signals`는 `reason`과 별개로, **동시에 발현된 모든 위험 신호**를 배열로 보존하는 공식 필드입니다(`src/jrr/jrr_router.py::route_sample()`). 각 위험 신호는 독립적으로 검사되어 조건을 만족할 때마다 이 배열에 추가됩니다.
+
+가능한 값:
+
+```text
+OOD
+DISAGREEMENT
+DIFFICULTY
+UNCERTAIN_PROBABILITY
+```
+
+예:
+
+```json
+{
+  "initial_verdict": "HIGH_RISK_UNCERTAIN",
+  "route": "DEEP_ANALYSIS",
+  "reason": "OOD Detected (Score: -0.0310)",
+  "triggered_signals": ["OOD", "DISAGREEMENT", "DIFFICULTY"]
+}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `reason` | 우선순위상 최초로 매칭된 대표 사유 하나 (문자열) |
+| `triggered_signals` | 동시에 발현된 모든 위험 신호 (배열, 순서는 검사 순서와 동일) |
+
+> **Critical**  
+> `AUTO_BENIGN` / `AUTO_MALICIOUS`처럼 위험 신호가 하나도 없는 경우 `triggered_signals`는 빈 배열 `[]`입니다.  
+> `triggered_signals`는 다중 신호를 함께 확인하기 위한 보조 필드이며, Routing 우선순위(OOD → Disagreement → Difficulty → Probability Gray Zone → AUTO_MALICIOUS/AUTO_BENIGN) 및 대표 `reason` 산출 방식 자체를 변경하지 않습니다.
 
 ## 4.5 Route
 
@@ -947,6 +981,8 @@ TRUST-Triage Pipeline
 - difficulty score
 - initial verdict
 - route
+- reason
+- triggered_signals
 
 ## XAI
 
@@ -1092,7 +1128,8 @@ Batch ID           → batch_id
 분석 상태           → QUEUED / RUNNING / COMPLETED / FAILED / NOT_REQUIRED
 
 JRR 판정            → AUTO_BENIGN / AUTO_MALICIOUS / HIGH_RISK_UNCERTAIN
-JRR 대표 사유         → reason
+JRR 대표 사유         → reason (우선순위상 최초 매칭 사유 1개)
+JRR 발현 신호 전체     → triggered_signals (동시 발현된 모든 신호 배열, 없으면 [])
 Uncertain Probability → Gray Zone 설명용 Label (별도 확률 필드 아님)
 
 모델 근거           → top_features (SHAP)
