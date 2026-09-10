@@ -6,8 +6,8 @@ class JointRiskRouter:
     TRUST-Triage 핵심 엔진: Joint Risk Router (jrr_router.py)
     확률값과 Model Disagreement, OOD Score, Analysis Difficulty를 바탕으로 3가지 초기 판정으로 분기합니다.
     """
-    def __init__(self, tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0):
-        self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_BENIGN / Calibration 최적화 확정: 0.60)
+    def __init__(self, tau_low=0.65, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=6.0):
+        self.tau_low = tau_low          # 정상 확신 커트라인 (AUTO_BENIGN / Calibration 최적화 확정: 0.65)
         self.tau_high = tau_high        # 악성 확신 커트라인 (AUTO_MALICIOUS / FPR 0.1% 고정선: 0.983645)
         self.tau_disagree = tau_disagree # 모델 불일치 허용 기준 (고정값 0.3)
         self.tau_ood = tau_ood          # OOD 점수(Isolation Forest) 임계값 (0 미만 이상치)
@@ -31,30 +31,42 @@ class JointRiskRouter:
                 "reason": "System Error: NaN values detected (Fail-Closed)"
             }
             
+        decision = None
+        reason = None
+        triggered_signals = []
+
         # 1. OOD Score가 낮으면(학습 분포를 벗어남) 심층 분석으로 격상
         if ood_score < self.tau_ood:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"OOD Detected (Score: {ood_score:.4f})"
+            if not reason: reason = f"OOD Detected (Score: {ood_score:.4f})"
+            triggered_signals.append("OOD")
+            
         # 2. 불일치도가 크면 고확신 오판 방지를 위해 심층 분석으로 격상
-        elif disagreement >= self.tau_disagree:
+        if disagreement >= self.tau_disagree:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"High Model Disagreement ({disagreement:.4f})"
+            if not reason: reason = f"High Model Disagreement ({disagreement:.4f})"
+            triggered_signals.append("DISAGREEMENT")
+            
         # 3. 분석 난이도가 높으면(PE 파싱 경고 등) 심층 분석으로 격상
-        elif difficulty_score >= self.tau_difficulty:
+        if difficulty_score >= self.tau_difficulty:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"High Analysis Difficulty (Score: {difficulty_score:.1f})"
+            if not reason: reason = f"High Analysis Difficulty (Score: {difficulty_score:.1f})"
+            triggered_signals.append("DIFFICULTY")
+            
         # 4. 확률이 애매한 그레이존인 경우
-        elif self.tau_low < p_calib < self.tau_high:
+        if self.tau_low < p_calib < self.tau_high:
             decision = "HIGH_RISK_UNCERTAIN"
-            reason = f"Uncertain Probability ({p_calib:.4f})"
-        # 5. 악성 확신도가 매우 높은 경우
-        elif p_calib >= self.tau_high:
-            decision = "AUTO_MALICIOUS"
-            reason = f"High Malicious Confidence ({p_calib:.4f})"
-        # 6. 정상 확신도가 매우 높은 경우
-        else:
-            decision = "AUTO_BENIGN"
-            reason = f"High Benign Confidence ({p_calib:.4f})"
+            if not reason: reason = f"Uncertain Probability ({p_calib:.4f})"
+            triggered_signals.append("UNCERTAIN_PROBABILITY")
+            
+        # 5, 6. 위험 신호가 없는 경우 (확신도에 따라 정상/악성 분기)
+        if decision is None:
+            if p_calib >= self.tau_high:
+                decision = "AUTO_MALICIOUS"
+                reason = f"High Malicious Confidence ({p_calib:.4f})"
+            else:
+                decision = "AUTO_BENIGN"
+                reason = f"High Benign Confidence ({p_calib:.4f})"
             
         route = (
             "DEEP_ANALYSIS"
@@ -69,7 +81,8 @@ class JointRiskRouter:
             "disagreement": round(float(disagreement), 4),
             "ood_score": round(float(ood_score), 4),
             "difficulty_score": round(float(difficulty_score), 4),
-            "reason": reason
+            "reason": reason,
+            "triggered_signals": triggered_signals
         }
 
     def route_batch(self, p_calib_arr, disagreement_arr, ood_score_arr, difficulty_score_arr):
@@ -114,8 +127,8 @@ if __name__ == "__main__":
     print("Joint Risk Router (jrr_router.py) 실행")
     print("="*60)
 
-    # 2. 라우터 동작 (tau_high=0.983645, tau_disagree=0.3 고정, tau_low=0.60, tau_ood=0.0, tau_difficulty=5.0)
-    router = JointRiskRouter(tau_low=0.60, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=5.0)
+    # 2. 라우터 동작 (tau_high=0.983645, tau_disagree=0.3 고정, tau_low=0.65, tau_ood=0.0, tau_difficulty=6.0)
+    router = JointRiskRouter(tau_low=0.65, tau_high=0.983645, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=6.0)
     routed = router.route_batch(p_eval, disagreement, ood_scores, difficulty_scores)
 
     decisions = [r["initial_verdict"] for r in routed]

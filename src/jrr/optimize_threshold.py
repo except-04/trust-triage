@@ -3,164 +3,157 @@ import numpy as np
 import mlflow
 import joblib
 import os
+import sys
 
-# 💡 더 이상 11번 파일을 억지로 부르지 않고, 공용 도구함에서 정석적으로 불러옵니다!
+# jrr_router 모듈 경로 추가
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+from jrr_router import JointRiskRouter
 from _jrr_eval_core import calculate_review_yield
 
-def simulate_routing(y_prob, lower_bound, upper_bound):
-    """
-    임계값 조합에 따라 전체 파일을 3개 큐(자동정상, 심층분석, 자동악성)로 분배하는 시뮬레이션 함수
-    """
-    routes = np.empty(len(y_prob), dtype=object)
+def calculate_or_load_signals(X_calib_path, y_calib_path):
+    print("[데이터 로딩] Calibration 세트 다중 위험 신호 계산 (최초 실행 시 시간 소요)")
+    y_true = np.load(y_calib_path)
     
-    # 1. 자동 악성 (절대 차단선 이상)
-    routes[y_prob >= upper_bound] = "AUTO_MALICIOUS"
-    # 2. 자동 정상 (하한선 미만)
-    routes[y_prob < lower_bound] = "AUTO_BENIGN"
-    # 3. 심층 분석 (하한선 이상 ~ 절대 차단선 미만)
-    routes[(y_prob >= lower_bound) & (y_prob < upper_bound)] = "HIGH_RISK_UNCERTAIN"
+    # 캐시 파일 경로
+    p_calib_cache = "data/cache_p_calib.npy"
+    disagreement_cache = "data/cache_disagreement_calib.npy"
+    ood_cache = "data/cache_ood_calib.npy"
+    diff_cache = "data/cache_diff_calib.npy"
     
-    return routes
+    if os.path.exists(p_calib_cache) and os.path.exists(disagreement_cache) and os.path.exists(ood_cache) and os.path.exists(diff_cache):
+        print("  -> 캐시된 신호 파일(cache_*.npy)을 불러옵니다.")
+        return y_true, np.load(p_calib_cache), np.load(disagreement_cache), np.load(ood_cache), np.load(diff_cache)
+        
+    print("  -> 캐시가 없으므로 Calibration 데이터로 새로 계산합니다.")
+    X_calib = np.load(X_calib_path, mmap_mode="r")
+    top_500_idx = np.load("data/top_feature_indices_500.npy")
+    X_calib_500 = X_calib[:, top_500_idx]
+    
+    # 1. Probability
+    model_lgb = joblib.load("data/baseline_model_lightgbm_tuned_500_4way.pkl" if os.path.exists("data/baseline_model_lightgbm_tuned_500_4way.pkl") else "data/baseline_model_lightgbm_tuned_500_v4_9120.pkl")
+    print("  -> [1] LGBM 예측 중...")
+    p_lgb_raw = model_lgb.predict_proba(X_calib_500)[:, 1]
+    
+    calibrator_pack = joblib.load("data/jrr_calibrator_4way.pkl" if os.path.exists("data/jrr_calibrator_4way.pkl") else "data/jrr_calibrator.pkl")
+    calibrator = calibrator_pack['model']
+    p_calib = calibrator.predict(p_lgb_raw)
+    
+    # 2. Disagreement
+    print("  -> [2] XGB 예측 중 (Disagreement 계산)...")
+    model_xgb = joblib.load("data/baseline_model_xgb_500_4way_1000cap.pkl")
+    p_xgb_raw = model_xgb.predict_proba(X_calib_500)[:, 1]
+    disagreement = np.abs(p_lgb_raw - p_xgb_raw) 
+    
+    # 3. OOD & Difficulty
+    print("  -> [3,4] OOD & Difficulty 계산 중...")
+    risk_signals = joblib.load("data/jrr_risk_signals.pkl")
+    ood_model = risk_signals['ood_model']
+    difficulty_indices = risk_signals['difficulty_indices']
+    
+    ood_scores = ood_model.decision_function(X_calib_500)
+    difficulty_scores = np.sum(X_calib_500[:, difficulty_indices], axis=1)
+    
+    # 캐시 저장
+    np.save(p_calib_cache, p_calib)
+    np.save(disagreement_cache, disagreement)
+    np.save(ood_cache, ood_scores)
+    np.save(diff_cache, difficulty_scores)
+    print("  -> 캐시 저장 완료!")
+    
+    return y_true, p_calib, disagreement, ood_scores, difficulty_scores
 
-def optimize_lower_bound(y_true, y_prob, upper_bound):
-    """
-    Calibration 데이터셋을 바탕으로 tau_low 후보별 라우팅 비율(%), Review Yield(적중률), 악성 누락률을 시뮬레이션하고,
-    '검토 가성비(Review Yield) 극대화' 및 '악성 누출(미탐) 최소화'를 동시에 만족하는 최적의 tau_low를 탐색합니다.
-    """
-    print(f"\n=========================================================================================================================")
-    print(f"[Calibration Set 기준] tau_low 후보별 라우팅 비율, Review Yield, 자동정상 악성 누락 시뮬레이션")
-    print(f" - 고정 상한선(tau_high): {upper_bound:.6f}")
-    print(f" - 분석 대상 총 샘플 수: {len(y_prob):,}건")
-    print(f"=========================================================================================================================")
-    print(f"{'tau_low':^9} | {'심층분석 비율':^13} | {'심층분석 건수':^12} | {'Review Yield':^12} | {'자동정상 중 악성 누출 건수 (누출률)':^32}")
-    print(f"{'-'*9}-+-{'-'*13}-+-{'-'*12}-+-{'-'*12}-+-{'-'*32}")
+
+def simulate_full_routing(p_calib, disagreement, ood_scores, difficulty_scores, tau_low, tau_high, tau_disagree, tau_ood, tau_difficulty):
+    router = JointRiskRouter(tau_low, tau_high, tau_disagree, tau_ood, tau_difficulty)
+    routed = router.route_batch(p_calib, disagreement, ood_scores, difficulty_scores)
+    return np.array([r["initial_verdict"] for r in routed])
+
+
+def optimize_grid_search(y_true, p_calib, disagreement, ood_scores, difficulty_scores, tau_high):
+    total_malware = np.sum(y_true == 1)
     
-    n_total = len(y_prob)
-    n_total_malicious = np.sum(y_true == 1)  # Calibration 전체 악성 수
-    # 탐색할 하한선 후보군 (예: 0.90부터 upper_bound 직전까지 0.01 단위로 테스트)
-    test_bounds = np.arange(0.90, upper_bound, 0.01)
+    # 2D 탐색 공간 정의 (의미 있는 구간으로 압축하여 속도 확보)
+    tl_bounds = np.array([0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80])
+    td_bounds = np.arange(1.0, 11.0, 1.0)
     
-    best_lower_bound = test_bounds[0] if len(test_bounds) > 0 else 0.90
-    best_yield = -1.0
-    best_min_leakage = 999999
+    best_utility = -1
+    best_params = {}
     best_stats = {}
     
-    for lb in test_bounds:
-        simulated_routes = simulate_routing(y_prob, lb, upper_bound)
-        
-        n_benign = np.sum(simulated_routes == "AUTO_BENIGN")
-        n_malicious = np.sum(simulated_routes == "AUTO_MALICIOUS")
-        n_uncertain = np.sum(simulated_routes == "HIGH_RISK_UNCERTAIN")
-        
-        pct_benign = n_benign / n_total * 100
-        pct_malicious = n_malicious / n_total * 100
-        pct_uncertain = n_uncertain / n_total * 100
-        
-        # 악성 누락 개수 & 악성 누락률 (전체 악성 대비)
-        auto_benign_mask = (simulated_routes == "AUTO_BENIGN")
-        leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
-        leaked_rate_of_all_malware = (leaked_malware / n_total_malicious * 100) if n_total_malicious > 0 else 0.0
-        
-        current_yield = calculate_review_yield(y_true, simulated_routes)
-        
-        print(f"  {lb:^7.2f} | {pct_uncertain:>11.2f}% | {n_uncertain:>10,}건 | {current_yield:>10.2f}% | {leaked_malware:>10,}건 ({leaked_rate_of_all_malware:5.2f}%)")
-        
-        # 1. Review Yield(적중률)가 더 높으면 우선 갱신
-        if current_yield > best_yield:
-            best_yield = current_yield
-            best_lower_bound = lb
-            best_min_leakage = leaked_malware
-            best_stats = {
-                "pct_uncertain": pct_uncertain,
-                "n_uncertain": n_uncertain,
-                "pct_benign": pct_benign,
-                "pct_malicious": pct_malicious,
-                "yield": current_yield,
-                "leaked_malware": leaked_malware,
-                "leaked_rate": leaked_rate_of_all_malware
-            }
-        # 2. 만약 Yield가 88%로 똑같다면 (예: 0.60 vs 0.70), 악성 누락(미탐)이 더 적은 쪽(0.60) 최종 선택
-        elif current_yield == best_yield:
-            if leaked_malware < best_min_leakage:
-                best_lower_bound = lb
-                best_min_leakage = leaked_malware
-                best_stats = {
-                    "pct_uncertain": pct_uncertain,
-                    "n_uncertain": n_uncertain,
-                    "pct_benign": pct_benign,
-                    "pct_malicious": pct_malicious,
-                    "yield": current_yield,
-                    "leaked_malware": leaked_malware,
-                    "leaked_rate": leaked_rate_of_all_malware
-                }
+    print("=========================================================================================")
+    print(" [Grid Search] tau_low & tau_difficulty 2차원 동시 최적화")
+    print(f" - 목적: 변수 간 순환 논리 배제 및 (타율 극대화 & 악성 누출 최소화) 탐색")
+    print("=========================================================================================")
+    print(f"{'Rank':^4} | {'tau_low':^8} | {'tau_diff':^8} | {'심층비율':^10} | {'Review Yield':^12} | {'악성 누출':^10}")
+    print(f"{'-'*4}-+-{'-'*8}-+-{'-'*8}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}")
+    
+    results = []
+    
+    # 그리드 서치 수행
+    print("  -> (모든 조합 시뮬레이션 계산 중... 약 30~60초 소요)")
+    for tl in tl_bounds:
+        for td in td_bounds:
+            routes = simulate_full_routing(p_calib, disagreement, ood_scores, difficulty_scores, 
+                                           tau_low=tl, tau_high=tau_high, tau_disagree=0.3, tau_ood=0.0, tau_difficulty=td)
             
-    print(f"==========================================================================================\n")
-    return float(best_lower_bound), best_stats
+            n_total = len(routes)
+            n_uncertain = np.sum(routes == "HIGH_RISK_UNCERTAIN")
+            pct_uncertain = n_uncertain / n_total * 100
+            
+            auto_benign_mask = (routes == "AUTO_BENIGN")
+            leaked_malware = np.sum((y_true == 1) & auto_benign_mask)
+            
+            yield_score = calculate_review_yield(y_true, routes)
+            leakage_rate = leaked_malware / total_malware if total_malware > 0 else 0
+            utility_score = yield_score * (1 - leakage_rate)
+            
+            results.append({
+                'tl': tl, 'td': td, 'pct_uncertain': pct_uncertain, 'n_uncertain': n_uncertain,
+                'yield_score': yield_score, 'leaked_malware': leaked_malware, 'leakage_rate': leakage_rate,
+                'utility_score': utility_score
+            })
+            
+            if utility_score > best_utility:
+                best_utility = utility_score
+                best_params = {'tau_low': tl, 'tau_diff': td}
+                best_stats = {'pct_uncertain': pct_uncertain, 'n_uncertain': n_uncertain, 
+                              'yield_score': yield_score, 'leaked_malware': leaked_malware, 'leakage_rate': leakage_rate}
+                
+    # Utility Score 기준 내림차순 정렬하여 Top 15만 출력
+    results = sorted(results, key=lambda x: x['utility_score'], reverse=True)
+    
+    for idx, r in enumerate(results[:15]):
+        mark = "->" if idx == 0 else "  "
+        print(f" {mark} {idx+1:2d} |  {r['tl']:^6.2f} |   {r['td']:^6.1f} | {r['pct_uncertain']:>9.2f}% | {r['yield_score']:>10.2f}% | {r['leaked_malware']:>6,}건")
+    
+    print("=========================================================================================\n")
+    return best_params, best_stats
+
 
 def main():
-    print("[Threshold Optimization] 3-Way 라우팅 임계값 최적화 파이프라인 시작!\n")
+    print("[Threshold Optimization] Data Leakage 없는 순수 Grid Search 튜닝 시작!\n")
     
-    mlflow.set_experiment("JRR_Threshold_Optimization")
-    
-    with mlflow.start_run(run_name="Threshold_Simulation"):
-        try:
-            # 1. Calibration 데이터 및 보정기 로드
-            y_true = np.load("data/y_calib.npy")
-            
-            calib_path = "data/jrr_calibrator_4way.pkl" if os.path.exists("data/jrr_calibrator_4way.pkl") else "data/jrr_calibrator.pkl"
-            calibrator_pack = joblib.load(calib_path)
-            calibrator = calibrator_pack['model']
-            fixed_upper_bound = float(calibrator_pack.get('threshold', 0.983645))
-            
-            if os.path.exists("data/jrr_calibrated_proba_calib.npy"):
-                y_prob = np.load("data/jrr_calibrated_proba_calib.npy")
-            else:
-                # Calibration 세트의 원시 예측 확률 확보
-                if os.path.exists("data/y_pred_proba_calib.npy"):
-                    y_pred_raw = np.load("data/y_pred_proba_calib.npy")
-                else:
-                    print("[안내] Calibration 세트에 대한 LightGBM 원시 예측 확률 산출 중...")
-                    X_calib = np.load("data/X_calib.npy", mmap_mode="r")
-                    top_indices = np.load("data/top_feature_indices_500.npy")
-                    model_path = "data/baseline_model_lightgbm_tuned_500_4way.pkl" if os.path.exists("data/baseline_model_lightgbm_tuned_500_4way.pkl") else "data/baseline_model_lightgbm_tuned_500_v4_9120.pkl"
-                    model = joblib.load(model_path)
-                    y_pred_raw = model.predict_proba(X_calib[:, top_indices])[:, 1]
-                    np.save("data/y_pred_proba_calib.npy", y_pred_raw)
-                    print("  -> data/y_pred_proba_calib.npy 생성 완료!")
-                    
-                if y_pred_raw.ndim == 2:
-                    y_pred_raw = y_pred_raw[:, 1]
-                
-                # Calibration 세트의 보정 확률 계산
-                y_prob = calibrator.predict(y_pred_raw)
-            
-        except FileNotFoundError as e:
-            print(f"[에러] 시뮬레이션에 필요한 데이터를 찾을 수 없습니다: {e}")
-            print("[안내] Calibration 데이터(.npy) 및 jrr_calibrator.pkl 파일 경로를 확인해주세요.")
-            return
-
-        # 2. 최적화 시뮬레이션 실행 (Review Yield 극대화 및 악성 누락 최소화)
-        optimal_lb, best_stats = optimize_lower_bound(
-            y_true, y_prob, fixed_upper_bound
+    if True:
+        calibrator_pack = joblib.load("data/jrr_calibrator_4way.pkl" if os.path.exists("data/jrr_calibrator_4way.pkl") else "data/jrr_calibrator.pkl")
+        fixed_upper_bound = float(calibrator_pack.get('threshold', 0.983645))
+        
+        y_true, p_calib, disagreement, ood_scores, diff_scores = calculate_or_load_signals(
+            "data/X_calib.npy", "data/y_calib.npy"
         )
         
-        # 3. MLflow에 최종 결과 박제
-        mlflow.log_param("fixed_upper_bound", fixed_upper_bound)
-        mlflow.log_metric("optimal_lower_bound", optimal_lb)
-        mlflow.log_metric("calib_uncertain_ratio", best_stats.get("pct_uncertain", 0.0))
-        mlflow.log_metric("calib_review_yield", best_stats.get("yield", 0.0))
-        mlflow.log_metric("calib_leaked_malware", best_stats.get("leaked_malware", 0))
-        mlflow.log_metric("calib_leaked_rate", best_stats.get("leaked_rate", 0.0))
+        # 전수조사(Grid Search) 실행으로 단 한 번의 시뮬레이션으로 가장 완벽한 조합 추출
+        best_params, best_stats = optimize_grid_search(y_true, p_calib, disagreement, ood_scores, diff_scores, fixed_upper_bound)
         
         print("==================================================")
-        print("[완료] Calibration 기준 최적 라우팅 임계값 확정")
+        print("[완료] Grid Search 기반 글로벌 최적 라우팅 임계값 확정")
         print(f" - [확정] 자동 차단 상한선(Upper Bound): {fixed_upper_bound:.6f} (FPR 0.1% 기준 고정)")
-        print(f" - [확정] 심층 분석 하한선(Lower Bound): {optimal_lb:.2f} (Review Yield 88% 최고점 & 누락 최소화)")
-        print(f" - [확인] Calibration 심층분석 비율: {best_stats.get('pct_uncertain', 0.0):.2f}% ({best_stats.get('n_uncertain', 0):,}건)")
-        print(f" - [확인] Calibration 분석가 가성비(Yield): {best_stats.get('yield', 0.0):.2f}%")
-        print(f" - [확인] Calibration 악성 누락: {best_stats.get('leaked_malware', 0):,}건 ({best_stats.get('leaked_rate', 0.0):.2f}%)")
+        print(f" - [확정] 심층 분석 하한선(Lower Bound): {best_params['tau_low']:.2f}")
+        print(f" - [확정] 분석 난이도 임계값(Difficulty): {best_params['tau_diff']:.1f}")
+        print(f" - [확인] Calibration 심층분석 비율: {best_stats['pct_uncertain']:.2f}% ({best_stats['n_uncertain']:,}건)")
+        print(f" - [확인] Calibration 분석가 가성비(Yield): {best_stats['yield_score']:.2f}%")
+        print(f" - [확인] Calibration 악성 누락: {best_stats['leaked_malware']:,}건 ({best_stats['leakage_rate']*100:.2f}%)")
         print("==================================================")
-        print("[안내] 산출된 하한선(tau_low)을 확인하시고, jrr_router.py로 Eval 최종 라우팅을 실행하세요.")
+        print(f"[안내] 위 산출된 최적 하한선(tau_low={best_params['tau_low']:.2f}, tau_difficulty={best_params['tau_diff']:.1f})을 확인하시고, jrr_router.py로 Eval 최종 라우팅을 실행하세요.")
 
 if __name__ == "__main__":
     main()

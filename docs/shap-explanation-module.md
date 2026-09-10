@@ -8,12 +8,14 @@ TRUST-Triage에서는 모델 점수만 제시하는 대신, 영향이 큰 featur
 
 ## 2. 현재 구현 범위
 
-- 공식 설명 대상은 `baseline_model_lightgbm_tuned_500_v4_9120.pkl`이다.
+- 공식 설명 대상은 `models/baseline_model_lightgbm_tuned_500_4way.pkl`이다.
 - `shap.TreeExplainer(model, model_output="raw")`로 LightGBM의 raw score를 설명한다.
 - calibration 이후의 `calibrated_probability`는 설명하지 않는다.
 - positive class는 모델의 `classes_ == [0, 1]`, `objective == "binary"`를 검사하며, class `1`을 악성으로 해석한다.
 - XGBoost는 모델 간 disagreement 계산용이며 이 모듈의 SHAP 대상이 아니다.
 - 단일 `(500,)` 또는 `(1, 500)` 벡터만 지원한다. 기존 inference, Calibration, JRR 동작과는 연결되어 있지 않다.
+
+저장소의 공식 artifact 위치는 `models/`이지만 현재 JRR inference 스크립트는 같은 파일명을 `data/` 아래에서 staging해 로드한다. 서비스 통합 시 SHAP에는 별도 모델을 다시 선택하지 말고 inference가 `data/baseline_model_lightgbm_tuned_500_4way.pkl`에서 로드한 동일 `LGBMClassifier` 인스턴스를 전달한다.
 
 ## 3. 관련 파일
 
@@ -23,8 +25,9 @@ TRUST-Triage에서는 모델 점수만 제시하는 대신, 영향이 큰 featur
 | `src/trust_triage/explanation/shap_lightgbm.py` | artifact 검증, TreeSHAP 계산, Top-K 매핑 |
 | `tests/test_shap_lightgbm.py` | 단위 테스트와 공식 artifact 통합 테스트 |
 | `docs/feature-extraction/feature-selection-ember-v3-top500.json` | 모델 입력 순서의 feature name, 원본 index, schema version 및 `.npy` 해시 |
-| `top_feature_indices_500.npy` | 학습 시 선택한 원본 2568차원 index 500개 |
-| `baseline_model_lightgbm_tuned_500_v4_9120.pkl` | 공식 LightGBM 모델 |
+| `data/top_feature_indices_500.npy` | inference 시 사용하는, 학습에서 선택한 원본 2568차원 index 500개 |
+| `models/baseline_model_lightgbm_tuned_500_4way.pkl` | 현재 공식 4-way LightGBM 모델 |
+| `data/baseline_model_lightgbm_tuned_500_4way.pkl` | 현재 JRR inference가 공식 모델을 staging해 로드하는 경로 |
 
 ## 4. 데이터 흐름
 
@@ -68,12 +71,13 @@ LightGBM artifact에는 원본 feature name이나 EMBER index가 없고 `Column_
 
 ## 6. 출력 스키마
 
-`explain()`은 기본적으로 `list[ShapContribution]` 형태의 Top 5를 반환한다. `to_dict()`로 JSON 직렬화 가능한 dict로 변환할 수 있다.
+`explain()`은 기본적으로 `list[ShapContribution]` 형태의 Top 5를 반환한다. `to_dict()`는 `interface_spec.md`의 필드와 내부 추적용 metadata를 포함한 JSON 직렬화 가능한 dict를 반환한다. 기존 Python 속성 `name`과 `contribution`은 내부 호환성을 위해 유지한다.
 
 | 필드 | 설명 |
 |---|---|
-| `name` | manifest의 해당 모델 입력 열 feature 이름 |
-| `contribution` | 악성 class raw score에 대한 SHAP 기여도 |
+| `feature_name` | manifest의 해당 모델 입력 열 feature 이름 |
+| `feature_value` | 해당 모델 입력 열에 실제로 전달된 값 |
+| `shap_value` | 악성 class raw score에 대한 SHAP 기여도 |
 | `direction` | 양수 `MALICIOUS`, 음수 `BENIGN`, 정확히 0이면 `NEUTRAL` |
 | `group` | `group[index]` 이름에서 구조적으로 분리한 group 이름 |
 | `model_input_index` | 500차원 모델 입력에서의 위치, `0..499` |
@@ -81,17 +85,22 @@ LightGBM artifact에는 원본 feature name이나 EMBER index가 없고 `Column_
 
 `group`은 이름 prefix만 반환한다. hashed bucket의 구체적인 의미는 복원하거나 추정하지 않는다.
 
+`data/top_feature_indices_500.npy`는 데이터 artifact이므로 source checkout에 없을 수 있다. 공식 artifact 통합 테스트는 파일이 없을 때 manifest의 `source_indices`로 임시 `.npy`를 만들고, manifest에 고정된 SHA-256과 byte 단위로 일치할 때만 사용한다. 운영 explainer는 이런 fallback을 사용하지 않으며 실제 `.npy`가 없거나 hash/order가 다르면 초기화에 실패한다.
+
 ## 7. 사용 및 테스트
 
 기본 사용 예시는 다음과 같다. artifact는 신뢰할 수 있는 로컬 파일만 로드해야 한다.
 
 ```python
+import joblib
+
 from trust_triage.explanation import LightGBMShapExplainer
 
-explainer = LightGBMShapExplainer.from_files(
-    "baseline_model_lightgbm_tuned_500_v4_9120.pkl",
+model = joblib.load("data/baseline_model_lightgbm_tuned_500_4way.pkl")
+explainer = LightGBMShapExplainer(
+    model,
     "docs/feature-extraction/feature-selection-ember-v3-top500.json",
-    "top_feature_indices_500.npy",
+    "data/top_feature_indices_500.npy",
     expected_source_schema_version=live_schema_version,
 )
 
@@ -104,16 +113,16 @@ top5 = [item.to_dict() for item in explainer.explain(feature_vector_500)]
 pytest tests/test_shap_lightgbm.py --basetemp=.pytest_tmp
 ```
 
-2026-08-24 현재 결과는 `27 passed`이다. 테스트에는 ordering/schema/hash 실패 조건, 모델 계약, 입력 및 SHAP shape, direction, Top-K 정렬, 공식 artifact 로드, 실제 TreeExplainer 실행과 raw-score additivity 검증이 포함된다. Windows 환경에서는 CPU 개수 탐지와 `cp949` subprocess 출력에 관한 warning이 발생했지만 테스트는 통과했다.
+2026-09-09 실행 결과는 `28 passed`이다. 테스트에는 ordering/schema/hash 실패 조건, 모델 계약, 입력 및 SHAP shape, `feature_value`, direction, Top-K 정렬, 공식 4-way artifact 로드, 합성 입력 3개에 대한 실제 TreeExplainer 실행과 raw-score additivity 검증이 포함된다.
 
-공식 LightGBM artifact에 합성 500차원 입력을 넣은 TreeExplainer 실행은 성공했다. 실제 PE에서 시작하는 end-to-end 검증은 아직 수행 범위에 포함되지 않았다.
+공식 4-way LightGBM artifact에 합성 500차원 입력 3개를 넣은 TreeExplainer 실행은 성공했다. 또한 2026-09-09 로컬 Python PE 1개를 대상으로 `EMBER v3 2568차원 추출 → manifest 기반 Top-500 선택 → 공식 LightGBM prediction → SHAP Top-5` 수동 E2E 검증을 완료했다. 자동화된 PE E2E 회귀 테스트는 아직 포함하지 않았다.
 
 ## 8. 현재 한계와 향후 작업
 
-- 실제 PE → 2568차원 추출 → Top-500 선택 → SHAP까지의 E2E 테스트 추가
+- 실제 PE → 2568차원 추출 → Top-500 선택 → SHAP까지의 자동화된 E2E 회귀 테스트 추가
 - feature extraction/inference 계층에서 live schema version을 전달하도록 pipeline schema 연결
 - FastAPI 또는 Streamlit 응답에 `ShapContribution` 연결
 - explainer 초기화 비용을 고려해 서비스에서 인스턴스를 재사용하는 lifecycle 설계
-- 모델 artifact 자체에는 feature metadata가 없으므로, 향후 모델 배포 bundle에 manifest와 index artifact를 함께 고정하는 방식 검토
+- 모델 artifact 자체에는 feature metadata가 없으므로, 배포 시 모델과 `data/top_feature_indices_500.npy`, selection manifest를 하나의 검증 가능한 bundle로 함께 배치
 - SHAP/LightGBM 버전 변경 시 공식 artifact로 반환 타입과 `(1, 500)` / `(1,)` shape를 다시 검증
 

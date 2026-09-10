@@ -241,13 +241,32 @@ def test_explain_returns_stable_top_five_with_all_directions(
         "NEUTRAL",
     ]
     assert result[0].to_dict() == {
-        "name": "group[1]",
-        "contribution": 9.0,
+        "feature_name": "group[1]",
+        "feature_value": 0.0,
+        "shap_value": 9.0,
         "direction": "MALICIOUS",
         "group": "group",
         "model_input_index": 1,
         "source_index": 1,
     }
+
+
+def test_explain_returns_original_model_input_feature_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contributions = np.zeros(500)
+    contributions[17] = 2.0
+    model_input = np.zeros(500, dtype=np.float32)
+    model_input[17] = 1.25
+    explainer = _build_without_init(tmp_path, monkeypatch, contributions)
+
+    result = explainer.explain(model_input, top_k=1)
+
+    assert result[0].name == "group[17]"
+    assert result[0].feature_value == 1.25
+    assert result[0].contribution == 2.0
+    assert result[0].to_dict()["feature_value"] == 1.25
 
 
 @pytest.mark.parametrize("top_k", [0, -1, 501, True, 5.0])
@@ -303,7 +322,12 @@ def test_explain_rejects_unverified_shap_shapes(
 
 
 _OFFICIAL_MODEL_PATH = (
-    Path(__file__).resolve().parents[1] / "baseline_model_lightgbm_tuned_500_v4_9120.pkl"
+    Path(__file__).resolve().parents[1]
+    / "models"
+    / "baseline_model_lightgbm_tuned_500_4way.pkl"
+)
+_OFFICIAL_MODEL_SHA256 = (
+    "93662e7cd13443fc3b1a0ae5a43f7f5d349d273b6c71eb32ab7bcbe51780657c"
 )
 _OFFICIAL_MANIFEST_PATH = (
     Path(__file__).resolve().parents[1]
@@ -312,28 +336,59 @@ _OFFICIAL_MANIFEST_PATH = (
     / "feature-selection-ember-v3-top500.json"
 )
 _OFFICIAL_INDICES_PATH = (
-    Path(__file__).resolve().parents[1] / "top_feature_indices_500.npy"
+    Path(__file__).resolve().parents[1] / "data" / "top_feature_indices_500.npy"
 )
 
 
-def test_official_artifacts_have_expected_order_and_model_contract() -> None:
+def _official_indices_path(tmp_path: Path) -> Path:
+    """Return the deployed indices, or recreate their exact verified bytes.
+
+    The model artifact is checked out under ``models/``, while inference stages its
+    feature-index artifact under ``data/``.  Binary data artifacts are not committed,
+    so a source checkout may only contain the checked-in selection manifest.  Its
+    source indices serialize to the manifest's recorded SHA-256; recreating that exact
+    array keeps the integration test meaningful without weakening production
+    validation in ``LightGBMShapExplainer``.
+    """
+
+    if _OFFICIAL_INDICES_PATH.exists():
+        return _OFFICIAL_INDICES_PATH
+
+    manifest = json.loads(_OFFICIAL_MANIFEST_PATH.read_text(encoding="utf-8"))
+    recreated_path = tmp_path / "top_feature_indices_500.npy"
+    np.save(recreated_path, np.asarray(manifest["source_indices"], dtype=np.int64))
+    assert (
+        hashlib.sha256(recreated_path.read_bytes()).hexdigest().casefold()
+        == manifest["source_artifact_sha256"].casefold()
+    )
+    return recreated_path
+
+
+def test_official_artifacts_have_expected_order_and_model_contract(
+    tmp_path: Path,
+) -> None:
     if not _OFFICIAL_MODEL_PATH.exists():
         pytest.skip("official LightGBM artifact is not available")
 
+    indices_path = _official_indices_path(tmp_path)
     model = __import__("joblib").load(_OFFICIAL_MODEL_PATH)
     manifest = json.loads(_OFFICIAL_MANIFEST_PATH.read_text(encoding="utf-8"))
     names, indices, _, schema_version = LightGBMShapExplainer._validate_ordering(
-        manifest, _OFFICIAL_INDICES_PATH
+        manifest, indices_path
     )
     LightGBMShapExplainer._validate_model(model)
 
+    assert hashlib.sha256(_OFFICIAL_MODEL_PATH.read_bytes()).hexdigest() == (
+        _OFFICIAL_MODEL_SHA256
+    )
+    assert model.n_estimators_ == 998
     assert len(names) == 500
-    assert np.array_equal(indices, np.load(_OFFICIAL_INDICES_PATH))
+    assert np.array_equal(indices, np.load(indices_path))
     assert schema_version == manifest["source_schema_version"]
 
 
-def test_official_explain_returns_top5_and_additivity_holds() -> None:
-    """실제 모델, manifest, npy를 함께 사용하는 통합 테스트다.
+def test_official_explain_returns_top5_and_additivity_holds(tmp_path: Path) -> None:
+    """실제 모델, manifest, 검증된 npy를 함께 사용하는 통합 테스트다.
 
     ordering과 모델 계약만 확인하는
     test_official_artifacts_have_expected_order_and_model_contract와 달리,
@@ -346,25 +401,44 @@ def test_official_explain_returns_top5_and_additivity_holds() -> None:
     if not _OFFICIAL_MODEL_PATH.exists():
         pytest.skip("official LightGBM artifact is not available")
 
+    indices_path = _official_indices_path(tmp_path)
     explainer = LightGBMShapExplainer.from_files(
-        _OFFICIAL_MODEL_PATH, _OFFICIAL_MANIFEST_PATH, _OFFICIAL_INDICES_PATH
+        _OFFICIAL_MODEL_PATH, _OFFICIAL_MANIFEST_PATH, indices_path
     )
 
-    zeros = np.zeros(500, dtype=np.float32)
-    result = explainer.explain(zeros, top_k=5)
-
-    assert len(result) == 5
-    assert all(isinstance(item.contribution, float) for item in result)
-    assert all(item.direction in ("MALICIOUS", "BENIGN", "NEUTRAL") for item in result)
-    # 기여도가 큰 feature부터 |contribution| 내림차순이어야 한다.
-    magnitudes = [abs(item.contribution) for item in result]
-    assert magnitudes == sorted(magnitudes, reverse=True)
-
-    values = explainer._validate_input(zeros)
-    explanation = explainer._explainer(values, check_additivity=True)
-    contributions, base_value = explainer._validate_shap_result(explanation)
-    raw_score = explainer.model.predict(values, raw_score=True)[0]
-
-    assert np.isclose(
-        base_value + float(contributions.sum()), raw_score, rtol=1e-5, atol=1e-6
+    samples = (
+        np.zeros(500, dtype=np.float32),
+        np.ones(500, dtype=np.float32),
+        np.linspace(0.0, 1.0, 500, dtype=np.float32),
     )
+    for sample in samples:
+        result = explainer.explain(sample, top_k=5)
+
+        assert len(result) == 5
+        assert all(isinstance(item.feature_value, float) for item in result)
+        assert all(isinstance(item.contribution, float) for item in result)
+        assert all(
+            item.direction in ("MALICIOUS", "BENIGN", "NEUTRAL")
+            for item in result
+        )
+        assert {
+            "feature_name",
+            "feature_value",
+            "shap_value",
+            "direction",
+        } <= result[0].to_dict().keys()
+        # 기여도가 큰 feature부터 |contribution| 내림차순이어야 한다.
+        magnitudes = [abs(item.contribution) for item in result]
+        assert magnitudes == sorted(magnitudes, reverse=True)
+
+        values = explainer._validate_input(sample)
+        explanation = explainer._explainer(values, check_additivity=True)
+        contributions, base_value = explainer._validate_shap_result(explanation)
+        raw_score = explainer.model.predict(values, raw_score=True)[0]
+
+        assert np.isclose(
+            base_value + float(contributions.sum()),
+            raw_score,
+            rtol=1e-5,
+            atol=1e-6,
+        )

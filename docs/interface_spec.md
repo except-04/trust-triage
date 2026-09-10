@@ -420,7 +420,7 @@ Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구�
 
 | 항목 | 현재 값 |
 |---|---:|
-| `tau_low` | `0.60` |
+| `tau_low` | `0.65` |
 | `tau_high` | `0.983645` |
 | `tau_disagree` | `0.30` |
 | `tau_difficulty` | `5` |
