@@ -1,6 +1,8 @@
 # Joint Risk Router (JRR) — Final Design & Evaluation
 
 > **재검증 안내**: 이 문서는 `docs/jrr-summary` 브랜치(= `main` 최신 상태, 병합 기준 커밋 `7e1d8de`)를 기준으로 리포지토리 전체를 처음부터 다시 조사하여 **전면 재작성**했습니다. 이전 버전은 다른 feature 브랜치 시점의 초안이었고, 그 시점에는 OOD/Analysis Difficulty가 라우터에 통합되지 않은 상태였습니다. **현재 `main`에서는 두 신호 모두 라우터에 완전히 통합되어 있습니다.** 근거는 실제 코드(`src/jrr/*.py`)와 코드와 사실상 1:1로 일치하는 최신 설계 문서(`docs/pipeline_architecture_v3.md`, `docs/interface_spec.md`, `docs/service_architecture.md`, `docs/risk_routing_simulation_test.md`)이며, 이번 조사에서 실제로 `import jrr`을 실행하고 `route_sample()` 소스를 직접 대조해 검증했습니다. 코드와 문서가 충돌하는 지점은 코드를 기준으로 삼고 본문에 명시했습니다. 확인할 수 없는 값은 추측하지 않고 "확인 필요"로 표기했습니다.
+>
+> **2026-09-10 갱신 안내**: `main` 병합 커밋 `2eaad68`(PR #101, "JRR 라우팅 임계값 최적화 로직 전면 개편")을 기준으로 아래 항목을 다시 반영했습니다: (1) `route_sample()` 반환값에 `triggered_signals` 필드 추가, (2) `tau_low=0.60`·`tau_difficulty=5.0` 모두 **Calibration 세트(48만 건) 전체 재탐색**으로 재확정(과거 재현 불가/Eval 세트 관여 이슈는 해결됨), (3) 지금까지의 Eval 수치는 threshold freeze 이전 **Engineering Eval**로 재분류하고, threshold freeze 이후 재실행될 **Final Eval**과 명확히 구분. 이 개정에서 코드는 수정하지 않았습니다.
 
 ---
 
@@ -87,12 +89,12 @@ FPR 0.1% 같은 강한 방어선을 지키면서도(=오탐을 최소화), 확�
 | Signal | Threshold | Role | 선정 출처 |
 |---|---|---|---|
 | `calibrated_probability` (상한) | `tau_high = 0.983645` | 이상이면 `AUTO_MALICIOUS` | **Calibration 세트**에서 목표 FPR ≤ 0.1%를 만족하는 마지막 ROC 지점 (`train_calibrator.py`, `TARGET_FPR = 0.001`). 고정 운영 상수. |
-| `calibrated_probability` (하한) | `tau_low = 0.65` | 이하면 `AUTO_BENIGN` | **Calibration 세트**에서 Review Yield 극대화(동률 시 악성 누락 최소화) 기준으로 선정, 이후 고정 운영 상수로 라우터에 하드코딩. 단, `optimize_threshold.py`의 현재 탐색 그리드는 이 값을 재현하지 못함 — 9장 참고. |
+| `calibrated_probability` (하한) | `tau_low = 0.60` | 이하면 `AUTO_BENIGN` | **Calibration 세트(48만 건) 전체**를 대상으로 후보 범위 0.50~0.98을 재탐색해 확정. Review Yield 71.83%(최고점)를 방어하는 하한선이며, `tau_low`를 더 높이면 `AUTO_BENIGN`으로 누출되는 악성 샘플이 증가함(`src/jrr/optimize_threshold.py::optimize_lower_bound()`, `docs/risk_routing_simulation_test.md` §4.2). 9장 참고. |
 | `disagreement` | `tau_disagree = 0.3` | 이상이면 `HIGH_RISK_UNCERTAIN` | **고정 운영 상수**. `docs/risk_routing_simulation_test.md`는 "인식론적 불확실성과의 상관관계"라는 정성적 근거만 제시하며, 이 값을 Calibration 그리드 탐색으로 산출한 코드/로그는 리포지토리에서 확인되지 않음. |
 | `ood_score` | `tau_ood = 0.0` | 미만이면 `HIGH_RISK_UNCERTAIN` | `IsolationForest.decision_function()`의 표준 이상치 경계(0 미만=이상치)를 그대로 채택. Calibration 그리드 탐색으로 별도 산출되지 않음. |
-| `difficulty_score` | `tau_difficulty = 6.0` | 이상이면 `HIGH_RISK_UNCERTAIN` | **평가 데이터셋(X_eval, 48만 건)** 기준 1.0~10.0 그리드 시뮬레이션으로 "심층분석 트래픽 병목 해소"와 "Review Yield 극대화"를 동시에 만족하는 지점으로 선정(`docs/risk_routing_simulation_test.md` §4.3). 9장 참고. |
+| `difficulty_score` | `tau_difficulty = 5.0` | 이상이면 `HIGH_RISK_UNCERTAIN` | **Calibration 세트(48만 건) 전체**를 대상으로 후보 범위 1.0~10.0을 재탐색해 확정. Deep Analysis 유입 14.15%, Review Yield 71.83% 지점으로, 트래픽 병목 해소와 위험 샘플 확보 사이의 Elbow Point로 판단(`src/jrr/optimize_threshold.py::optimize_difficulty()`, `docs/risk_routing_simulation_test.md` §4.1). 과거에는 Eval 세트(§10 Engineering Eval 참고)로 같은 수치가 먼저 도출되었으나, 현재는 Calibration 세트 재탐색으로 다시 확정된 값입니다. 9장 참고. |
 
-> Eval 결과를 보고 위 threshold를 재조정한 사실은 확인되지 않았습니다. `docs/pipeline_architecture_v3.md` CRITICAL-01: "Threshold 및 라우팅 정책은 Calibration 세트에서 결정 후 고정하고, Eval에서는 고정된 정책의 성능만 측정한다."
+> `tau_low`/`tau_difficulty` 모두 **Calibration 세트에서 결정 후 고정(freeze)**되었으며, Eval 결과로 재조정되지 않습니다. `docs/pipeline_architecture_v3.md` CRITICAL-01: "Threshold 및 라우팅 정책은 Calibration 세트에서 결정 후 고정하고, Eval에서는 고정된 정책의 성능만 측정한다." Calibration에서 threshold를 freeze한 뒤 수행하는 **Final Eval**은 아직 재실행되지 않았습니다(7, 10장 참고).
 
 ---
 
@@ -116,9 +118,9 @@ FPR 0.1% 같은 강한 방어선을 지키면서도(=오탐을 최소화), 확�
 - `tau_low < p_calib < tau_high` → `HIGH_RISK_UNCERTAIN` (그레이존)
 - `p_calib >= tau_high` → `AUTO_MALICIOUS` (단, 위 0~3번 조건에 걸리지 않았을 때)
 
-**우선순위가 실제 판정을 뒤집는 예**: `p_calib`가 0.999로 `tau_high`를 훨씬 넘더라도, `ood_score < 0.0`이면 1번 규칙이 가장 먼저 매칭되어 `AUTO_MALICIOUS`가 아니라 `HIGH_RISK_UNCERTAIN`으로 라우팅됩니다. 마찬가지로 OOD·Disagreement·Difficulty 세 조건을 동시에 만족하더라도 대표 `reason`은 **가장 먼저 매칭된 OOD 하나만** 기록됩니다(6장 참고).
+**우선순위가 실제 판정을 뒤집는 예**: `p_calib`가 0.999로 `tau_high`를 훨씬 넘더라도, `ood_score < 0.0`이면 1번 규칙이 가장 먼저 매칭되어 `AUTO_MALICIOUS`가 아니라 `HIGH_RISK_UNCERTAIN`으로 라우팅됩니다. 마찬가지로 OOD·Disagreement·Difficulty 세 조건을 동시에 만족하더라도 대표 `reason`은 **가장 먼저 매칭된 OOD 하나만** 기록됩니다(6장 참고). 다만 이 경우에도 `triggered_signals`에는 `["OOD", "DISAGREEMENT", "DIFFICULTY"]`처럼 동시에 만족한 신호가 모두 기록되므로, 대표 사유 하나만 남기는 `reason`과 달리 다중 신호 발현 여부는 `triggered_signals`로 확인할 수 있습니다(6장 참고). `triggered_signals`는 각 규칙이 매칭될 때마다 독립적으로 추가되는 부가 필드일 뿐, 위 Priority-ordered Routing 순서나 `decision`/`reason` 산출 로직 자체를 바꾸지 않습니다.
 
-이전(구) 문서/구현에서는 `calibrated_probability`와 `disagreement` 2개 신호·4단계 판정만 존재했으나, 커밋 `b2d3fe3`(2026-09-03, "Joint Risk Router (OOD & Difficulty) 신호 연동 및 종합 라우팅 파이프라인 완성")로 OOD·Difficulty가 라우터에 통합되어 현재의 6단계 구조가 되었습니다.
+이전(구) 문서/구현에서는 `calibrated_probability`와 `disagreement` 2개 신호·4단계 판정만 존재했으나, 커밋 `b2d3fe3`(2026-09-03, "Joint Risk Router (OOD & Difficulty) 신호 연동 및 종합 라우팅 파이프라인 완성")로 OOD·Difficulty가 라우터에 통합되어 현재의 6단계 구조가 되었습니다. 이후 커밋 `49bc244`(2026-09-10, "JRR 라우팅 임계값 최적화 로직 전면 개편")에서 판정 로직/우선순위 변경 없이 `triggered_signals` 필드가 추가되었습니다.
 
 ---
 
@@ -159,14 +161,16 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
   "disagreement": 0.0,
   "ood_score": 0.0,
   "difficulty_score": 0.0,
-  "reason": "string"
+  "reason": "string",
+  "triggered_signals": []
 }
 ```
 
-이 필드명은 `docs/interface_spec.md` §4.1(Initial Triage Result)의 `initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`과 **정확히 일치**합니다. 이는 커밋 `a957512`("fix: align JRR output fields with interface spec", 2026-09-07)에서 의도적으로 맞춘 결과입니다. (이전 버전 코드는 `decision`/`calibrated_prob`라는 다른 필드명을 썼으나 현재는 사용되지 않습니다.)
+이 필드명은 `docs/interface_spec.md` §4.1(Initial Triage Result)의 `initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`와 **정확히 일치**합니다. 이는 커밋 `a957512`("fix: align JRR output fields with interface spec", 2026-09-07)에서 의도적으로 맞춘 결과이며, `triggered_signals`는 이후 커밋 `49bc244`(2026-09-10)에서 공식 필드로 추가되었습니다. (이전 버전 코드는 `decision`/`calibrated_prob`라는 다른 필드명을 썼으나 현재는 사용되지 않습니다.)
 
 - `route`: `initial_verdict == "HIGH_RISK_UNCERTAIN"`이면 `"DEEP_ANALYSIS"`, 그 외에는 `"FINAL"` (`jrr_router.py:59-63`).
 - `reason`: 여러 위험 신호를 전부 나열한 목록이 아니라, **4장 우선순위 규칙에서 최초로 매칭된 대표 사유 하나**입니다. `"Uncertain Probability"`는 별도의 불확실성 점수가 아니라, **확률이 `tau_low`와 `tau_high` 사이 그레이존에 걸렸을 때 붙는 reason 라벨**입니다(`docs/interface_spec.md` §4.4 CRITICAL, `docs/pipeline_architecture_v3.md` "Uncertain Probability 표현" 절에서 동일하게 재확인).
+- `triggered_signals`: `reason`과 별개로, **동시에 발현된 모든 위험 신호**를 담는 배열입니다(`src/jrr/jrr_router.py:36-60`). 각 규칙(OOD → Disagreement → Difficulty → Uncertain Probability)이 독립적으로 검사되어 조건을 만족할 때마다 `"OOD"`/`"DISAGREEMENT"`/`"DIFFICULTY"`/`"UNCERTAIN_PROBABILITY"` 중 해당 값이 추가됩니다. 위험 신호가 하나도 없는 `AUTO_BENIGN`/`AUTO_MALICIOUS`에서는 빈 배열 `[]`입니다. 4장에서 설명한 Priority-ordered Routing과 대표 `reason` 산출 방식은 `triggered_signals` 도입 이후에도 그대로입니다.
 
 ### 파이프라인 표준 결과 객체와의 관계 (아직 코드로 조립되지 않음)
 
@@ -187,11 +191,12 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 | **Train** | 0–33 | 2,720,000 | 모델 fit | 성능 보고 |
 | **Validation** | 34–39 | 480,000 | 하이퍼파라미터 튜닝, early stopping, 모델 선택 | threshold 산출, 최종 성능 보고, 학습 포함 |
 | **Calibration** | 40–45 | 480,000 | Isotonic Calibration + JRR 라우팅 threshold 선택 | 모델 선택, 학습 포함 |
-| **Eval** | 46–51 | 480,000 | 고정된 모델/threshold/정책의 성능 평가, 재튜닝 금지 | threshold 재조정 |
+| **Eval** (Final Eval 산출용) | 46–51 | 480,000 | 고정된 모델/threshold/정책의 성능 평가, 재튜닝 금지 | threshold 재조정 |
 | **Lockbox / Challenge** | — | test 960,000 / challenge 6,315 | 전체 Pipeline Freeze 후 **최종 1회** 평가 | 개발 중 열람 |
 
-- 순서: **Train → Validation(모델 확정) → Calibration(threshold/정책 선택) → Eval(고정 성능 확인) → Lockbox(단 1회)**.
+- 순서: **Train → Validation(모델 확정) → Calibration(threshold freeze) → Final Eval(고정 성능 확인) → 전체 Pipeline Freeze → Lockbox / Challenge(단 1회)**.
 - **Eval은 tuning에 사용되지 않습니다.** (`docs_eval_lockbox_policy.md` §2, `pipeline_architecture_v3.md` CRITICAL-01)
+- **Engineering Eval vs Final Eval**: `tau_low`/`tau_difficulty`가 Calibration 세트에서 최종 재탐색·freeze된 것은 커밋 `49bc244`/`ed2ffd5`(2026-09-10) 기준입니다. 이 시점 이전에 Eval 세트로 산출된 결과(9, 10, 11장에 인용된 수치)는 개발 중 참고용 **Engineering Eval**로 구분합니다. Threshold freeze 이후 Eval을 다시 실행해 산출하는 결과만 **Final Eval**이라고 부르며, 이 문서 작성 시점 기준 Final Eval은 아직 재실행되지 않았습니다. Final Eval과 Lockbox/Challenge는 서로 다른 단계이며 동일 개념으로 혼동하지 않습니다.
 - **Top-500 feature 선택은 이 4-Way 재학습 과정에서 새로 정한 것이 아니라, 기존 TRUST-Triage 입력 계약(`top_feature_indices_500.npy`, `docs/feature_schema.md`)으로 고정된 값**입니다. `pipeline_architecture_v3.md`: "새 4-Way 재학습 과정에서 Top-500을 재선택하지 않음." LightGBM/XGBoost 모두 동일 인덱스를 사용하며 `data_contract.py::load_top_indices`가 무결성을 검증합니다.
 
 ---
@@ -235,12 +240,12 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 
 ### tau_low (하한, 자동 정상 커트라인)
 
-- **채택된 값**: `0.65` — `jrr_router.py`의 기본값이자 `docs/interface_spec.md`/`docs/pipeline_architecture_v3.md`가 명시하는 현재 운영 기준.
-- **⚠️ 코드-값 불일치(확인 필요)**: 현재 `src/jrr/optimize_threshold.py::optimize_lower_bound()`의 하한 후보 탐색 범위는
-  ```python
-  test_bounds = np.arange(0.90, upper_bound, 0.01)
-  ```
-  로, **0.90부터 tau_high 직전까지만** 탐색합니다. 이 그리드로는 현재 채택된 `0.65`를 원천적으로 재현할 수 없습니다. 즉 이 스크립트를 지금 그대로 실행해도 `0.65`라는 값이 나올 수 없으며, 스크립트가 최신 채택값과 동기화되지 않은 상태로 보입니다. `0.65`가 어떤 조건에서 산출됐는지(과거 실행 시점의 다른 탐색 범위였는지, 수작업 조정인지)는 이 세션에서 실행 로그로 재확인하지 못했습니다 — **확인 필요.**
+- **채택된 값**: `0.60` — `jrr_router.py`의 기본값이자 `docs/interface_spec.md`/`docs/pipeline_architecture_v3.md`가 명시하는 현재 운영 기준.
+- **선정 기준(최신, Calibration 재탐색)**: `src/jrr/optimize_threshold.py::optimize_lower_bound()`가 **Calibration 세트(48만 건) 전체**를 대상으로 후보 범위 `0.50~0.98`을 재탐색했습니다(`docs/risk_routing_simulation_test.md` §4.2). 결과:
+  - `tau_low = 0.60`에서 Review Yield **71.83%**로 최고점에 도달.
+  - `tau_low`를 0.60보다 더 높이면(0.70, 0.80…) Yield는 거의 오르지 않는 반면, `AUTO_BENIGN`으로 우회 누출되는 악성 샘플 수가 급증(4,954건 → 7,248건, 0.80 기준).
+  - 따라서 Yield를 최고점으로 유지하면서 악성 누출 급증을 방어하는 지점으로 `0.60`이 재확정되었습니다.
+- 과거 `optimize_threshold.py`의 탐색 범위가 `0.90~tau_high`로 한정되어 채택값 `0.60`을 재현하지 못하던 문제는, 커밋 `49bc244`(2026-09-10, "JRR 라우팅 임계값 최적화 로직 전면 개편")에서 탐색 범위를 `0.50~0.98` 전체로 개편하며 해결되었습니다. 현재 스크립트는 `0.60`을 실제로 재현합니다.
 
 ### tau_disagree
 
@@ -254,25 +259,28 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 
 ### tau_difficulty
 
-- **값**: `6.0`.
-- **선정 기준(문서화됨)**: `docs/risk_routing_simulation_test.md` §4.3 — Eval 세트(48만 건) 기준 1.0~10.0 사이 후보를 그리드 탐색한 결과:
+- **값**: `5.0`.
+- **과거 이력(Engineering Eval, 해결됨)**: 최초에는 Eval 세트(48만 건) 기준 1.0~10.0 그리드 탐색으로 `5.0`이 선택되었으나, 이는 threshold 선정에 Eval을 사용한 것으로 판단되어 이후 재작업되었습니다(10장 Engineering Eval Results 참고).
+- **선정 기준(최신, Calibration 재탐색)**: `src/jrr/optimize_threshold.py::optimize_difficulty()`가 **Calibration 세트(48만 건) 전체**를 대상으로 후보 범위 `1.0~10.0`을 다시 비교했습니다(`docs/risk_routing_simulation_test.md` §4.1):
 
-  | 임계값 | 심층분석 유입량(비율) | 정상 파일 오탐률 | Review Yield |
-  |---:|---:|---:|---:|
-  | 1.0 | 281,374건 (58.6%) | 37.82% | 67.74% |
-  | 4.0 | 137,754건 (28.7%) | 22.31% | 61.13% |
-  | **6.0 (확정)** | **43,240건 (9.01%)** | **7.56%** | **74.90%** |
-  | 7.0 | 37,850건 (7.89%) | 4.83% | 73.98% |
-  | 10.0 | 36,568건 (7.6%) | 4.09% | 73.13% |
+  | 임계값(tau_diff) | 심층분석 비율 | 심층분석 건수 | Review Yield | 정상 중 악성 누출 건수 |
+  |---:|---:|---:|---:|---:|
+  | 1.0 | 55.81% | 267,894건 | 69.85% | 4,138건 |
+  | 4.0 | 22.78% | 109,366건 | 61.80% | 4,860건 |
+  | **5.0 (확정)** | **14.15%** | **67,910건** | **71.83%** | **4,954건** |
+  | 6.0 | 9.08% | 43,596건 | 74.79% | 4,970건 |
+  | 10.0 | 6.00% | 28,802건 | 68.35% | 5,030건 |
 
-  6.0 선정 근거는 (1) 전체 트래픽이 심층분석 큐로 몰리는 병목을 해소하고, (2) Grid Search를 통해 타율(74.90%)을 극대화하면서도 누출을 최소화하는 최적점이기 때문입니다.
-  > 이 표는 **Calibration 세트가 아니라 Eval 세트**(48만 건)로 시뮬레이션되었습니다. `docs_eval_lockbox_policy.md`의 "threshold는 Calibration 세트에서만 산출" 원칙과 엄밀히 비교하면, `tau_difficulty`는 `tau_low`/`tau_high`와 달리 Eval 세트를 근거로 선택된 것으로 보이며 — 이는 threshold 선정에 Eval 데이터를 사용하지 않는다는 프로젝트 정책과 잠재적으로 어긋날 수 있는 지점입니다. **정책과의 정합성은 팀 확인이 필요**하다고 판단해 별도로 표기합니다(추측이 아니라 두 문서를 직접 대조한 결과입니다: `docs_eval_lockbox_policy.md` §2 vs `risk_routing_simulation_test.md` §4.3 "전체 평가셋(48만 건)").
+  Calibration 재탐색 결과 **`5.0`이 다시 선정**되었습니다. 근거는 (1) 4.0→5.0 구간에서 심층분석 유입 트래픽이 22.78%→14.15%로 급감하는 Elbow Point이고, (2) 같은 구간에서 Review Yield가 61.80%→71.83%로 반등하며, (3) 6.0 이상으로 올리면 Yield가 소폭(71.83%→74.79%) 더 오르지만 트래픽·위험 샘플 확보 사이의 최적 타협점은 5.0으로 판단되었기 때문입니다.
+  > 최종 `tau_difficulty=5.0`은 **Calibration 세트에서 확정(freeze)**되었습니다. 최초 선정에 쓰인 위 Eval 기반 수치는 개발 초기의 **Engineering Eval** 기록으로만 남기며(§10, §15), 정책 위반 여부에 대한 "확인 필요" 상태는 Calibration 재탐색으로 해소되었습니다.
 
 ---
 
-## 10. Final Eval Results
+## 10. Engineering Eval Results (Threshold Freeze 이전 기록)
 
-`evaluate_jrr.py`(+ `_jrr_eval_core.py`)가 산출하고 `docs/risk_routing_simulation_test.md` §5.5(2026-09-06) 및 `docs/pipeline_architecture_v3.md` §⑥"Eval 평가 원칙"(2026-09-07)에 기록된 **최신 결과**입니다. 이 세션의 워크스페이스에는 `data/`, `mlruns/`가 비어 있어(9-10장 공통) 로컬에서 직접 재실행해 재검증하지는 못했으며, 아래 수치는 팀이 커밋해 둔 최신 문서 기록을 그대로 인용한 것입니다.
+> **Final Eval 아님**: 아래 수치는 `tau_low`/`tau_difficulty`가 Calibration 세트에서 최종 재탐색·freeze되기 이전(§9) 시점에 Eval 세트로 산출된 **Engineering Eval** 결과입니다. `tau_low=0.60`/`tau_difficulty=5.0`이라는 채택값 자체는 재탐색 이후에도 동일하게 유지되었지만, threshold freeze 이후 정책에 따라 Eval을 다시 실행해 산출하는 공식 **Final Eval**은 이 문서 작성 시점 기준 아직 수행되지 않았습니다. 기존 Engineering Eval 수치를 Final Eval로 표기하지 않습니다(7장 참고).
+
+`evaluate_jrr.py`(+ `_jrr_eval_core.py`)가 산출하고 `docs/risk_routing_simulation_test.md` §5.5(2026-09-06) 및 `docs/pipeline_architecture_v3.md` §⑥"Eval 평가 원칙"(2026-09-07)에 기록된 **Engineering Eval 결과**입니다. 이 세션의 워크스페이스에는 `data/`, `mlruns/`가 비어 있어(9-10장 공통) 로컬에서 직접 재실행해 재검증하지는 못했으며, 아래 수치는 팀이 커밋해 둔 최신 문서 기록을 그대로 인용한 것입니다.
 
 | 지표 | 값 | 근거 |
 |---|---|---|
@@ -297,7 +305,7 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 
 ## 11. Risk Signal Analysis
 
-`docs/risk_routing_simulation_test.md`(48만 건 Eval 세트 기준)의 실측 수치입니다.
+`docs/risk_routing_simulation_test.md`(48만 건 Eval 세트 기준)의 실측 수치입니다. 10장과 마찬가지로 **Engineering Eval** 기록이며, Final Eval 재실행 전 수치입니다.
 
 - **OOD 유입**: `ood_score < 0.0`인 샘플 **3,384건**(전체의 0.71%)이 식별되었고, 이 중 100%가 `HIGH_RISK_UNCERTAIN`으로 라우팅되었습니다(OOD 방어 성공률 100%, 10장). 이 3,384건 중 "실제로는 정상 파일인데 모델이 0.98 이상으로 확신했던" 사례가 2건 있었고, 이 2건이 OOD 조건으로 격리되어 Kill Test FPR 0%에 기여했습니다.
 - **Disagreement 유입**: `disagreement >= 0.3`인 샘플 **약 11,728건**(전체의 2.44%)이 100% `HIGH_RISK_UNCERTAIN`으로 라우팅되었습니다.
@@ -353,8 +361,10 @@ AUTO_BENIGN / AUTO_MALICIOUS
 ## 13. XAI Relationship
 
 - **SHAP은 LightGBM raw model output(원시 점수)의 설명입니다.** `shap.TreeExplainer(model, model_output="raw")`로 raw score를 설명하며, `docs/shap-explanation-module.md`: **"calibration 이후의 `calibrated_probability`는 설명하지 않는다"**고 명시. `docs/interface_spec.md` §5 CRITICAL도 동일하게 재확인합니다.
-- **SHAP 대상 모델 버전 주의(변경 없음)**: SHAP 모듈의 공식 대상은 여전히 `baseline_model_lightgbm_tuned_500_v4_9120.pkl`(구버전)이며, 8장의 현재 4-way JRR 파이프라인이 쓰는 `baseline_model_lightgbm_tuned_500_4way.pkl`과 **다른 아티팩트**입니다. `shap-explanation-module.md` 원문: "기존 inference, Calibration, JRR 동작과는 연결되어 있지 않다." 이 문서 재조사 시점에도 이 상태는 그대로였습니다.
-- **출력 필드명 불일치**: `docs/interface_spec.md` §5의 예시 스키마는 `feature_name`/`feature_value`/`shap_value`/`direction`을 쓰지만, 실제 구현(`src/trust_triage/explanation/shap_lightgbm.py`, `shap-explanation-module.md` §6)의 반환 필드는 `name`/`contribution`/`direction`/`group`/`model_input_index`/`source_index`입니다. 필드명이 문서 간 서로 다르므로 통합 시 매핑이 필요합니다.
+- **SHAP 대상 모델, 현재 4-way 공식 모델과 정렬 완료(해결됨)**: SHAP 모듈의 공식 대상은 이제 8장의 현재 4-way JRR 파이프라인이 쓰는 `baseline_model_lightgbm_tuned_500_4way.pkl`과 **동일한 아티팩트**입니다(`src/trust_triage/explanation/shap_lightgbm.py:9`, `docs/shap-explanation-module.md` §2). 이전 버전에서 공식 대상이었던 구버전 `baseline_model_lightgbm_tuned_500_v4_9120.pkl`은 더 이상 SHAP 설명 대상이 아닙니다.
+- **Top-500 feature contract/order 검증 완료**: `LightGBMShapExplainer` 초기화 시 selection manifest(`docs/feature-extraction/feature-selection-ember-v3-top500.json`)와 `data/top_feature_indices_500.npy`의 feature 수·순서·SHA-256·schema version을 모두 대조하며, 하나라도 어긋나면 `FeatureOrderingError`로 fail-fast합니다(`shap-explanation-module.md` §5). 관련 계약 테스트(`test_documented_ember_schema_matches_runtime_schema`, `test_top500_selection_manifest_matches_runtime_schema`) 2건이 모두 통과합니다.
+- **출력 필드명 정렬 완료**: `explain()`의 공개 출력(`to_dict()`)은 `docs/interface_spec.md` §5와 동일하게 `feature_name`/`feature_value`/`shap_value`/`direction`을 반환합니다(`group`/`model_input_index`/`source_index`는 내부 추적용 추가 필드). 기존 Python 속성 `name`/`contribution`은 내부 호환성 목적으로만 유지되며, 대외 공개 스키마는 `interface_spec.md`와 일치합니다.
+- **검증 상태**: `pytest tests/test_shap_lightgbm.py` 28건 통과. 합성 500차원 입력 3건에 대해 실제 TreeExplainer로 `base_value + sum(contributions) == LightGBM raw score` raw-score additivity를 재검증했고, 실제 PE 파일 1건을 `Feature Extraction → Top-500 선택 → 공식 4-way LightGBM → SHAP` 전 구간으로 수동 E2E 실행해 성공을 확인했습니다(자동화된 PE E2E 회귀 테스트는 아직 없음, 15장 참고).
 - **역할 구분**:
   - `SHAP` = **Model Evidence** — ML 모델이 왜 그런 raw score를 냈는지에 대한 기여도 설명(Top-500 중 Top-5).
   - `CAPA / FLOSS / Speakeasy / MITRE ATT&CK Evidence` = **Behavioral Evidence** — 심층분석 도구가 실제로 관찰한 행위 기반 근거.
@@ -382,17 +392,24 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 
 ## 15. Known Limitations
 
-- **대표 reason 하나만 반환**: 여러 위험 신호가 동시에 임계값을 넘어도 `reason`에는 최초 매칭된 규칙 하나만 기록됩니다(4, 6장). `docs/pipeline_architecture_v3.md`는 향후 `triggered_signals` 배열 추가를 검토 항목으로 남겨두었습니다.
-- **`tau_disagree`/`tau_ood`의 정량적 선정 근거 부재**: `tau_low`/`tau_difficulty`는 Calibration/Eval 데이터 그리드 탐색 기록이 문서화되어 있지만, `tau_disagree=0.3`과 `tau_ood=0.0`은 정성적 근거(상관관계 서술, 라이브러리 컨벤션)만 있고 그리드 탐색 로그는 확인되지 않습니다(9장).
-- **`optimize_threshold.py`가 채택된 `tau_low=0.655`을 재현하지 못함**: 현재 스크립트의 탐색 범위(`0.90`~`tau_high`)가 실제 채택값(`0.65`)을 포함하지 않아, 이 값의 원 산출 과정을 현재 코드로 재현할 수 없습니다(9장) — 재현성 관점의 실질적 한계입니다.
-- **`tau_difficulty` 선정에 Eval 세트가 관여했을 가능성**: `docs_eval_lockbox_policy.md`의 "threshold는 Calibration 세트에서만" 원칙과 `risk_routing_simulation_test.md`가 명시한 "Eval 세트(48만 건) 기준 그리드 탐색"이 문면상 배치됩니다(9장) — 정책 위반 여부는 팀 확인이 필요합니다.
+- **`tau_disagree`/`tau_ood`의 정량적 선정 근거 부재**: `tau_low`/`tau_difficulty`는 Calibration 데이터 그리드 탐색 기록이 문서화되어 있지만, `tau_disagree=0.3`과 `tau_ood=0.0`은 정성적 근거(상관관계 서술, 라이브러리 컨벤션)만 있고 그리드 탐색 로그는 확인되지 않습니다(9장).
 - **Kill Test/OOD 검증이 내부 시뮬레이션 방식**: 별도의 외부 미지 OOD 데이터셋을 주입하는 대신, Eval 세트 자체에서 `ood_score < 0`인 샘플을 "가상의 OOD 테스트셋"으로 재활용합니다(`risk_routing_simulation_test.md` §2 "새로운 외부 데이터셋을 수집하는 대신"). 이는 팀이 의도적으로 선택한 방법론이지만, 완전히 독립적인 held-out OOD 벤치마크는 아닙니다.
 - **Review Yield 예산 정책 보류**: `docs_eval_lockbox_policy.md` §7이 요구하는 "검토예산 1/5/10/20%별 비교"는 현재 구현되지 않았고, `calculate_review_yield()`는 예산 제약 없이 큐 전체를 기준으로 계산합니다(10장).
 - **Deep Analysis Tier 3 명칭 불일치**: 코드 계약(`deep_analysis.md`: Ghidra CAPA, 기본 비활성화)과 상위 설계 문서(`pipeline_architecture_v3.md`: CAPE)가 다른 이름을 사용합니다(12장).
-- **SHAP 모듈 미통합 + 구버전 모델 대상**: SHAP은 여전히 `_v4_9120` 레거시 LightGBM만 설명하며 현재 4-way JRR 파이프라인과 연결되어 있지 않습니다(13장).
+- **SHAP — Backend inference와 모델 인스턴스 공유 wiring 미구현**: SHAP 대상 모델은 현재 4-way 공식 LightGBM(`baseline_model_lightgbm_tuned_500_4way.pkl`)과 정렬됐지만(13장), FastAPI/Streamlit 등 서비스 계층이 아직 없어 inference가 로드한 것과 **동일한 `LGBMClassifier` 인스턴스를 SHAP explainer에 전달하는 배선**은 구현되어 있지 않습니다(`shap-explanation-module.md` §8).
+- **SHAP — `models/`/`data/` artifact 경로 미통일**: 공식 artifact 위치는 `models/baseline_model_lightgbm_tuned_500_4way.pkl`이지만 현재 JRR inference 스크립트는 같은 파일명을 `data/` 아래에서 별도로 staging해 로드합니다(`shap-explanation-module.md` §2). 서비스 통합 전 두 경로를 하나로 통일해야 합니다.
+- **SHAP — `top_feature_indices_500.npy` 배포 경로 미정**: 모델 artifact 자체에는 feature metadata가 없어, 배포 시 모델과 `data/top_feature_indices_500.npy`, selection manifest를 하나의 검증 가능한 bundle로 함께 배치하는 방식이 아직 정해지지 않았습니다(`shap-explanation-module.md` §8). 자동화된 PE E2E 회귀 테스트 추가도 마찬가지로 남은 작업입니다.
 - **레거시 데모(`tests/demo/01/demo.py`)가 현재 라우터 시그니처와 불일치해 실행 시 오류 발생**(6장) — 사용 예시로 삼지 말 것.
 - **서비스 계층(FastAPI/PostgreSQL/Task Queue/대시보드 연동) 대부분 미구현/TBD**: JRR 자체는 구현·평가가 끝났지만, 이를 감싸는 API/DB/큐/프론트엔드 통합은 아직 설계 초안(Draft) 단계입니다(14장).
 - **`risk_score`는 현재 공식 JRR 설계/코드에 존재하지 않습니다.** `docs/pipeline_architecture_v3.md` CRITICAL-03: "risk_score는 필수 런타임 출력으로 간주하지 않는다." `dashboard/app.py`의 목업 데이터에만 레거시로 남아 있습니다(14장). Weighted Risk Score 방식 자체도 현재 공식 설계에 없습니다(4장).
+- **Final Eval 미실행**: `tau_low`/`tau_difficulty`가 Calibration 세트에서 freeze된 이후의 공식 Final Eval이 아직 재실행되지 않았습니다. 10, 11장에 인용된 수치는 freeze 이전의 Engineering Eval 기록입니다(7장 참고).
+
+**해결된 항목(이전 버전에서 제거)**:
+- ~~대표 reason 하나만 반환~~ — `triggered_signals` 필드 도입(커밋 `49bc244`)으로 해결. 동시에 발현된 모든 위험 신호는 `triggered_signals`에, 대표 사유는 `reason`에 함께 반환됩니다(4, 6장).
+- ~~`optimize_threshold.py`가 채택된 `tau_low=0.60`을 재현하지 못함~~ — 탐색 범위가 `0.50~0.98` 전체로 개편되어 `0.60`을 실제로 재현합니다(9장).
+- ~~`tau_difficulty` 선정에 Eval 세트가 관여했을 가능성~~ — Calibration 세트 전체 재탐색으로 `5.0`이 다시 확정되어 해소되었습니다(9장).
+- ~~SHAP 대상 모델이 구버전(`_v4_9120`)이며 현재 4-way 파이프라인과 분리되어 있음~~ — SHAP 공식 대상이 `baseline_model_lightgbm_tuned_500_4way.pkl`로 전환되어 해결(13장).
+- ~~SHAP 출력 필드명이 `interface_spec.md`와 불일치~~ — 공개 `to_dict()` 스키마가 `feature_name`/`feature_value`/`shap_value`/`direction`으로 정렬되어 해결(13장).
 
 ---
 
@@ -403,7 +420,7 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 | `src/jrr/jrr_router.py` | `JointRiskRouter` — 실제 라우팅 엔진 (4신호, 6단계 Priority-ordered Rule) |
 | `src/jrr/__init__.py` | `from .jrr_router import JointRiskRouter` — 패키지 진입점(현재 정상 동작 확인) |
 | `src/jrr/train_calibrator.py` | Isotonic Calibration 학습, `tau_high` 산출, `jrr_calibrator_4way.pkl` 생성 |
-| `src/jrr/optimize_threshold.py` | Calibration 세트 기반 `tau_low` 탐색 시뮬레이터 (현재 탐색 범위가 채택값 0.65과 불일치, 9/15장) |
+| `src/jrr/optimize_threshold.py` | Calibration 세트(48만 건) 전체 기반 `tau_low`/`tau_difficulty` 탐색 시뮬레이터 (커밋 `49bc244`에서 탐색 범위 전면 개편, 채택값 재현 확인됨, 9장) |
 | `src/jrr/disagreement.py` | LightGBM/XGBoost 원시 확률로부터 배치 Disagreement 계산·저장 |
 | `src/jrr/risk_signals.py` | OOD(IsolationForest, seed 42 무작위 10만 샘플) 모델 학습 + Analysis Difficulty 인덱스 동적 매핑 |
 | `src/jrr/generate_raw_probas.py` | Eval 세트에 대한 LightGBM/XGBoost 원시 확률 생성 |
@@ -415,11 +432,13 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 | `docs/pipeline_architecture_v3.md` | **현재 최신** 전체 파이프라인 설계 (2026-09-07, 코드와 실질적으로 1:1 일치) |
 | `docs/interface_spec.md` | 서비스 컴포넌트 간 데이터 계약 (JRR 출력 필드명의 근거) |
 | `docs/service_architecture.md` | 서버 배치/AWS/Queue/Worker 구조 |
-| `docs/risk_routing_simulation_test.md` | 4신호 라우팅 시뮬레이션 방법론 + 최신 Eval 실측 결과 원본 |
+| `docs/risk_routing_simulation_test.md` | 4신호 라우팅 시뮬레이션 방법론 + Calibration 기반 `tau_low`/`tau_difficulty` 재탐색 결과(§4) + Engineering Eval 실측 결과 원본(§5-§7) |
 | `docs/docs_eval_lockbox_policy.md` | 지표/threshold/lockbox/kill-test 공식 정책 |
 | `docs/feature_schema.md` | PEFormatWarnings(2480–2568) 등 전체 feature 스키마 |
 | `docs/static-analysis/deep_analysis.md` | Tiered 심층분석 계약 (`DeepAnalysisOrchestrator`, 실제 Tier 3 = Ghidra CAPA) |
-| `docs/shap-explanation-module.md` | SHAP 설명 모듈 (JRR과 별도 통합, v4_9120 아티팩트 대상, 미변경) |
+| `docs/shap-explanation-module.md` | SHAP 설명 모듈 — 대상 모델 `baseline_model_lightgbm_tuned_500_4way.pkl`로 정렬 완료, Top-500 contract/order 검증 완료, 출력 스키마 `interface_spec.md`와 정렬. 서비스 계층(Backend wiring, `models/`/`data/` 경로 통일, `.npy` 배포)은 아직 미구현 |
+| `src/trust_triage/explanation/shap_lightgbm.py` | `LightGBMShapExplainer` — TreeSHAP 계산, feature ordering 검증, Top-K 매핑 (`model_output="raw"`) |
+| `tests/test_shap_lightgbm.py` | SHAP 단위/공식 artifact 통합 테스트, 28건 통과 |
 | `docs/pipeline_architecture.md` | **레거시(v3로 대체됨)** — 91.20%, 구 필드 스키마 등 현재 코드와 불일치하는 구버전 |
 | `dashboard/app.py` | Streamlit 대시보드 (현재 `main`에는 단일 목업만 존재, `interface_spec.md`와 필드명 불일치) |
 | `tests/demo/01/demo.py`, `DEMO_SETUP.md` | **레거시, 현재 라우터와 호환 불가** — 참고용으로도 사용 금지 |
@@ -428,7 +447,7 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 
 ## 17. Final Summary
 
-JRR은 EMBER2024 기반 LightGBM Baseline의 원시 확률을 Isotonic Calibration으로 보정한 뒤, Calibration 세트에서 산출한 확률 임계값(`tau_high=0.983645`: FPR≤0.1% 기준, `tau_low=0.655`: Review Yield 최적화 기준)에 더해 LightGBM–XGBoost 간 Disagreement(`tau_disagree=0.3`), Isolation Forest 기반 OOD Score(`tau_ood=0.0`), PEFormatWarnings 기반 Analysis Difficulty(`tau_difficulty=6.0`) 세 위험 신호를 **모두 실제로 라우팅에 사용**해, 우선순위가 정해진 규칙(Fail-Closed NaN 처리 → OOD → Disagreement → Difficulty → 확률 그레이존 → 악성 확신 → 정상 확신 순)으로 세 갈래 판정을 내리는 라우터입니다. 최신 Eval(48만 건) 결과는 ROC-AUC 0.9978, TPR 89.11% / 실측 FPR 0.12%, ECE 0.0031, Kill Test FPR 0%이며, 전체 트래픽 중 16.20%만 심층분석 큐로 라우팅됩니다. `risk_score`나 가중합 방식은 현재 공식 구현에 존재하지 않으며, 반환 필드명(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`)은 `docs/interface_spec.md`와 완전히 일치합니다. 다만 `tau_low`/`tau_disagree`/`tau_ood`의 정량적 재현성, Tier 3 명칭, 서비스 계층 구현은 아직 정리되지 않은 부분으로 남아 있습니다.
+JRR은 EMBER2024 기반 LightGBM Baseline의 원시 확률을 Isotonic Calibration으로 보정한 뒤, **Calibration 세트(48만 건) 전체 재탐색으로 확정·freeze한** 확률 임계값(`tau_high=0.983645`: FPR≤0.1% 기준, `tau_low=0.60`: Review Yield 71.83% 최적화 기준)에 더해 LightGBM–XGBoost 간 Disagreement(`tau_disagree=0.3`), Isolation Forest 기반 OOD Score(`tau_ood=0.0`), PEFormatWarnings 기반 Analysis Difficulty(`tau_difficulty=5.0`, 동일하게 Calibration 재탐색으로 재확정) 세 위험 신호를 **모두 실제로 라우팅에 사용**해, 우선순위가 정해진 규칙(Fail-Closed NaN 처리 → OOD → Disagreement → Difficulty → 확률 그레이존 → 악성 확신 → 정상 확신 순)으로 세 갈래 판정을 내리는 라우터입니다. 동시에 발현된 모든 위험 신호는 `triggered_signals` 배열에, 최초 매칭된 대표 사유는 `reason`에 각각 보존됩니다. Threshold freeze 이전 **Engineering Eval**(48만 건) 결과는 ROC-AUC 0.9978, TPR 89.11% / 실측 FPR 0.12%, ECE 0.0031, Kill Test FPR 0%이며, 전체 트래픽 중 16.20%만 심층분석 큐로 라우팅되었으나, freeze 이후의 공식 **Final Eval**은 아직 재실행되지 않았습니다. `risk_score`나 가중합 방식은 현재 공식 구현에 존재하지 않으며, 반환 필드명(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)은 `docs/interface_spec.md`와 완전히 일치합니다. 다만 `tau_disagree`/`tau_ood`의 정량적 재현성, Tier 3 명칭, 서비스 계층 구현, Final Eval 재실행은 아직 정리되지 않은 부분으로 남아 있습니다.
 
 > **JRR은 모델의 확률만으로 자동 판정하지 않고, Calibration된 확률과 다중 위험 신호(Disagreement·OOD·Analysis Difficulty)를 이용해 자동 판정과 심층분석 대상을 보수적으로 분리하는 Priority-ordered Rule-based Triage Router이다.**
 > (2026-09-09 재조사 기준, `main`의 4개 신호가 모두 라우터에 실제로 통합되어 있음을 코드 레벨에서 확인했습니다.)
