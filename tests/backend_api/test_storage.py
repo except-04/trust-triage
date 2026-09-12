@@ -149,17 +149,16 @@ def test_malformed_headers_fail_clearly(storage, offset, format, value, code):
     assert failure.value.code == code
 
 
-def test_same_id_cannot_replace_original(storage):
+def test_different_bytes_never_replace_an_existing_hash(storage):
     original = storage.ingest(
         io.BytesIO(header_bytes()), analysis_id="same", filename="sample.exe"
     )
-    with pytest.raises(BackendError) as failure:
-        storage.ingest(
-            io.BytesIO(header_bytes(pe64=True)),
-            analysis_id="same",
-            filename="sample.exe",
-        )
-    assert failure.value.code == "STORAGE_CONFLICT"
+    different = storage.ingest(
+        io.BytesIO(header_bytes(pe64=True)),
+        analysis_id="same",
+        filename="sample.exe",
+    )
+    assert different.file_location != original.file_location
     with storage.materialize(original) as path:
         assert path.read_bytes() == header_bytes()
 
@@ -189,7 +188,7 @@ def test_conflicting_location_and_sha_are_rejected(storage):
         storage.materialize(replace(original, sha256="0" * 64)),
     ):
         pytest.fail("invalid digest reached the caller")
-    assert failure.value.code == "FILE_INTEGRITY_ERROR"
+    assert failure.value.code == "STORAGE_LOCATION_MISMATCH"
 
 
 def test_callback_failure_interrupts_materialization(storage):
@@ -251,7 +250,7 @@ def test_s3_corruption_closes_body_and_removes_temp_files(tmp_path, tamper):
     if tamper == "length":
         client.length_override = 999
     else:
-        client.objects["raw/corrupt/sample.bin"] = (
+        client.objects[f"raw/{sample.sha256}/sample.bin"] = (
             bytes(512) if tamper == "bytes" else b""
         )
         client.length_override = sample.size_bytes
@@ -281,3 +280,74 @@ def test_s3_download_deadline_prevents_processing(tmp_path, monkeypatch):
     assert failure.value.retryable
     assert client.body.closed
     assert not list(tmp_path.iterdir())
+
+
+def test_identical_uploads_share_bytes_but_keep_their_own_request_metadata(storage):
+    first = storage.ingest(
+        io.BytesIO(header_bytes()), analysis_id="first", filename="first.exe"
+    )
+    second = storage.ingest(
+        io.BytesIO(header_bytes()), analysis_id="second", filename="second.dll"
+    )
+    assert (
+        first.file_location == second.file_location
+        and first.sha256 in first.file_location
+    )
+    assert (first.analysis_id, first.filename) == ("first", "first.exe")
+    assert (second.analysis_id, second.filename) == ("second", "second.dll")
+    if isinstance(storage, LocalSampleStorage):
+        assert len(list(storage.root.glob("*/sample.bin"))) == 1
+    else:
+        assert len(storage.client.objects) == 1
+
+
+def test_reusing_a_hash_key_verifies_existing_bytes(storage):
+    original = storage.ingest(
+        io.BytesIO(header_bytes()), analysis_id="first", filename="first.exe"
+    )
+    wrong = bytes(len(header_bytes()))
+    if isinstance(storage, LocalSampleStorage):
+        (storage.root / original.sha256 / "sample.bin").write_bytes(wrong)
+    else:
+        storage.client.objects[f"{storage.prefix}{original.sha256}/sample.bin"] = wrong
+    with pytest.raises(BackendError) as failure:
+        storage.ingest(
+            io.BytesIO(header_bytes()), analysis_id="second", filename="second.exe"
+        )
+    assert failure.value.code == "FILE_INTEGRITY_ERROR"
+
+
+def test_legacy_analysis_id_locations_are_still_readable_and_deletable(storage):
+    original = storage.ingest(
+        io.BytesIO(header_bytes()), analysis_id="old-analysis", filename="old.exe"
+    )
+    if isinstance(storage, LocalSampleStorage):
+        legacy_path = storage.root / original.analysis_id / "sample.bin"
+        legacy_path.parent.mkdir()
+        legacy_path.write_bytes(header_bytes())
+        location = f"local://{original.analysis_id}/sample.bin"
+    else:
+        key = f"{storage.prefix}{original.analysis_id}/sample.bin"
+        storage.client.objects[key] = header_bytes()
+        location = f"s3://{storage.bucket}/{key}"
+    legacy = replace(original, file_location=location)
+    with storage.materialize(legacy) as path:
+        assert path.read_bytes() == header_bytes()
+    storage.delete(legacy)
+    with storage.materialize(original) as path:
+        assert path.read_bytes() == header_bytes()
+
+
+def test_original_deletion_keeps_analysis_reports(storage):
+    from trust_triage.storage import ArtifactIdentity
+
+    original = storage.ingest(
+        io.BytesIO(header_bytes()), analysis_id="retain", filename="sample.exe"
+    )
+    artifacts = storage.artifact_store(max_bytes=1024)
+    report = artifacts.put_json(
+        ArtifactIdentity(original.sha256, original.analysis_id, "CAPA", "run-1"),
+        {"status": "SUCCESS"},
+    )
+    storage.delete(original)
+    assert artifacts.read(report) == b'{"status":"SUCCESS"}'

@@ -38,7 +38,7 @@ processor.py ── repository.py ──→ PostgreSQL에 중간 결과·최종 
 
 사용자가 PE 파일을 올리면 백엔드는 원본을 보관하고 분석 요청을 DB에 등록한다. 이후 초기 분석과 필요한 심층 분석을 진행하고, 화면에서 조회할 결과와 전문가 검토 이력을 저장한다.
 
-여기서 DB는 작업 기록을 보관하는 PostgreSQL이고, 파일 저장소는 원본 파일을 보관하는 로컬 폴더 또는 S3다. 원본 파일 내용 전체를 DB에 넣지는 않는다.
+여기서 DB는 작업 기록을 보관하는 PostgreSQL이고, 파일 저장소는 SHA-256별 원본과 실행별 리포트를 보관하는 로컬 폴더 또는 S3다. 같은 원본을 여러 분석이 공유해도 판정과 검토 이력은 각 분석 번호에 남는다. 자세한 경로·전환 절차는 [저장 구조 안내](storage.md)를 참고한다.
 
 파일 하나를 **분석 의뢰서 한 장**에 대응시켜 생각하면 이해하기 쉽다.
 
@@ -122,6 +122,9 @@ backend-api/
 │  ├─ config.py            ← 환경 설정 읽기
 │  ├─ runtime.py           ← 필요한 부품 조립
 │  └─ errors.py            ← 공통 오류 형식
+├─ src/trust_triage/storage/
+│  ├─ layout.py            ← SHA-256·분석·도구 실행별 공통 경로 규칙
+│  └─ artifacts.py         ← 변경 불가 리포트 저장·읽기·체크섬 검사
 ├─ tests/backend_api/      ← 동작을 확인하는 테스트
 ├─ requirements-backend.txt           ← API 실행 패키지
 ├─ requirements-backend-analysis.txt  ← 실제 초기 분석 패키지
@@ -129,6 +132,7 @@ backend-api/
 └─ docs/backend-api/
    ├─ backend-structure.md  ← 이 문서
    ├─ api-reference.md      ← API 종류와 설명
+   ├─ storage.md            ← 원본 공유·산출물 저장·기존 DB 전환
    ├─ openapi.json          ← 자동 생성된 상세 API 명세
    ├─ verification.md      ← 기존 검증 기록
    ├─ batch-verification.md ← 배치 요약·필터·ZIP 확장 검증
@@ -149,6 +153,7 @@ backend-api/
 | [repository.py](../../src/trust_triage/backend_api/repository.py) | DB에 읽고 쓰는 작업을 모은 파일 | `PostgresAnalysisRepository`, 등록·단계 저장·검토 이력 메서드 |
 | [schema.sql](../../src/trust_triage/backend_api/schema.sql) | DB 테이블을 만드는 설계도 | 테이블, 필드, 중복 방지·상태 제약 조건 |
 | [storage.py](../../src/trust_triage/backend_api/storage.py) | 원본 파일의 보관·다운로드·삭제 담당 | `LocalSampleStorage`, `S3SampleStorage`, SHA-256·크기·헤더 검사 |
+| [storage/artifacts.py](../../src/trust_triage/storage/artifacts.py) | 실행별 리포트를 원본과 같은 해시 폴더 아래 보관 | `ArtifactIdentity`, `ArtifactReference`, Local/S3 산출물 저장소 |
 | [initial_analysis.py](../../src/trust_triage/backend_api/initial_analysis.py) | 기존 Feature·모델·JRR·SHAP 모듈을 순서대로 호출 | `InitialAnalysisService.analyze()`, 분석용 자식 프로세스와 시간 제한 |
 | [model_bundle.py](../../src/trust_triage/backend_api/model_bundle.py) | 분석에 사용할 모델 파일 묶음과 Feature 규격 검사 | `ModelBundleConfig`, `ModelBundle.load()` |
 | [deep_gateway.py](../../src/trust_triage/backend_api/deep_gateway.py) | 별도 심층 분석 서비스와 연결하는 담당 | `ExistingDeepGateway.advance()`, `get()`, `can_delete()` |
@@ -202,8 +207,11 @@ app.py
   "파일 접수 요청이 들어왔어요."
         ↓ BackendService.submit()
 service.py
-        ├─ storage.ingest() ──→ 헤더·크기 검사, SHA-256 계산, 원본 저장
-        └─ repository.register() → DB에 QUEUED 작업 등록
+        ├─ storage.prepare() → 헤더·크기 검사, SHA-256 계산, 임시 파일 준비
+        └─ repository.sample_transaction() → 공유 원본에 대한 잠금
+             ├─ repository.register() → QUEUED 작업 등록
+             ├─ storage.publish() → 해시 경로로 원본 발행 또는 기존 바이트 확인
+             └─ DB commit → 등록 확정
         ↓
 화면에 analysis_id와 HTTP 202 반환
   "접수됐어요. 이 번호로 진행 상황을 확인하세요."
@@ -211,7 +219,7 @@ service.py
 
 `POST /analyses`를 호출하면 `app.py`가 multipart 업로드를 확인하고 `BackendService.submit()`을 호출한다. `storage.py`가 파일 확장자·기본 PE 헤더·크기를 검사하고 SHA-256을 계산한 뒤 원본을 저장한다.
 
-`repository.register()`는 분석 요청을 DB에 등록한다. 등록이 끝나면 `analysis_id`와 `QUEUED` 상태를 HTTP `202`로 반환한다. 이 시점에는 모델 분석 결과가 아직 없다.
+원본 발행까지 성공하면 DB 등록을 확정하고 `analysis_id`와 `QUEUED` 상태를 HTTP `202`로 반환한다. 다른 연결에서는 확정 전의 요청이 보이지 않는다. 이 시점에는 모델 분석 결과가 아직 없다.
 
 ### ② 초기 분석
 
@@ -234,7 +242,9 @@ PostgreSQL의 initial_result에 결과 저장
 
 별도로 실행 중인 `run`이 `resume_ready()`로 대기 작업을 찾는다. `resume()`은 해당 작업의 처리 권한을 얻고, `initial_analysis.py`에 분석을 요청한다.
 
-초기 분석은 기존 Feature 추출 결과에서 모델 입력을 만들고 LightGBM·XGBoost 예측, Calibration, 위험 신호, JRR, SHAP을 연결한다. 모델 파일과 Feature 이름·순서·개수·형식이 맞는지도 확인한다. 결과는 DB의 `initial_result`에 저장된다.
+초기 분석은 기존 Feature 추출 결과에서 모델 입력을 만들고 LightGBM·XGBoost 예측, Calibration, 위험 신호, JRR, SHAP을 연결한다. 모델 파일과 Feature 이름·순서·개수·형식이 맞는지도 확인한다. 리포트 파일을 발행한 뒤 DB의 `initial_result`와 산출물 참조를 함께 저장한다. 심층 분석 종료 결과와 최종 제안도 같은 방식으로 보관한다.
+
+JRR의 `reason`은 대표 사유이고 `triggered_signals`는 동시에 발현된 신호 전체다. 백엔드는 이 배열을 검증해 DB·리포트에 저장하고 `/triage`, 종합 결과, 분석 목록·배치 결과까지 전달한다. 새 분석에는 배열이 필수이며 발현 신호가 없으면 `[]`다. 이전 기록에서 누락된 필드는 `null`로 조회하고 이전 분석을 다시 실행하지 않는다. 기본 임계값은 공용 `JointRiskRouter`를 사용하며 실제 값은 `feature_metadata.jrr_thresholds`에 남긴다.
 
 ### ③ 필요한 심층 분석
 
@@ -306,6 +316,8 @@ PostgreSQL → repository → service → app.py
 |---|---|
 | `api_batches` | 한 번의 접수 요청 정보. 단일·일괄 요청 구분, `Idempotency-Key`, ZIP 식별 정보와 파일별 접수·제외 내역(`input_report`) |
 | `api_analyses` | 파일별 분석 번호, SHA-256, 내부 원본 위치, 단계·상태, 초기·심층 결과, 최종 제안 |
+| `api_sample_objects` | 여러 분석이 공유할 수 있는 저장 원본의 위치·해시·크기·삭제 시각 |
+| `api_analysis_artifacts` | 실행별 리포트의 위치·체크섬·크기·버전·설정 메타데이터 |
 | `api_reviews` | 전문가별 검토 의견과 판정, 수정 번호, 검토 시각 |
 
 `api_batches`라는 이름이지만 단일 파일 접수도 요청 단위 기록을 남긴다. 여러 파일을 한 번에 올린 경우에만 공개 `batch_id`가 생긴다.
@@ -362,7 +374,7 @@ INITIAL
 
 **오류:** 분석 실패는 오류 코드와 함께 남기고 전문가 검토가 필요한 상태로 처리한다. SHAP 실패는 이미 얻은 모델 예측과 JRR 판정을 보존한다. 재시도 가능한 처리 오류에는 횟수와 대기 시간을 적용한다.
 
-**원본 정리:** 보관 기간이 지난 종료 작업을 대상으로 한다. S3의 심층 분석 대상은 연결된 Deep Analysis·Worker도 종료됐는지 확인하며, 진행 중이거나 확인할 수 없으면 삭제를 보류한다.
+**원본 정리:** 원본 위치를 공유하는 모든 분석이 종료되고 각각의 보관 기간이 지나야 한다. S3의 심층 분석 대상은 연결된 Deep Analysis·Worker도 종료됐는지 확인하며, 진행 중이거나 확인할 수 없으면 삭제를 보류한다. 실제 삭제는 `sample.bin`에만 적용하고 실행별 리포트는 유지한다.
 
 재시작 사례를 그림으로 보면 다음과 같다.
 

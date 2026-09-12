@@ -5,11 +5,38 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 AnalysisId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+
+TriggeredSignal = Literal["OOD", "DISAGREEMENT", "DIFFICULTY", "UNCERTAIN_PROBABILITY"]
+
+
+def _unique_signals(values: list[TriggeredSignal]) -> list[TriggeredSignal]:
+    if len(values) != len(set(values)):
+        raise ValueError("triggered_signals must not contain duplicates")
+    return values
+
+
+TriggeredSignals = Annotated[
+    list[TriggeredSignal],
+    Field(strict=True, max_length=4),
+    AfterValidator(_unique_signals),
+]
+_SIGNALS_DESCRIPTION = (
+    "JRR이 반환한 발현 위험 신호 전체를 검사 순서대로 보존합니다. "
+    "빈 배열은 발현 신호 없음이며, null은 초기 분석 전이거나 이 필드를 기록하지 않은 이전 결과입니다. "
+    "reason은 대표 사유 1개입니다."
+)
 
 
 class APIModel(BaseModel):
@@ -178,6 +205,9 @@ class InitialResult(APIModel):
     initial_verdict: InitialVerdict
     route: Literal["FINAL", "DEEP_ANALYSIS"]
     reason: str
+    triggered_signals: TriggeredSignals | None = Field(
+        default=None, description=_SIGNALS_DESCRIPTION
+    )
     top_features: list[TopFeature] = Field(default_factory=list, max_length=50)
     feature_metadata: dict[str, Any] = Field(default_factory=dict)
     xai_status: Literal["SUCCESS", "FAILED", "NOT_REQUIRED"] = "NOT_REQUIRED"
@@ -206,6 +236,9 @@ class TriageResponse(AnalysisIdentity):
     )
     reason: str | None = Field(
         default=None, description="JRR이 이 경로를 선택한 이유입니다."
+    )
+    triggered_signals: TriggeredSignals | None = Field(
+        default=None, description=_SIGNALS_DESCRIPTION
     )
     feature_metadata: dict[str, Any] | None = None
 
@@ -346,6 +379,9 @@ class AnalysisResponse(AnalysisProgress):
     initial_verdict: InitialVerdict | None = None
     route: Literal["FINAL", "DEEP_ANALYSIS"] | None = None
     reason: str | None = None
+    triggered_signals: TriggeredSignals | None = Field(
+        default=None, description=_SIGNALS_DESCRIPTION
+    )
     top_features: list[TopFeature] = Field(default_factory=list)
     deep_analysis_status: dict[str, AnalysisStatus]
     evidence: list[TechniqueEvidence] = Field(default_factory=list)

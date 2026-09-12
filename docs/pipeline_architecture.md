@@ -1,6 +1,6 @@
 # TRUST-TRIAGE 파이프라인 아키텍처 문서
 
-> **현재 구현 기준 (2026-09-09):** HTTP API와 PostgreSQL 저장 구조는 `trust_triage.backend_api` 구현을 기준으로 설명합니다. 공개 필드와 Endpoint는 [공통 인터페이스](interface_spec.md)와 [Backend OpenAPI](backend-api/openapi.json)를 따릅니다. 파일별 초기 판정, 시스템 최종 제안, 전문가 최종 판정은 서로 덮어쓰지 않고 별도로 보존합니다.
+> **현재 구현 기준 (2026-09-11):** HTTP API와 PostgreSQL 저장 구조는 `trust_triage.backend_api` 구현을 기준으로 설명합니다. 공개 필드와 Endpoint는 [공통 인터페이스](interface_spec.md)와 [Backend OpenAPI](backend-api/openapi.json)를 따릅니다. 파일별 초기 판정, 시스템 최종 제안, 전문가 최종 판정은 서로 덮어쓰지 않고 별도로 보존합니다.
 
 > 각 모듈의 입력과 출력이 바뀌면 이 문서와 실제 Schema를 함께 수정하고 팀에 공유합니다. 상세 파일 설명은 [백엔드 소스코드 구조](backend-api/backend-structure.md), API 사용법은 [API 종류와 설명](backend-api/api-reference.md)을 참고합니다.
 
@@ -140,6 +140,7 @@ trust-triage/
   "initial_verdict": "HIGH_RISK_UNCERTAIN",
   "route": "DEEP_ANALYSIS",
   "reason": "추가 증거가 필요한 경로입니다.",
+  "triggered_signals": ["OOD", "UNCERTAIN_PROBABILITY"],
   "top_features": [
     {
       "feature_name": "section_entropy_max",
@@ -194,7 +195,7 @@ trust-triage/
 - `approval_status`: 자동 정책 또는 전문가 검토 진행 상태입니다.
 - `file_location`: Storage와 Worker 사이에서만 쓰는 내부 필드이므로 공개 API 응답에 포함하지 않습니다.
 
-작업, 단계별 결과, 시스템 제안, 전문가 검토 이력은 PostgreSQL에 저장합니다. 원본 PE는 Local Storage 또는 S3에 보관하고 DB에는 내부 위치만 기록합니다.
+작업, 단계별 결과, 시스템 제안, 전문가 검토 이력은 PostgreSQL에 저장합니다. 원본 PE는 Local Storage 또는 S3의 `<sha256>/sample.bin`으로 공유하고, 단계별 리포트는 `<sha256>/analyses/<analysis_id>/<tool>/<tool_run_id>/report.json`으로 보관합니다. DB에는 원본과 산출물의 내부 위치·체크섬을 기록합니다. [저장 구조와 기존 DB 전환](backend-api/storage.md)
 
 ---
 
@@ -374,7 +375,7 @@ jrr_risk_signals.pkl
 | 항목 | 내용 |
 |---|---|
 | 입력 | `calibrated_probability` + `disagreement` + `ood_score` + `difficulty_score` |
-| 출력 | `initial_verdict`, `route`, `reason` |
+| 주요 출력 | `initial_verdict`, `route`, `reason`, `triggered_signals` |
 | Initial Verdict | `AUTO_BENIGN`, `AUTO_MALICIOUS`, `HIGH_RISK_UNCERTAIN` |
 | 후속 처리 | `HIGH_RISK_UNCERTAIN`이면 Deep Analysis, 나머지는 Final Assessment |
 
@@ -397,7 +398,8 @@ jrr_risk_signals.pkl
 {
   "initial_verdict": "HIGH_RISK_UNCERTAIN",
   "route": "DEEP_ANALYSIS",
-  "reason": "High analysis difficulty detected."
+  "reason": "OOD Detected (Score: -0.0300)",
+  "triggered_signals": ["OOD", "DIFFICULTY"]
 }
 ```
 
@@ -417,7 +419,9 @@ HIGH_RISK_UNCERTAIN
 → CAPA·FLOSS와 필요 시 Speakeasy 수행
 ```
 
-JRR은 `risk_score`라는 합산 점수를 새로 만들지 않습니다. 각 위험 신호의 원값과 판정 이유를 함께 저장하므로 화면에서도 개별 신호를 확인할 수 있습니다.
+JRR은 `risk_score`라는 합산 점수를 새로 만들지 않습니다. `reason`에는 가장 먼저 발현된 대표 사유, `triggered_signals`에는 동시에 발현된 신호 전체를 보존합니다. 각 위험 신호의 원값과 함께 DB·리포트·API 응답에 저장하므로 화면에서도 개별 신호를 확인할 수 있습니다. 배열이 비면 발현 신호가 없는 것이며, 초기 분석 전 또는 이 필드를 기록하지 않은 이전 API 결과는 `null`입니다.
+
+현재 기본 임계값은 `tau_low=0.65`, `tau_high=0.983645`, `tau_disagree=0.3`, `tau_ood=0.0`, `tau_difficulty=6.0`입니다. 백엔드는 공용 `JointRiskRouter`의 설정을 사용하고, 실제 사용한 임계값을 초기 분석의 `feature_metadata.jrr_thresholds`에 기록합니다.
 
 ---
 
@@ -638,6 +642,8 @@ PostgreSQL을 분석 상태의 기준 저장소로 사용합니다.
 |---|---|
 | `api_batches` | 접수 요청, 일괄 요청, Idempotency 정보, ZIP·파일별 접수/제외 내역 |
 | `api_analyses` | 파일별 식별자, 단계, 초기·심층·최종 결과와 내부 저장 위치 |
+| `api_sample_objects` | 공유 원본의 위치, SHA-256, 크기와 삭제 시각 |
+| `api_analysis_artifacts` | 분석·도구·실행별 리포트 참조, 체크섬과 메타데이터 |
 | `api_reviews` | 전문가 판정, 메모, 검토자, revision 이력 |
 
 API 서버나 분석 처리기가 재시작되어도 DB의 단계와 lease를 기준으로 이어서 처리합니다. 전문가 검토는 기존 판정값을 수정하는 방식이 아니라 `api_reviews`에 새 이력으로 저장합니다.
@@ -645,13 +651,16 @@ API 서버나 분석 처리기가 재시작되어도 DB의 단계와 lease를 �
 ### Storage, SQS, AWS
 
 ```text
-FastAPI / Processor ──→ S3 원본 저장
-Processor ────────────→ SQS 작업 등록
+FastAPI ──────────────→ S3 해시별 원본 저장
+Processor ────────────→ S3 실행별 단계 리포트 저장
+Deep Analysis ────────→ SQS 작업 등록
 SQS ──────────────────→ 격리된 Speakeasy Worker
 Worker ───────────────→ PostgreSQL 결과 저장
 ```
 
 로컬 개발에서는 Local Storage를 사용할 수 있습니다. 실제 분산 실행에서는 Backend, Deep Analysis, Worker가 같은 S3 객체와 PostgreSQL 작업을 보도록 설정합니다. SQS 메시지는 원본 PE나 큰 결과 JSON을 담지 않고 내부 위치와 식별자만 전달합니다.
+
+원본 정리는 같은 저장 위치를 참조하는 모든 분석·외부 작업의 종료와 보관 기간을 확인합니다. `sample.bin`을 정리해도 리포트와 검토 이력은 남깁니다. CAPA/FLOSS·Speakeasy 전체 리포트 저장은 후속 서비스·Worker 통합에서 공통 `trust_triage.storage` 인터페이스를 사용해 연결합니다.
 
 AWS의 실제 S3·SQS·DB 주소와 IAM 역할은 환경변수와 서버 권한으로 주입하며 Git에 저장하지 않습니다. 설정 항목은 루트의 [.env.backend.example](../.env.backend.example)을 참고합니다.
 

@@ -17,13 +17,25 @@ ALTER TABLE api_batches ADD COLUMN IF NOT EXISTS input_report jsonb
         AND octet_length(input_report::text) <= 8388608
     ));
 
+-- One stored object can be referenced by many analysis requests. Legacy objects
+-- retain their recorded locations; new intake uses the shared SHA-256 key.
+CREATE TABLE IF NOT EXISTS api_sample_objects (
+    file_location text PRIMARY KEY CHECK (length(file_location) BETWEEN 1 AND 4096),
+    sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    storage_deleted_at timestamptz,
+    UNIQUE (file_location, sha256, size_bytes)
+);
+CREATE INDEX IF NOT EXISTS api_sample_objects_sha256_idx ON api_sample_objects (sha256);
+
 CREATE TABLE IF NOT EXISTS api_analyses (
     analysis_id text PRIMARY KEY,
     request_id uuid NOT NULL REFERENCES api_batches(request_id),
     batch_id text REFERENCES api_batches(batch_id),
     batch_position integer NOT NULL CHECK (batch_position >= 0),
     sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-    file_location text NOT NULL UNIQUE CHECK (length(file_location) BETWEEN 1 AND 4096),
+    file_location text NOT NULL CHECK (length(file_location) BETWEEN 1 AND 4096),
     filename text NOT NULL CHECK (length(filename) BETWEEN 1 AND 512),
     size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
     status text NOT NULL DEFAULT 'QUEUED'
@@ -88,6 +100,24 @@ CREATE TABLE IF NOT EXISTS api_analyses (
     CHECK (error IS NULL OR (jsonb_typeof(error) = 'object' AND octet_length(error::text) <= 8388608))
 );
 
+-- Non-destructive migration for pre-SHA intake. No file is moved or deleted here.
+INSERT INTO api_sample_objects (file_location, sha256, size_bytes, storage_deleted_at)
+SELECT file_location, sha256, size_bytes,
+    CASE WHEN bool_and(storage_deleted_at IS NOT NULL) THEN max(storage_deleted_at) END
+FROM api_analyses GROUP BY file_location, sha256, size_bytes
+ON CONFLICT (file_location) DO NOTHING;
+ALTER TABLE api_analyses DROP CONSTRAINT IF EXISTS api_analyses_file_location_key;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'api_analyses'::regclass AND conname = 'api_analyses_sample_object_fk') THEN
+        ALTER TABLE api_analyses ADD CONSTRAINT api_analyses_sample_object_fk
+            FOREIGN KEY (file_location, sha256, size_bytes)
+            REFERENCES api_sample_objects (file_location, sha256, size_bytes);
+    END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS api_analyses_sample_references_idx
+    ON api_analyses (file_location) WHERE storage_deleted_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS api_analyses_sha256_idx
     ON api_analyses (sha256, created_at, analysis_id);
 CREATE INDEX IF NOT EXISTS api_analyses_listing_idx
@@ -100,6 +130,27 @@ CREATE INDEX IF NOT EXISTS api_analyses_pending_idx
 CREATE INDEX IF NOT EXISTS api_analyses_cleanup_idx
     ON api_analyses (completed_at, analysis_id)
     WHERE status IN ('COMPLETED', 'FAILED') AND storage_deleted_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS api_analyses_identity_idx ON api_analyses (analysis_id, sha256);
+
+-- Only references are registered here. Artifact bytes live beside their sample.
+CREATE TABLE IF NOT EXISTS api_analysis_artifacts (
+    analysis_id text NOT NULL,
+    sha256 text NOT NULL,
+    tool text NOT NULL CHECK (tool ~ '^[A-Z0-9_-]{1,128}$'),
+    tool_run_id text NOT NULL CHECK (tool_run_id ~ '^[A-Za-z0-9_-]{1,128}$'),
+    name text NOT NULL CHECK (length(name) BETWEEN 1 AND 128),
+    file_location text NOT NULL UNIQUE CHECK (length(file_location) BETWEEN 1 AND 4096),
+    content_sha256 text NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+    size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+    created_at timestamptz NOT NULL,
+    media_type text NOT NULL CHECK (media_type IN ('application/json', 'text/plain', 'application/octet-stream')),
+    tool_version text CHECK (length(tool_version) BETWEEN 1 AND 256),
+    config_sha256 text CHECK (config_sha256 ~ '^[0-9a-f]{64}$'),
+    schema_version text NOT NULL CHECK (schema_version = 'sha256-artifacts-v1'),
+    PRIMARY KEY (analysis_id, tool, tool_run_id, name),
+    FOREIGN KEY (analysis_id, sha256) REFERENCES api_analyses (analysis_id, sha256)
+);
 
 CREATE TABLE IF NOT EXISTS api_reviews (
     review_id uuid PRIMARY KEY,

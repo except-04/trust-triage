@@ -542,6 +542,7 @@
                           "initial_verdict": "AUTO_BENIGN",
                           "route": "FINAL",
                           "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                          "triggered_signals": [],
                           "top_features": [
                             {
                               "feature_name": "general[0]",
@@ -1244,6 +1245,7 @@
                       "initial_verdict": "AUTO_BENIGN",
                       "route": "FINAL",
                       "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                      "triggered_signals": [],
                       "top_features": [
                         {
                           "feature_name": "general[0]",
@@ -1571,7 +1573,7 @@
           "03. 분석 조회"
         ],
         "summary": "초기 분류 및 JRR 결과 조회",
-        "description": "### 목적\n\n기본 모델의 원 확률, 보정 확률, 위험 신호 및 Joint Risk Router의 초기 경로 결정을 제공합니다.\n\n### 요청 및 가용성\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n초기 분석이 완료되기 전에는 확률과 판정 필드가 `null`일 수 있으며, 이 응답의 `status`는 초기 분석 단계의 상태를 나타냅니다.\n\n### 결과 해석\n\n`prediction`은 두 모델의 악성 확률과 보정 확률, `risk_signals`는 모델 불일치·OOD·분석 난이도입니다.\n확률 필드는 0~1 범위이며 `0.72`는 72%에 해당합니다. OOD 원점수는 확률이 아니므로 음수가 허용됩니다.\n\n`initial_verdict`와 `reason`은 초기 판단을, `route`는 `FINAL` 또는 `DEEP_ANALYSIS` 처리 경로를 나타냅니다.\n초기 판정 생성 이후에도 후속 단계가 진행될 수 있으므로 전체 수명주기 상태는 `/status` 응답을 기준으로 판단합니다.",
+        "description": "### 목적\n\n기본 모델의 원 확률, 보정 확률, 위험 신호 및 Joint Risk Router의 초기 경로 결정을 제공합니다.\n\n### 요청 및 가용성\n\n경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.\n초기 분석이 완료되기 전에는 확률과 판정 필드가 `null`일 수 있으며, 이 응답의 `status`는 초기 분석 단계의 상태를 나타냅니다.\n\n### 결과 해석\n\n`prediction`은 두 모델의 악성 확률과 보정 확률, `risk_signals`는 모델 불일치·OOD·분석 난이도입니다.\n확률 필드는 0~1 범위이며 `0.72`는 72%에 해당합니다. OOD 원점수는 확률이 아니므로 음수가 허용됩니다.\n\n`initial_verdict`와 `reason`은 초기 판단을, `route`는 `FINAL` 또는 `DEEP_ANALYSIS` 처리 경로를 나타냅니다.\n`reason`은 우선순위상 최초로 발현된 대표 사유이며, `triggered_signals`는 동시에 발현된 모든 위험 신호를 검사 순서대로 보존합니다.\n가능한 신호는 `OOD`, `DISAGREEMENT`, `DIFFICULTY`, `UNCERTAIN_PROBABILITY`입니다.\n`[]`는 발현 신호 없음, `null`은 초기 분석 전 또는 이 필드를 기록하지 않은 이전 결과입니다. 이전 신호를 현재 임계값으로 재계산하지 않습니다.\n초기 판정 생성 이후에도 후속 단계가 진행될 수 있으므로 전체 수명주기 상태는 `/status` 응답을 기준으로 판단합니다.",
         "operationId": "get_triage_analyses__analysis_id__triage_get",
         "security": [
           {
@@ -1625,6 +1627,62 @@
                       "initial_verdict": "AUTO_BENIGN",
                       "route": "FINAL",
                       "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                      "triggered_signals": [],
+                      "feature_metadata": {}
+                    }
+                  },
+                  "multiple_signals": {
+                    "summary": "동시에 발현된 위험 신호와 대표 사유",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "COMPLETED",
+                      "prediction": {
+                        "lgbm_raw_probability": 0.8,
+                        "xgb_raw_probability": 0.4,
+                        "calibrated_probability": 0.75
+                      },
+                      "risk_signals": {
+                        "disagreement": 0.4,
+                        "ood_score": -0.1,
+                        "difficulty_score": 6.0
+                      },
+                      "initial_verdict": "HIGH_RISK_UNCERTAIN",
+                      "route": "DEEP_ANALYSIS",
+                      "reason": "OOD Detected (Score: -0.1000)",
+                      "triggered_signals": [
+                        "OOD",
+                        "DISAGREEMENT",
+                        "DIFFICULTY",
+                        "UNCERTAIN_PROBABILITY"
+                      ],
+                      "feature_metadata": {}
+                    }
+                  },
+                  "legacy": {
+                    "summary": "발현 신호 목록을 기록하지 않은 이전 결과",
+                    "value": {
+                      "analysis_id": "analysis_example_001",
+                      "batch_id": null,
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "created_at": "2026-09-08T09:00:00Z",
+                      "status": "COMPLETED",
+                      "prediction": {
+                        "lgbm_raw_probability": 0.04,
+                        "xgb_raw_probability": 0.08,
+                        "calibrated_probability": 0.05
+                      },
+                      "risk_signals": {
+                        "disagreement": 0.04,
+                        "ood_score": 0.12,
+                        "difficulty_score": 0.08
+                      },
+                      "initial_verdict": "AUTO_BENIGN",
+                      "route": "FINAL",
+                      "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                      "triggered_signals": null,
                       "feature_metadata": {}
                     }
                   }
@@ -2162,6 +2220,7 @@
                           "initial_verdict": "AUTO_BENIGN",
                           "route": "FINAL",
                           "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+                          "triggered_signals": [],
                           "top_features": [
                             {
                               "feature_name": "general[0]",
@@ -2455,18 +2514,24 @@
                           "size_bytes": 14848,
                           "duplicate_of": null,
                           "prediction": {
-                            "lgbm_raw_probability": 0.04,
-                            "xgb_raw_probability": 0.08,
-                            "calibrated_probability": 0.05
+                            "lgbm_raw_probability": 0.8,
+                            "xgb_raw_probability": 0.4,
+                            "calibrated_probability": 0.75
                           },
                           "risk_signals": {
-                            "disagreement": 0.04,
-                            "ood_score": 0.12,
-                            "difficulty_score": 0.08
+                            "disagreement": 0.4,
+                            "ood_score": -0.1,
+                            "difficulty_score": 6.0
                           },
                           "initial_verdict": "HIGH_RISK_UNCERTAIN",
                           "route": "DEEP_ANALYSIS",
-                          "reason": "설명용 예시: 위험 신호로 추가 분석을 수행합니다.",
+                          "reason": "OOD Detected (Score: -0.1000)",
+                          "triggered_signals": [
+                            "OOD",
+                            "DISAGREEMENT",
+                            "DIFFICULTY",
+                            "UNCERTAIN_PROBABILITY"
+                          ],
                           "top_features": [
                             {
                               "feature_name": "general[0]",
@@ -3318,6 +3383,28 @@
               }
             ],
             "title": "Reason"
+          },
+          "triggered_signals": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "OOD",
+                    "DISAGREEMENT",
+                    "DIFFICULTY",
+                    "UNCERTAIN_PROBABILITY"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggered Signals",
+            "description": "JRR이 반환한 발현 위험 신호 전체를 검사 순서대로 보존합니다. 빈 배열은 발현 신호 없음이며, null은 초기 분석 전이거나 이 필드를 기록하지 않은 이전 결과입니다. reason은 대표 사유 1개입니다."
           },
           "top_features": {
             "items": {
@@ -4470,6 +4557,28 @@
             ],
             "title": "Reason",
             "description": "JRR이 이 경로를 선택한 이유입니다."
+          },
+          "triggered_signals": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "OOD",
+                    "DISAGREEMENT",
+                    "DIFFICULTY",
+                    "UNCERTAIN_PROBABILITY"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggered Signals",
+            "description": "JRR이 반환한 발현 위험 신호 전체를 검사 순서대로 보존합니다. 빈 배열은 발현 신호 없음이며, null은 초기 분석 전이거나 이 필드를 기록하지 않은 이전 결과입니다. reason은 대표 사유 1개입니다."
           },
           "feature_metadata": {
             "anyOf": [

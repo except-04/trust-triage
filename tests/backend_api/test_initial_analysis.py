@@ -82,8 +82,10 @@ def components():
     ("probability", "verdict", "route"),
     [
         (0.60, "AUTO_BENIGN", "FINAL"),
+        (0.65, "AUTO_BENIGN", "FINAL"),
         (0.983645, "AUTO_MALICIOUS", "FINAL"),
-        (0.6000001, "HIGH_RISK_UNCERTAIN", "DEEP_ANALYSIS"),
+        (0.6500001, "HIGH_RISK_UNCERTAIN", "DEEP_ANALYSIS"),
+        (0.9836449, "HIGH_RISK_UNCERTAIN", "DEEP_ANALYSIS"),
     ],
 )
 def test_initial_analysis_uses_existing_jrr_without_rounding_inputs(
@@ -94,6 +96,9 @@ def test_initial_analysis_uses_existing_jrr_without_rounding_inputs(
     output, vector = module._predict_initial(result, bundle, SHA256)
     assert output["initial_verdict"] == verdict
     assert output["route"] == route
+    assert output["triggered_signals"] == (
+        ["UNCERTAIN_PROBABILITY"] if verdict == "HIGH_RISK_UNCERTAIN" else []
+    )
     assert output["prediction"]["calibrated_probability"] == probability
     assert output["prediction"]["lgbm_raw_probability"] == 0.6100023
     assert output["risk_signals"]["ood_score"] == 0.12345678
@@ -107,17 +112,85 @@ def test_initial_analysis_uses_existing_jrr_without_rounding_inputs(
     assert metadata["output_schema_version"] == bundle.selector.output_schema.version
     assert metadata["model_version"]["lgbm"] == "sha256:" + "a" * 64
     assert metadata["jrr_thresholds"]["tau_high"] == 0.983645
+    assert metadata["jrr_thresholds"]["tau_low"] == 0.65
+    assert metadata["jrr_thresholds"]["tau_difficulty"] == 6.0
 
 
+@pytest.mark.parametrize(
+    "warnings,expected",
+    [(3, "AUTO_BENIGN"), (4, "HIGH_RISK_UNCERTAIN")],
+)
 def test_difficulty_uses_model_positions_and_can_override_confident_probability(
-    components,
+    components, warnings, expected
 ):
     result, bundle = components
-    result.features = [3, 999, 11, 2, 3]
+    result.features = [3, 999, 11, 2, warnings]
     output, _ = module._predict_initial(result, bundle, SHA256)
-    assert output["risk_signals"]["difficulty_score"] == 5
+    assert output["risk_signals"]["difficulty_score"] == 2 + warnings
+    assert output["initial_verdict"] == expected
+    assert output["triggered_signals"] == (
+        ["DIFFICULTY"] if expected == "HIGH_RISK_UNCERTAIN" else []
+    )
+    if expected == "HIGH_RISK_UNCERTAIN":
+        assert output["reason"].startswith("High Analysis Difficulty")
+
+
+def test_jrr_preserves_all_triggered_signals_and_first_reason(components):
+    result, bundle = components
+    result.features = [3, 999, 11, 2, 4]
+    bundle.calibrator.probability = 0.8
+    bundle.lgbm.probability, bundle.xgb.probability = 0.1, 0.9
+    bundle.ood_model.decision_function = lambda values: [-0.25]
+    output, _ = module._predict_initial(result, bundle, SHA256)
     assert output["initial_verdict"] == "HIGH_RISK_UNCERTAIN"
-    assert output["reason"].startswith("High Analysis Difficulty")
+    assert output["reason"].startswith("OOD Detected")
+    assert output["triggered_signals"] == [
+        "OOD",
+        "DISAGREEMENT",
+        "DIFFICULTY",
+        "UNCERTAIN_PROBABILITY",
+    ]
+    assert "risk_score" not in output
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"triggered_signals": None},
+        {"triggered_signals": "OOD"},
+        {"triggered_signals": ("OOD",)},
+        {"triggered_signals": ["SYSTEM_ERROR"]},
+        {"triggered_signals": ["OOD", "OOD"]},
+        {"triggered_signals": ["OOD"] * 5},
+        {"triggered_signals": [3]},
+    ],
+)
+def test_new_jrr_results_require_valid_triggered_signals(
+    components, monkeypatch, fields
+):
+    result, bundle = components
+    routed = bundle.router.route_sample(0.8, 0.0, 0.1, 0.0)
+    routed.pop("triggered_signals")
+    routed.update(fields)
+    monkeypatch.setattr(bundle.router, "route_sample", lambda *args: routed)
+    with pytest.raises(BackendError) as error:
+        module._predict_initial(result, bundle, SHA256)
+    assert error.value.code == "JRR_OUTPUT_INVALID"
+    assert error.value.stage == "INITIAL_JRR"
+
+
+@pytest.mark.parametrize("probability", [0.1, 0.99])
+def test_automatic_jrr_verdict_cannot_discard_triggered_risk(
+    components, monkeypatch, probability
+):
+    result, bundle = components
+    routed = bundle.router.route_sample(probability, 0.0, 0.1, 0.0)
+    routed["triggered_signals"] = ["OOD"]
+    monkeypatch.setattr(bundle.router, "route_sample", lambda *args: routed)
+    with pytest.raises(BackendError) as error:
+        module._predict_initial(result, bundle, SHA256)
+    assert error.value.code == "JRR_OUTPUT_INVALID"
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])

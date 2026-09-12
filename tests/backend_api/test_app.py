@@ -16,6 +16,7 @@ from trust_triage.backend_api.service import BackendService
 from trust_triage.backend_api.storage import LocalSampleStorage
 
 from .fake_repository import MemoryAnalysisRepository
+from .test_service_processor import initial_result
 
 
 def header_bytes():
@@ -89,6 +90,44 @@ def test_batch_replay_and_status_counts(api):
     assert result["total_count"] == 2 and result["finished_count"] == 0
     assert result["status_counts"]["QUEUED"] == 2
     assert len(service.repository.rows) == 2
+
+
+@pytest.mark.parametrize(
+    "signals",
+    [None, [], ["OOD"], ["OOD", "DISAGREEMENT", "DIFFICULTY", "UNCERTAIN_PROBABILITY"]],
+)
+def test_all_result_routes_preserve_recorded_signals_and_legacy_unknown(api, signals):
+    client, service = api
+    receipt = client.post(
+        "/batches", files=[("files", ("one.exe", header_bytes()))]
+    ).json()
+    identity = receipt["analyses"][0]["analysis_id"]
+    assert (
+        client.get(f"/analyses/{identity}/triage").json()["triggered_signals"] is None
+    )
+    initial = initial_result("HIGH_RISK_UNCERTAIN" if signals else "AUTO_BENIGN")
+    if signals is None:
+        initial.pop("triggered_signals")
+    else:
+        initial["triggered_signals"] = signals
+    claim = service.repository.claim(identity, 600)
+    assert service.repository.save_initial(
+        identity, claim.token, initial, bool(signals)
+    )
+    for suffix in ("", "/triage"):
+        result = client.get(f"/analyses/{identity}{suffix}")
+        assert result.status_code == 200, result.text
+        assert result.json()["triggered_signals"] == signals
+        assert result.json()["reason"] == initial["reason"]
+    for url in (
+        "/analyses",
+        f"/batches/{receipt['batch_id']}",
+        f"/batches/{receipt['batch_id']}/analyses",
+    ):
+        response = client.get(url)
+        assert response.status_code == 200, response.text
+        assert response.json()["analyses"][0]["triggered_signals"] == signals
+    assert service.repository.get(identity).initial_result == initial
 
 
 @pytest.mark.parametrize(

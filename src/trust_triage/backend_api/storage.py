@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import struct
 import tempfile
@@ -16,6 +17,9 @@ from typing import BinaryIO, Protocol
 from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError, ClientError
+
+from trust_triage.storage.artifacts import LocalArtifactStorage, S3ArtifactStorage
+from trust_triage.storage.layout import local_object_path, sample_key
 
 from .errors import BackendError
 
@@ -33,7 +37,16 @@ class StoredSample:
     filename: str
 
 
+@dataclass(frozen=True)
+class PreparedSample:
+    sample: StoredSample
+    path: Path
+
+
 class SampleStorage(Protocol):
+    def artifact_store(self, *, max_bytes: int): ...
+    def prepare(self, stream: BinaryIO, *, analysis_id: str, filename: str): ...
+    def publish(self, prepared: PreparedSample) -> StoredSample: ...
     def ingest(
         self, stream: BinaryIO, *, analysis_id: str, filename: str
     ) -> StoredSample: ...
@@ -175,6 +188,22 @@ def _verify(path: Path, sample: StoredSample, limit: int, check=None) -> None:
         )
 
 
+@contextmanager
+def _prepare(stream, *, analysis_id, filename, root, limit, location):
+    analysis_id, filename = _safe_id(analysis_id), _filename(filename)
+    root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".upload-", dir=root) as directory:
+        path = Path(directory) / "sample.bin"
+        with path.open("x+b") as temporary:
+            sha256, size = _copy(stream, temporary, limit)
+            temporary.flush()
+            _validate_pe(temporary, size)
+            os.fsync(temporary.fileno())
+        yield PreparedSample(
+            StoredSample(analysis_id, sha256, size, location(sha256), filename), path
+        )
+
+
 class LocalSampleStorage:
     """개발용 저장소. 저장 위치는 외부 API에 노출하지 않는 local:// 참조다."""
 
@@ -189,57 +218,61 @@ class LocalSampleStorage:
         with tempfile.TemporaryFile(dir=self.root):
             pass
 
+    def artifact_store(self, *, max_bytes: int):
+        return LocalArtifactStorage(self.root, max_bytes=max_bytes)
+
     def _path(self, sample: StoredSample) -> Path:
         analysis_id = _safe_id(sample.analysis_id)
-        if sample.file_location != f"local://{analysis_id}/sample.bin":
-            raise BackendError(
-                "STORAGE_LOCATION_MISMATCH",
-                "허용되지 않은 파일 저장 위치입니다.",
-                stage="STORAGE",
-            )
-        target = self.root / analysis_id / "sample.bin"
-        if (
-            target.parent.is_symlink()
-            or target.is_symlink()
-            or not target.resolve().is_relative_to(self.root)
-        ):
+        try:
+            key = sample_key(sample.sha256)
+            if sample.file_location == f"local://samples/{key}":
+                return local_object_path(self.root, key)
+            # Existing requests retain their original immutable location.
+            if sample.file_location == f"local://{analysis_id}/sample.bin":
+                return local_object_path(self.root, f"{analysis_id}/sample.bin")
+        except ValueError as exc:
             raise BackendError(
                 "UNSAFE_STORAGE_PATH",
                 "파일 저장 경로를 확인할 수 없습니다.",
                 stage="STORAGE",
-            )
-        return target
+            ) from exc
+        raise BackendError(
+            "STORAGE_LOCATION_MISMATCH",
+            "허용되지 않은 파일 저장 위치입니다.",
+            stage="STORAGE",
+        )
+
+    def prepare(self, stream, *, analysis_id, filename):
+        return _prepare(
+            stream,
+            analysis_id=analysis_id,
+            filename=filename,
+            root=self.root,
+            limit=self.max_file_bytes,
+            location=lambda sha256: f"local://samples/{sample_key(sha256)}",
+        )
+
+    def publish(self, prepared: PreparedSample) -> StoredSample:
+        sample = prepared.sample
+        target = self._path(sample)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target = self._path(sample)
+        try:
+            # Staging lives on the same volume. A hard link atomically publishes
+            # the complete, fsynced file and never replaces an existing object.
+            os.link(prepared.path, target)
+        except FileExistsError:
+            _verify(target, sample, self.max_file_bytes)
+        return sample
 
     def ingest(
         self, stream: BinaryIO, *, analysis_id: str, filename: str
     ) -> StoredSample:
-        analysis_id, filename = _safe_id(analysis_id), _filename(filename)
-        self.root.mkdir(parents=True, exist_ok=True)
-        sample = StoredSample(
-            analysis_id, "", 0, f"local://{analysis_id}/sample.bin", filename
-        )
-        target = self._path(sample)
-        try:
-            target.parent.mkdir(exist_ok=False)
-        except FileExistsError as exc:
-            raise BackendError(
-                "STORAGE_CONFLICT",
-                "이미 사용 중인 분석 번호입니다.",
-                http_status=409,
-                stage="UPLOAD",
-            ) from exc
-        try:
-            with target.open("x+b") as destination:
-                sha256, size = _copy(stream, destination, self.max_file_bytes)
-                destination.flush()
-                _validate_pe(destination, size)
-            return StoredSample(
-                analysis_id, sha256, size, sample.file_location, filename
-            )
-        except BaseException:
-            target.unlink(missing_ok=True)
-            target.parent.rmdir()
-            raise
+        """Storage-only convenience; API intake uses prepare + DB lock + publish."""
+        with self.prepare(
+            stream, analysis_id=analysis_id, filename=filename
+        ) as prepared:
+            return self.publish(prepared)
 
     @contextmanager
     def materialize(self, sample: StoredSample, check=None) -> Iterator[Path]:
@@ -261,10 +294,8 @@ class LocalSampleStorage:
             try:
                 target.parent.rmdir()
             except OSError:
-                # 다른 파일을 재귀적으로 지우지 않는다. 이 Job의 원본만 삭제한다.
-                LOGGER.warning(
-                    "sample_directory_not_empty analysis_id=%s", sample.analysis_id
-                )
+                # Analysis artifacts have a separate lifetime from the original.
+                LOGGER.debug("sample_artifacts_retained sha256=%s", sample.sha256)
 
 
 def _aws_error(exc: Exception, *, stage: str) -> BackendError:
@@ -299,7 +330,7 @@ def _aws_error(exc: Exception, *, stage: str) -> BackendError:
 
 
 class S3SampleStorage:
-    """Main Server와 Worker가 공유하는 S3. 파일마다 고유 Key를 사용한다."""
+    """Main Server와 Worker가 공유하는 S3. 원본은 SHA-256으로 식별한다."""
 
     def __init__(
         self,
@@ -335,13 +366,34 @@ class S3SampleStorage:
         except (BotoCoreError, ClientError) as exc:
             raise _aws_error(exc, stage="STORAGE") from exc
 
+    def artifact_store(self, *, max_bytes: int):
+        return S3ArtifactStorage(
+            self.client,
+            bucket=self.bucket,
+            prefix=self.prefix,
+            temp_root=self.temp_root,
+            max_bytes=max_bytes,
+            download_timeout_seconds=self.download_timeout_seconds,
+        )
+
     def _key(self, sample: StoredSample) -> str:
-        key = f"{self.prefix}{_safe_id(sample.analysis_id)}/sample.bin"
+        analysis_id = _safe_id(sample.analysis_id)
+        try:
+            keys = {
+                f"{self.prefix}{sample_key(sample.sha256)}",
+                f"{self.prefix}{analysis_id}/sample.bin",
+            }
+        except ValueError as exc:
+            raise BackendError(
+                "STORAGE_LOCATION_MISMATCH",
+                "원본 식별자가 올바르지 않습니다.",
+                stage="STORAGE",
+            ) from exc
         parsed = urlsplit(sample.file_location)
         if (
             parsed.scheme != "s3"
             or parsed.netloc != self.bucket
-            or parsed.path != f"/{key}"
+            or parsed.path not in {f"/{key}" for key in keys}
             or parsed.query
             or parsed.fragment
         ):
@@ -350,42 +402,51 @@ class S3SampleStorage:
                 "허용되지 않은 S3 저장 위치입니다.",
                 stage="STORAGE",
             )
-        return key
+        return parsed.path[1:]
 
-    def ingest(
-        self, stream: BinaryIO, *, analysis_id: str, filename: str
-    ) -> StoredSample:
-        analysis_id, filename = _safe_id(analysis_id), _filename(filename)
-        key = f"{self.prefix}{analysis_id}/sample.bin"
-        self.temp_root.mkdir(parents=True, exist_ok=True)
+    def prepare(self, stream, *, analysis_id, filename):
+        return _prepare(
+            stream,
+            analysis_id=analysis_id,
+            filename=filename,
+            root=self.temp_root,
+            limit=self.max_file_bytes,
+            location=lambda sha256: (
+                f"s3://{self.bucket}/{self.prefix}{sample_key(sha256)}"
+            ),
+        )
+
+    def publish(self, prepared: PreparedSample) -> StoredSample:
+        sample = prepared.sample
         try:
-            with tempfile.TemporaryFile(dir=self.temp_root) as temporary:
-                sha256, size = _copy(stream, temporary, self.max_file_bytes)
-                temporary.flush()
-                _validate_pe(temporary, size)
+            with prepared.path.open("rb") as temporary:
                 self.client.put_object(
                     Bucket=self.bucket,
-                    Key=key,
+                    Key=self._key(sample),
                     Body=temporary,
-                    ContentLength=size,
+                    ContentLength=sample.size_bytes,
                     ContentType="application/octet-stream",
-                    Metadata={"sha256": sha256},
+                    Metadata={"sha256": sample.sha256},
                     IfNoneMatch="*",
                 )
-            return StoredSample(
-                analysis_id, sha256, size, f"s3://{self.bucket}/{key}", filename
-            )
         except (BotoCoreError, ClientError) as exc:
             if isinstance(exc, ClientError) and exc.response.get("Error", {}).get(
                 "Code"
             ) in {"PreconditionFailed", "412"}:
-                raise BackendError(
-                    "STORAGE_CONFLICT",
-                    "이미 사용 중인 분석 번호입니다.",
-                    http_status=409,
-                    stage="UPLOAD",
-                ) from exc
-            raise _aws_error(exc, stage="UPLOAD") from exc
+                # Metadata/ETag alone are not proof that the existing bytes match.
+                with self.materialize(sample):
+                    pass
+            else:
+                raise _aws_error(exc, stage="UPLOAD") from exc
+        return sample
+
+    def ingest(
+        self, stream: BinaryIO, *, analysis_id: str, filename: str
+    ) -> StoredSample:
+        with self.prepare(
+            stream, analysis_id=analysis_id, filename=filename
+        ) as prepared:
+            return self.publish(prepared)
 
     @contextmanager
     def materialize(self, sample: StoredSample, check=None) -> Iterator[Path]:

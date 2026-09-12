@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from copy import copy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -17,6 +18,8 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+
+from trust_triage.storage.artifacts import ArtifactReference
 
 from .errors import BackendError
 from .schemas import BatchInputReport, CurrentStage, InitialVerdict
@@ -87,6 +90,7 @@ class BatchRecord:
 class AnalysisRepository(Protocol):
     def initialize(self) -> None: ...
     def check(self) -> None: ...
+    def sample_transaction(self, sha256s: list[str]): ...
     def register(
         self,
         analyses: list[dict[str, Any]],
@@ -153,8 +157,11 @@ class AnalysisRepository(Protocol):
     def cleanup_candidates(
         self, before_datetime: datetime, limit: int = 10
     ) -> list[AnalysisRecord]: ...
-    def mark_storage_deleted(self, analysis_id: str) -> bool: ...
+    def mark_sample_deleted(self, location: str) -> list[str]: ...
+    def location_records(self, location: str) -> list[AnalysisRecord]: ...
     def location_referenced(self, location: str) -> bool: ...
+    def record_artifact(self, reference: ArtifactReference, token: str) -> bool: ...
+    def list_artifacts(self, analysis_id: str) -> list[ArtifactReference]: ...
     def save_review(
         self,
         analysis_id: str,
@@ -183,12 +190,16 @@ class PostgresAnalysisRepository:
             raise ValueError("Invalid PostgreSQL connection string") from exc
         self._dsn = dsn
         self._connect_timeout = connect_timeout
+        self._bound_connection = None
         self._options = (
             f"{existing} -c statement_timeout={statement_timeout_ms}".strip()
         )
 
     @contextmanager
     def _connection(self) -> Iterator[Any]:
+        if self._bound_connection is not None:
+            yield self._bound_connection
+            return
         try:
             with psycopg.connect(
                 self._dsn,
@@ -224,10 +235,32 @@ class PostgresAnalysisRepository:
 
     def check(self) -> None:
         with self._connection() as connection:
-            for table in ("api_batches", "api_analyses", "api_reviews"):
+            for table in (
+                "api_batches",
+                "api_analyses",
+                "api_reviews",
+                "api_sample_objects",
+                "api_analysis_artifacts",
+            ):
                 # These table names are constants, never user input.
                 connection.execute(f"SELECT * FROM {table} LIMIT 0")
             connection.execute("SELECT input_report FROM api_batches LIMIT 0")
+
+    @contextmanager
+    def sample_transaction(self, sha256s: list[str]):
+        """Serialize publish/register/delete for shared bytes across API processes.
+
+        The yielded repository uses this transaction. Do not use it after exit.
+        Input streams are staged and validated before entering this scope.
+        """
+        hashes = sorted(set(sha256s))
+        for value in hashes:
+            _hash(value)
+        with self._connection() as connection:
+            _lock_samples(connection, hashes)
+            scoped = copy(self)
+            scoped._bound_connection = connection
+            yield scoped
 
     def register(
         self,
@@ -258,6 +291,8 @@ class PostgresAnalysisRepository:
         )
         request_id = str(uuid4())
         with self._connection() as connection:
+            # Acquire before the idempotency row, in the same order as intake/GC.
+            _lock_samples(connection, sorted({item["sha256"] for item in inputs}))
             row = connection.execute(
                 """INSERT INTO api_batches
                    (request_id, batch_id, request_kind, idempotency_key, input_fingerprint, input_report)
@@ -304,14 +339,22 @@ class PostgresAnalysisRepository:
                     else None,
                 )
 
-            # Consistent hash-lock ordering avoids opposite-order batch deadlocks.
-            # A concurrent duplicate registration sees the first committed analysis.
-            for sample_hash in sorted({item["sha256"] for item in inputs}):
-                connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (sample_hash,),
-                )
             for position, item in enumerate(inputs):
+                stored = connection.execute(
+                    """INSERT INTO api_sample_objects (file_location, sha256, size_bytes)
+                       VALUES (%s, %s, %s) ON CONFLICT (file_location) DO UPDATE
+                       SET storage_deleted_at = NULL
+                       WHERE api_sample_objects.sha256 = EXCLUDED.sha256
+                         AND api_sample_objects.size_bytes = EXCLUDED.size_bytes
+                       RETURNING file_location""",
+                    (item["file_location"], item["sha256"], item["size_bytes"]),
+                ).fetchone()
+                if stored is None:
+                    raise BackendError(
+                        "STORAGE_IDENTITY_CONFLICT",
+                        "Storage location belongs to different sample bytes",
+                        http_status=409,
+                    )
                 duplicate = connection.execute(
                     "SELECT analysis_id FROM api_analyses WHERE sha256 = %s ORDER BY created_at, analysis_id LIMIT 1",
                     (item["sha256"],),
@@ -623,17 +666,48 @@ class PostgresAnalysisRepository:
                 ).fetchall()
             ]
 
-    def mark_storage_deleted(self, analysis_id: str) -> bool:
+    def location_records(self, location: str) -> list[AnalysisRecord]:
         with self._connection() as connection:
-            return (
-                connection.execute(
-                    """UPDATE api_analyses SET storage_deleted_at = clock_timestamp()
-                   WHERE analysis_id = %s AND status IN ('COMPLETED', 'FAILED')
-                   AND storage_deleted_at IS NULL""",
-                    (analysis_id,),
-                ).rowcount
-                == 1
+            return [
+                _record(row)
+                for row in connection.execute(
+                    _SELECT
+                    + " WHERE file_location = %s AND storage_deleted_at IS NULL ORDER BY analysis_id",
+                    (location,),
+                ).fetchall()
+            ]
+
+    def mark_sample_deleted(self, location: str) -> list[str]:
+        with self._connection() as connection:
+            sample = connection.execute(
+                "SELECT sha256 FROM api_sample_objects WHERE file_location = %s",
+                (location,),
+            ).fetchone()
+            if sample is None:
+                return []
+            _lock_samples(connection, [sample["sha256"]])
+            active = connection.execute(
+                "SELECT EXISTS (SELECT 1 FROM api_analyses WHERE file_location = %s "
+                "AND storage_deleted_at IS NULL AND status IN ('QUEUED', 'RUNNING')) AS found",
+                (location,),
+            ).fetchone()["found"]
+            if active:
+                raise BackendError(
+                    "SAMPLE_IN_USE",
+                    "Sample is still used by an analysis",
+                    http_status=409,
+                )
+            rows = connection.execute(
+                "UPDATE api_analyses SET storage_deleted_at = clock_timestamp() "
+                "WHERE file_location = %s AND storage_deleted_at IS NULL RETURNING analysis_id",
+                (location,),
+            ).fetchall()
+            connection.execute(
+                "UPDATE api_sample_objects SET storage_deleted_at = COALESCE(storage_deleted_at, clock_timestamp()) "
+                "WHERE file_location = %s",
+                (location,),
             )
+            return sorted(row["analysis_id"] for row in rows)
 
     def location_referenced(self, location: str) -> bool:
         with self._connection() as connection:
@@ -641,6 +715,64 @@ class PostgresAnalysisRepository:
                 "SELECT EXISTS (SELECT 1 FROM api_analyses WHERE file_location = %s AND storage_deleted_at IS NULL) AS found",
                 (location,),
             ).fetchone()["found"]
+
+    def record_artifact(self, reference: ArtifactReference, token: str) -> bool:
+        # Revalidate even if a caller hands us an object constructed elsewhere.
+        reference = ArtifactReference(**reference.to_dict())
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT sha256 FROM api_analyses WHERE " + _OWNED + " FOR UPDATE",
+                (reference.analysis_id, token),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["sha256"] != reference.sha256:
+                raise BackendError(
+                    "ARTIFACT_IDENTITY_CONFLICT",
+                    "Artifact belongs to another sample",
+                    http_status=409,
+                )
+            payload = reference.to_dict()
+            connection.execute(
+                """INSERT INTO api_analysis_artifacts
+                (sha256, analysis_id, tool, tool_run_id, name, file_location, content_sha256,
+                 size_bytes, created_at, media_type, tool_version, config_sha256, schema_version)
+                VALUES (%(sha256)s, %(analysis_id)s, %(tool)s, %(tool_run_id)s, %(name)s,
+                    %(file_location)s, %(content_sha256)s, %(size_bytes)s, %(created_at)s::timestamptz,
+                    %(media_type)s, %(tool_version)s, %(config_sha256)s, %(schema_version)s)
+                ON CONFLICT (analysis_id, tool, tool_run_id, name) DO NOTHING""",
+                payload,
+            )
+            existing = connection.execute(
+                "SELECT * FROM api_analysis_artifacts WHERE analysis_id = %s AND tool = %s AND tool_run_id = %s AND name = %s",
+                (
+                    reference.analysis_id,
+                    reference.tool,
+                    reference.tool_run_id,
+                    reference.name,
+                ),
+            ).fetchone()
+            if any(
+                existing[key] != value
+                for key, value in payload.items()
+                if key != "created_at"
+            ):
+                raise BackendError(
+                    "ARTIFACT_CONFLICT",
+                    "An immutable artifact reference already exists",
+                    http_status=409,
+                )
+            return True
+
+    def list_artifacts(self, analysis_id: str) -> list[ArtifactReference]:
+        with self._connection() as connection:
+            return [
+                ArtifactReference(**{**row, "created_at": _iso(row["created_at"])})
+                for row in connection.execute(
+                    "SELECT * FROM api_analysis_artifacts WHERE analysis_id = %s ORDER BY created_at, tool, tool_run_id, name",
+                    (analysis_id,),
+                ).fetchall()
+            ]
 
     def save_review(
         self,
@@ -708,6 +840,13 @@ class PostgresAnalysisRepository:
             ]
 
 
+def _lock_samples(connection, hashes):
+    for sample_hash in hashes:
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (sample_hash,)
+        )
+
+
 def registration_input(analyses, batch_id, idempotency_key, input_report=None):
     """Validate before DB access; IDs/locations intentionally do not define replay identity."""
     minimum = 0 if batch_id is not None and input_report is not None else 1
@@ -757,8 +896,11 @@ def registration_input(analyses, batch_id, idempotency_key, input_report=None):
         normalized.append(item)
     if len({item["analysis_id"] for item in normalized}) != len(normalized):
         raise ValueError("analysis IDs must be unique within a request")
-    if len({item["file_location"] for item in normalized}) != len(normalized):
-        raise ValueError("storage locations must be unique within a request")
+    locations = {}
+    for item in normalized:
+        identity = (item["sha256"], item["size_bytes"])
+        if locations.setdefault(item["file_location"], identity) != identity:
+            raise ValueError("shared storage locations must identify identical bytes")
     kind = "BATCH" if batch_id is not None else "SINGLE"
     identity = {
         "kind": kind,

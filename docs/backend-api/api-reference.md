@@ -192,6 +192,8 @@ multipart는 **파일을 HTTP 요청 본문에 담아 보내는 형식**이다. 
 
 응답의 `analysis_id`를 보관하고 진행 조회에 사용한다. 같은 SHA-256의 이전 분석이 있으면 `duplicate_of`에 이전 번호가 표시될 수 있다. 키 없이 새로 올린 요청은 독립된 분석이다.
 
+동일 원본은 해시 경로에서 공유하지만 파일명·분석 결과·전문가 검토는 요청별로 유지한다. 원본·리포트 저장 규격과 기존 DB 전환은 [저장 구조 안내](storage.md)를 참고한다.
+
 예시 응답에서 `analysis_id`가 `analysis_abc123`이었다면, 진행 조회 주소는 다음과 같이 만든다.
 
 ```text
@@ -386,7 +388,14 @@ GET /batches/batch_abc123/analyses?verdict=HIGH_RISK_UNCERTAIN&limit=20&offset=0
 | `risk_signals.ood_score` | Isolation Forest 점수. 음수도 나올 수 있음 |
 | `risk_signals.difficulty_score` | 분석 난이도 신호 |
 | `initial_verdict` / `route` / `reason` | 최초 JRR 판정, `FINAL` 또는 `DEEP_ANALYSIS` 경로, 선택 이유 |
+| `triggered_signals` | 동시에 발현된 모든 위험 신호. 검사 순서를 유지한 배열 |
 | `feature_metadata` | 사용한 Feature Schema·모델 산출물 식별 정보 등 |
+
+`reason`은 우선순위상 가장 먼저 발현된 대표 사유 1개이고, `triggered_signals`는 `OOD`, `DISAGREEMENT`, `DIFFICULTY`, `UNCERTAIN_PROBABILITY` 중 실제 발현된 신호 전체다. 예를 들어 OOD와 분석 난이도가 동시에 조건을 만족하면 `reason`은 OOD 사유, 배열은 `["OOD", "DIFFICULTY"]`다. 같은 필드는 종합 결과와 분석 목록·배치 결과의 각 분석에도 포함된다.
+
+새 분석에서 발현 신호가 없으면 `[]`를 반환한다. 초기 분석 전이나 이 필드를 저장하지 않은 이전 기록은 `null`이며, 과거 결과를 현재 임계값으로 재계산하거나 대표 사유에서 나머지 신호를 추측하지 않는다. 이 필드는 기존 `initial_result` JSON과 초기 분석 리포트에 저장되므로 JRR 갱신만을 위한 SQL 변경은 없다. [SHA-256 저장 구조 전환](storage.md)의 `init-db` 적용은 별도다.
+
+백엔드는 저장소의 `JointRiskRouter`를 그대로 사용한다. 현재 기본값은 `tau_low=0.65`, `tau_high=0.983645`, `tau_disagree=0.3`, `tau_ood=0.0`, `tau_difficulty=6.0`이며, 실제 사용한 값은 `feature_metadata.jrr_thresholds`에 기록한다. `tau_low < calibrated_probability < tau_high`가 확률의 불확실 구간이고, 분석 난이도는 `>= 6.0`일 때 발현한다. 세부 계약은 [공통 인터페이스 명세](../interface_spec.md)를 따른다.
 
 ### GET /analyses/{analysis_id}/xai
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -20,6 +20,7 @@ from trust_triage.backend_api.repository import (
     PostgresAnalysisRepository,
 )
 from trust_triage.backend_api.schemas import BatchInputEntry, BatchInputReport
+from trust_triage.storage import ArtifactIdentity, LocalArtifactStorage
 
 from .fake_repository import MemoryAnalysisRepository
 
@@ -812,7 +813,9 @@ def test_cleanup_keeps_active_or_new_files_and_marks_only_completed_deletions(ca
     finished = _finish(case, _input(0))
     failed = _finish(case, _input(1), failed=True)
     repository.register([_input(2)])
-    assert not repository.mark_storage_deleted("analysis-2")
+    with pytest.raises(BackendError) as failure:
+        repository.mark_sample_deleted(_input(2)["file_location"])
+    assert failure.value.code == "SAMPLE_IN_USE"
     assert repository.cleanup_candidates(case.now - timedelta(days=1)) == []
     cutoff = case.now + timedelta(seconds=1)
     candidates = repository.cleanup_candidates(cutoff)
@@ -821,8 +824,10 @@ def test_cleanup_keeps_active_or_new_files_and_marks_only_completed_deletions(ca
         failed.analysis_id,
     ]
     assert repository.location_referenced(finished.file_location)
-    assert repository.mark_storage_deleted(finished.analysis_id)
-    assert not repository.mark_storage_deleted(finished.analysis_id)
+    assert repository.mark_sample_deleted(finished.file_location) == [
+        finished.analysis_id
+    ]
+    assert repository.mark_sample_deleted(finished.file_location) == []
     assert not repository.location_referenced(finished.file_location)
     assert repository.get(finished.analysis_id).storage_deleted_at is not None
     assert [row.analysis_id for row in repository.cleanup_candidates(cutoff)] == [
@@ -934,3 +939,106 @@ def test_sql_rejects_half_finished_state_and_nonterminal_deleted_storage(case):
         ):
             connection.execute(statement)
     assert case.repository.get("analysis-0").status == "QUEUED"
+
+
+def test_shared_sample_registry_rejects_inconsistent_bytes_and_marks_all_references(
+    case,
+):
+    repository = case.repository
+    first = _input()
+    second = _input(1, sha256=first["sha256"], file_location=first["file_location"])
+    records = repository.register([first, second], batch_id="shared-batch")
+    assert len(records) == 2 and records[1].duplicate_of == records[0].analysis_id
+    assert len(repository.location_records(first["file_location"])) == 2
+    with pytest.raises(BackendError) as conflict:
+        repository.register([_input(2, file_location=first["file_location"])])
+    assert conflict.value.code == "STORAGE_IDENTITY_CONFLICT"
+    assert repository.get("analysis-2") is None
+    for index, item in enumerate((first, second)):
+        claim = repository.claim(item["analysis_id"], 600)
+        assert repository.save_initial(
+            item["analysis_id"], claim.token, _initial(item), False
+        )
+        assert repository.finish(item["analysis_id"], claim.token, _final(item))
+        if index == 0:
+            with pytest.raises(BackendError) as active:
+                repository.mark_sample_deleted(first["file_location"])
+            assert active.value.code == "SAMPLE_IN_USE"
+            assert repository.get(first["analysis_id"]).storage_deleted_at is None
+    assert repository.mark_sample_deleted(first["file_location"]) == [
+        "analysis-0",
+        "analysis-1",
+    ]
+    assert repository.location_records(first["file_location"]) == []
+
+
+def test_artifact_catalog_is_durable_immutable_and_fenced_by_the_analysis_lease(
+    case, tmp_path
+):
+    repository = case.repository
+    item = _input()
+    repository.register([item])
+    storage = LocalArtifactStorage(tmp_path)
+    reference = storage.put_json(
+        ArtifactIdentity(item["sha256"], item["analysis_id"], "CAPA", "run-1"),
+        {"status": "SUCCESS"},
+        tool_version="test-v1",
+    )
+    assert not repository.record_artifact(reference, str(uuid4()))
+    claim = repository.claim(item["analysis_id"], 600)
+    assert repository.record_artifact(reference, claim.token)
+    assert repository.record_artifact(reference, claim.token)
+    assert case.reconnect().list_artifacts(item["analysis_id"]) == [reference]
+    with pytest.raises(BackendError) as conflict:
+        repository.record_artifact(
+            replace(reference, tool_version="changed-version"), claim.token
+        )
+    assert conflict.value.code == "ARTIFACT_CONFLICT"
+    assert repository.list_artifacts(item["analysis_id"])[0].tool_version == "test-v1"
+    case.expire(item["analysis_id"])
+    replacement = repository.claim(item["analysis_id"], 600)
+    another = storage.put_json(
+        replace(reference.identity, tool_run_id="run-2"), {"status": "TIMEOUT"}
+    )
+    assert not repository.record_artifact(another, claim.token)
+    assert repository.record_artifact(another, replacement.token)
+    assert len(repository.list_artifacts(item["analysis_id"])) == 2
+
+
+def test_artifact_registry_rejects_another_samples_report(case, tmp_path):
+    repository = case.repository
+    item = _input()
+    repository.register([item])
+    claim = repository.claim(item["analysis_id"], 600)
+    reference = LocalArtifactStorage(tmp_path).put_json(
+        ArtifactIdentity("f" * 64, item["analysis_id"], "FLOSS", "run-1"), {}
+    )
+    with pytest.raises(BackendError) as conflict:
+        repository.record_artifact(reference, claim.token)
+    assert conflict.value.code == "ARTIFACT_IDENTITY_CONFLICT"
+    assert repository.list_artifacts(item["analysis_id"]) == []
+
+
+def test_artifact_reference_and_analysis_checkpoint_share_a_transaction(case, tmp_path):
+    repository = case.repository
+    item = _input()
+    repository.register([item])
+    claim = repository.claim(item["analysis_id"], 600)
+    reference = LocalArtifactStorage(tmp_path).put_json(
+        ArtifactIdentity(
+            item["sha256"], item["analysis_id"], "INITIAL_ANALYSIS", "run-1"
+        ),
+        _initial(item),
+    )
+    with (
+        pytest.raises(RuntimeError, match="synthetic rollback"),
+        repository.sample_transaction([item["sha256"]]) as transaction,
+    ):
+        assert transaction.record_artifact(reference, claim.token)
+        assert transaction.save_initial(
+            item["analysis_id"], claim.token, _initial(item), False
+        )
+        raise RuntimeError("synthetic rollback")
+    assert case.reconnect().list_artifacts(item["analysis_id"]) == []
+    assert case.reconnect().get(item["analysis_id"]).initial_result is None
+    assert repository.record_artifact(reference, claim.token)

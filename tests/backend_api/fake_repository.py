@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import threading
 from collections import Counter
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -19,6 +21,7 @@ from trust_triage.backend_api.repository import (
     validate_listing,
     validate_review,
 )
+from trust_triage.storage.artifacts import ArtifactReference
 
 
 def _copy(value):
@@ -34,6 +37,8 @@ class MemoryAnalysisRepository:
         self.leases = {}
         self.retries = {}
         self.reviews = {}
+        self.sample_objects = {}
+        self.artifacts = {}
         self.calls = Counter()
         self.failures = Counter()
         self.now = datetime.now(timezone.utc)
@@ -62,6 +67,28 @@ class MemoryAnalysisRepository:
 
     def check(self):
         self._fault("check")
+
+    @contextmanager
+    def sample_transaction(self, sha256s):
+        with self._lock:
+            names = (
+                "rows",
+                "batches",
+                "input_reports",
+                "idempotency",
+                "reviews",
+                "sample_objects",
+                "artifacts",
+                "leases",
+                "retries",
+            )
+            snapshot = {name: deepcopy(getattr(self, name)) for name in names}
+            try:
+                yield self
+            except BaseException:
+                for name, value in snapshot.items():
+                    setattr(self, name, value)
+                raise
 
     def register(self, analyses, *, batch_id=None, idempotency_key=None):
         return self._register(
@@ -102,18 +129,32 @@ class MemoryAnalysisRepository:
                     [self.get(key) for key in previous[2]],
                     report.model_copy(deep=True) if report else None,
                 )
-            locations = {row.file_location for row in self.rows.values()}
             if (batch_id is not None and batch_id in self.batches) or any(
-                item["analysis_id"] in self.rows or item["file_location"] in locations
-                for item in inputs
+                item["analysis_id"] in self.rows for item in inputs
             ):
                 raise BackendError(
                     "REGISTRATION_CONFLICT",
                     "Analysis registration conflicts with existing input",
                     http_status=409,
                 )
+            for item in inputs:
+                existing = self.sample_objects.get(item["file_location"])
+                if existing is not None and existing[:2] != (
+                    item["sha256"],
+                    item["size_bytes"],
+                ):
+                    raise BackendError(
+                        "STORAGE_IDENTITY_CONFLICT",
+                        "Storage identifies different bytes",
+                        http_status=409,
+                    )
             ids = []
             for item in inputs:
+                self.sample_objects[item["file_location"]] = (
+                    item["sha256"],
+                    item["size_bytes"],
+                    None,
+                )
                 duplicate = next(
                     (
                         row.analysis_id
@@ -428,14 +469,32 @@ class MemoryAnalysisRepository:
                 and datetime.fromisoformat(row.completed_at) < before_datetime
             ][:limit]
 
-    def mark_storage_deleted(self, analysis_id):
-        self._fault("mark_storage_deleted")
+    def location_records(self, location):
+        self._fault("location_records")
         with self._lock:
-            row = self.rows.get(analysis_id)
-            if row is None or not row.terminal or row.storage_deleted_at is not None:
-                return False
-            self.rows[analysis_id] = replace(row, storage_deleted_at=self._tick())
-            return True
+            return [
+                self.get(row.analysis_id)
+                for row in sorted(self.rows.values(), key=lambda row: row.analysis_id)
+                if row.file_location == location and row.storage_deleted_at is None
+            ]
+
+    def mark_sample_deleted(self, location):
+        self._fault("mark_sample_deleted")
+        with self._lock:
+            references = self.location_records(location)
+            if any(not row.terminal for row in references):
+                raise BackendError(
+                    "SAMPLE_IN_USE",
+                    "Sample is still used by an analysis",
+                    http_status=409,
+                )
+            stamp = self._tick()
+            for row in references:
+                self.rows[row.analysis_id] = replace(row, storage_deleted_at=stamp)
+            if location in self.sample_objects:
+                sha256, size, deleted = self.sample_objects[location]
+                self.sample_objects[location] = (sha256, size, deleted or stamp)
+            return [row.analysis_id for row in references]
 
     def location_referenced(self, location):
         self._fault("location_referenced")
@@ -443,6 +502,51 @@ class MemoryAnalysisRepository:
             row.file_location == location and row.storage_deleted_at is None
             for row in self.rows.values()
         )
+
+    def record_artifact(self, reference, token):
+        self._fault("record_artifact")
+        reference = ArtifactReference(**reference.to_dict())
+        with self._lock:
+            if not self._owns(reference.analysis_id, token):
+                return False
+            row = self.rows[reference.analysis_id]
+            if row.sha256 != reference.sha256:
+                raise BackendError(
+                    "ARTIFACT_IDENTITY_CONFLICT",
+                    "Artifact belongs to another sample",
+                    http_status=409,
+                )
+            key = (
+                reference.analysis_id,
+                reference.tool,
+                reference.tool_run_id,
+                reference.name,
+            )
+            existing = self.artifacts.get(key)
+            if existing is not None and any(
+                getattr(existing, name) != value
+                for name, value in reference.to_dict().items()
+                if name != "created_at"
+            ):
+                raise BackendError(
+                    "ARTIFACT_CONFLICT",
+                    "Artifact reference already exists",
+                    http_status=409,
+                )
+            self.artifacts.setdefault(key, reference)
+            return True
+
+    def list_artifacts(self, analysis_id):
+        self._fault("list_artifacts")
+        with self._lock:
+            return sorted(
+                [
+                    value
+                    for value in self.artifacts.values()
+                    if value.analysis_id == analysis_id
+                ],
+                key=lambda ref: (ref.created_at, ref.tool, ref.tool_run_id, ref.name),
+            )
 
     def save_review(
         self,

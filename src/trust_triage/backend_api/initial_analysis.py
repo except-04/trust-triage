@@ -10,8 +10,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
+
 from .errors import BackendError
 from .model_bundle import ModelBundle, ModelBundleConfig, _file_sha256
+from .schemas import TriggeredSignals
+
+_TRIGGERED_SIGNALS = TypeAdapter(TriggeredSignals)
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,24 @@ def _predict_initial(
                 "The initial JRR returned an invalid route.",
                 stage,
             )
+        try:
+            # New executions must follow the current JRR contract. Only stored
+            # legacy results may omit this field; never infer it from reason.
+            signals = _TRIGGERED_SIGNALS.validate_python(
+                routed.get("triggered_signals")
+            )
+        except ValidationError as exc:
+            raise _failure(
+                "JRR_OUTPUT_INVALID",
+                "The initial JRR returned invalid or missing triggered signals.",
+                stage,
+            ) from exc
+        if verdict != "HIGH_RISK_UNCERTAIN" and signals:
+            raise _failure(
+                "JRR_OUTPUT_INVALID",
+                "An automatic JRR verdict cannot contain triggered risk signals.",
+                stage,
+            )
     except BackendError:
         raise
     except Exception as exc:
@@ -247,6 +270,7 @@ def _predict_initial(
         "initial_verdict": verdict,
         "route": routed["route"],
         "reason": routed["reason"],
+        "triggered_signals": signals,
         "top_features": [],
         "feature_metadata": metadata,
         "xai_status": "PENDING",

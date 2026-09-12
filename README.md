@@ -233,3 +233,10 @@ PE Feature 추출 방법은
 [`docs/feature-extraction/feature-extraction.md`](docs/feature-extraction/feature-extraction.md)에 정리되어 있습니다.
 공식 EMBER2024 Feature Version 3만 사용하며, `.exe`와 `.dll`을 실행하지 않고
 정적으로 읽어 고정 벡터를 반환합니다.
+
+## Backend API
+
+파일 접수·분석 결과·전문가 검토 API는 [API 안내](docs/backend-api/api-reference.md),
+실행 프로세스와 소스 구조는 [백엔드 구조](docs/backend-api/backend-structure.md)를 참고합니다.
+원본은 SHA-256 기준으로 공유하고 실행별 리포트를 함께 보관합니다.
+기존 DB 전환과 Worker용 저장 인터페이스는 [저장 구조 안내](docs/backend-api/storage.md)에 정리되어 있습니다.

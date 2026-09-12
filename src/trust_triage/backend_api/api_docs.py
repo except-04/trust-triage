@@ -280,6 +280,7 @@ def response_examples() -> dict:
         "initial_verdict": "AUTO_BENIGN",
         "route": "FINAL",
         "reason": "설명용 예시: 추가 분석 조건에 해당하지 않아 최종 처리로 이동했습니다.",
+        "triggered_signals": [],
         "feature_metadata": {},
     }
     assessment = {
@@ -299,6 +300,7 @@ def response_examples() -> dict:
         "initial_verdict": "AUTO_BENIGN",
         "route": "FINAL",
         "reason": triage["reason"],
+        "triggered_signals": triage["triggered_signals"],
         "top_features": top_features,
         "deep_analysis_status": tool_states,
         "evidence": [],
@@ -341,7 +343,23 @@ def response_examples() -> dict:
         "batch_id": "batch_example_001",
         "initial_verdict": "HIGH_RISK_UNCERTAIN",
         "route": "DEEP_ANALYSIS",
-        "reason": "설명용 예시: 위험 신호로 추가 분석을 수행합니다.",
+        "prediction": {
+            "lgbm_raw_probability": 0.8,
+            "xgb_raw_probability": 0.4,
+            "calibrated_probability": 0.75,
+        },
+        "risk_signals": {
+            "disagreement": 0.4,
+            "ood_score": -0.1,
+            "difficulty_score": 6.0,
+        },
+        "reason": "OOD Detected (Score: -0.1000)",
+        "triggered_signals": [
+            "OOD",
+            "DISAGREEMENT",
+            "DIFFICULTY",
+            "UNCERTAIN_PROBABILITY",
+        ],
         "current_stage": "CAPA_FLOSS",
         "deep_analysis_status": {
             "capa": "RUNNING",
@@ -380,7 +398,28 @@ def response_examples() -> dict:
             )
         },
         "get_triage": {
-            "completed": _example("초기 판정 완료 — 전체 분석 상태와 별개", triage)
+            "completed": _example("초기 판정 완료 — 전체 분석 상태와 별개", triage),
+            "multiple_signals": _example(
+                "동시에 발현된 위험 신호와 대표 사유",
+                {
+                    **triage,
+                    **{
+                        key: high_risk[key]
+                        for key in (
+                            "prediction",
+                            "risk_signals",
+                            "initial_verdict",
+                            "route",
+                            "reason",
+                            "triggered_signals",
+                        )
+                    },
+                },
+            ),
+            "legacy": _example(
+                "발현 신호 목록을 기록하지 않은 이전 결과",
+                {**triage, "triggered_signals": None},
+            ),
         },
         "get_xai": {
             "completed": _example(
@@ -685,6 +724,9 @@ HTTP `202 Accepted`는 작업이 등록되었음을 의미하며 분석 완료�
 확률 필드는 0~1 범위이며 `0.72`는 72%에 해당합니다. OOD 원점수는 확률이 아니므로 음수가 허용됩니다.
 
 `initial_verdict`와 `reason`은 초기 판단을, `route`는 `FINAL` 또는 `DEEP_ANALYSIS` 처리 경로를 나타냅니다.
+`reason`은 우선순위상 최초로 발현된 대표 사유이며, `triggered_signals`는 동시에 발현된 모든 위험 신호를 검사 순서대로 보존합니다.
+가능한 신호는 `OOD`, `DISAGREEMENT`, `DIFFICULTY`, `UNCERTAIN_PROBABILITY`입니다.
+`[]`는 발현 신호 없음, `null`은 초기 분석 전 또는 이 필드를 기록하지 않은 이전 결과입니다. 이전 신호를 현재 임계값으로 재계산하지 않습니다.
 초기 판정 생성 이후에도 후속 단계가 진행될 수 있으므로 전체 수명주기 상태는 `/status` 응답을 기준으로 판단합니다.
 """,
             (401, 404, 422, 503),

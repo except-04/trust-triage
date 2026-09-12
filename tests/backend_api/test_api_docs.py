@@ -122,6 +122,32 @@ def test_all_openapi_schema_references_resolve():
     verify(schema)
 
 
+def test_openapi_documents_triggered_signals_and_unknown_legacy_values():
+    schema = create_app(config=BackendConfig()).openapi()
+    for name in ("AnalysisResponse", "TriageResponse"):
+        field = schema["components"]["schemas"][name]["properties"]["triggered_signals"]
+        array = next(option for option in field["anyOf"] if option["type"] == "array")
+        assert array["items"]["enum"] == [
+            "OOD",
+            "DISAGREEMENT",
+            "DIFFICULTY",
+            "UNCERTAIN_PROBABILITY",
+        ]
+        assert array["maxItems"] == 4
+        assert {"type": "null"} in field["anyOf"]
+    examples = schema["paths"]["/analyses/{analysis_id}/triage"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]["examples"]
+    assert examples["completed"]["value"]["triggered_signals"] == []
+    assert examples["legacy"]["value"]["triggered_signals"] is None
+    assert examples["multiple_signals"]["value"]["triggered_signals"] == [
+        "OOD",
+        "DISAGREEMENT",
+        "DIFFICULTY",
+        "UNCERTAIN_PROBABILITY",
+    ]
+
+
 def test_upload_limits_and_auth_help_match_server_configuration():
     token = "example-test-token-do-not-reuse"
     config = BackendConfig(max_file_bytes=2048, max_batch_files=3, api_token=token)

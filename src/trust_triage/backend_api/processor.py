@@ -8,6 +8,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from trust_triage.storage.artifacts import ArtifactError, ArtifactIdentity
+
 from .config import BackendConfig
 from .deep_gateway import DeepGateway, current_deep_stage, validate_snapshot
 from .errors import BackendError
@@ -127,6 +129,29 @@ class BackendProcessor:
             deep,
             config,
         )
+        self.artifacts = storage.artifact_store(max_bytes=config.max_artifact_bytes)
+
+    def _checkpoint(self, record, token, tool, value, save, *, check=None):
+        """Publish complete bytes, then commit reference and state together."""
+        try:
+            reference = self.artifacts.put_json(
+                ArtifactIdentity(record.sha256, record.analysis_id, tool, token),
+                value,
+            )
+        except ArtifactError as exc:
+            raise BackendError(
+                exc.code, exc.message, stage="STORAGE", retryable=exc.retryable
+            ) from exc
+        if check is not None:
+            check()
+        with self.repository.sample_transaction([record.sha256]) as transaction:
+            if check is not None:
+                check()
+            if not transaction.record_artifact(reference, token) or not save(
+                transaction
+            ):
+                raise LeaseLost("Artifact/checkpoint ownership expired")
+        return True
 
     def resume(self, analysis_id: str) -> AnalysisRecord:
         claim = self.repository.claim(analysis_id, self.config.lease_seconds)
@@ -143,18 +168,34 @@ class BackendProcessor:
                             path, sha256=record.sha256, check=lease.check
                         )
                     value = InitialResult.model_validate(value).model_dump(mode="json")
-                    if (value["route"] == "DEEP_ANALYSIS") != (
-                        value["initial_verdict"] == "HIGH_RISK_UNCERTAIN"
+                    if (
+                        (value["route"] == "DEEP_ANALYSIS")
+                        != (value["initial_verdict"] == "HIGH_RISK_UNCERTAIN")
+                        or value["triggered_signals"] is None
+                        or (
+                            value["initial_verdict"] != "HIGH_RISK_UNCERTAIN"
+                            and value["triggered_signals"]
+                        )
                     ):
                         raise BackendError(
                             "INITIAL_RESULT_INVALID",
-                            "초기 판정과 처리 경로가 일치하지 않습니다.",
+                            "초기 JRR 판정·처리 경로 또는 발현 신호가 올바르지 않습니다.",
                             stage="JRR",
                         )
                     lease.check()
                     lease.saved(
-                        self.repository.save_initial(
-                            analysis_id, token, value, value["route"] == "DEEP_ANALYSIS"
+                        self._checkpoint(
+                            record,
+                            token,
+                            "INITIAL_ANALYSIS",
+                            value,
+                            lambda transaction: transaction.save_initial(
+                                analysis_id,
+                                token,
+                                value,
+                                value["route"] == "DEEP_ANALYSIS",
+                            ),
+                            check=lease.check,
                         )
                     )
                 elif record.phase == "WAITING_DEEP":
@@ -178,14 +219,27 @@ class BackendProcessor:
                     if value is None:
                         value = validate_snapshot(self.deep.advance(record), record)
                     lease.check()
-                    lease.saved(
-                        self.repository.save_deep(
+
+                    def save_deep(transaction):
+                        return transaction.save_deep(
                             analysis_id,
                             token,
                             value,
                             finished=value["status"] in {"COMPLETED", "FAILED"},
                             current_stage=current_deep_stage(value),
                         )
+
+                    lease.saved(
+                        self._checkpoint(
+                            record,
+                            token,
+                            "DEEP_ANALYSIS",
+                            value,
+                            save_deep,
+                            check=lease.check,
+                        )
+                        if value["status"] in {"COMPLETED", "FAILED"}
+                        else save_deep(self.repository)
                     )
                 elif record.phase == "FINALIZING":
                     failed = (record.deep_result or {}).get("status") == "FAILED"
@@ -199,12 +253,20 @@ class BackendProcessor:
                         else None
                     )
                     lease.check()
+                    assessment = assess(record, failure=failed)
                     lease.saved(
-                        self.repository.finish(
-                            analysis_id,
+                        self._checkpoint(
+                            record,
                             token,
-                            assess(record, failure=failed),
-                            error=error,
+                            "FINAL_ASSESSMENT",
+                            {"final_assessment": assessment, "error": error},
+                            lambda transaction: transaction.finish(
+                                analysis_id,
+                                token,
+                                assessment,
+                                error=error,
+                            ),
+                            check=lease.check,
                         )
                     )
                     return self.repository.get(analysis_id)
@@ -244,12 +306,38 @@ class BackendProcessor:
                             + timedelta(seconds=self.config.retry_delay_seconds),
                         )
                     else:
-                        self.repository.finish(
-                            analysis_id,
-                            token,
+                        assessment, failure = (
                             assess(record, failure=True),
-                            error=error.to_dict(),
+                            error.to_dict(),
                         )
+
+                        def finish_failure(transaction):
+                            return transaction.finish(
+                                analysis_id, token, assessment, error=failure
+                            )
+
+                        try:
+                            self._checkpoint(
+                                record,
+                                token,
+                                "FINAL_ASSESSMENT",
+                                {"final_assessment": assessment, "error": failure},
+                                finish_failure,
+                            )
+                        except BackendError as artifact_error:
+                            if not isinstance(artifact_error.__cause__, ArtifactError):
+                                raise
+                            # Even when artifact storage is down, preserve the
+                            # original failure and final UNKNOWN recommendation.
+                            LOGGER.warning(
+                                "failure_artifact_unavailable analysis_id=%s",
+                                analysis_id,
+                            )
+                            finish_failure(self.repository)
+                        except LeaseLost:
+                            LOGGER.warning(
+                                "analysis_lease_lost analysis_id=%s", analysis_id
+                            )
                 except BackendError:
                     # 연결 복구 후 lease 만료로 재개한다. DB 오류 본문에 DSN은 남기지 않는다.
                     LOGGER.warning(

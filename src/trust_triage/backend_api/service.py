@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import BinaryIO
@@ -58,11 +59,23 @@ class BackendService:
 
     def _discard_unreferenced(self, sample: StoredSample) -> None:
         try:
-            # DB commit 직후 연결이 끊긴 경우에도 접수된 원본을 삭제하지 않는다.
-            if not self.repository.location_referenced(sample.file_location):
-                self.storage.delete(sample)
+            # Use the same cross-process lock as intake. A commit with a lost
+            # response or another request's shared reference must keep the bytes.
+            with self.repository.sample_transaction([sample.sha256]) as transaction:
+                if not transaction.location_referenced(sample.file_location):
+                    self.storage.delete(sample)
+                    transaction.mark_sample_deleted(sample.file_location)
         except Exception:  # noqa: BLE001 - cleanup must not hide the original request failure
             LOGGER.warning("upload_cleanup_deferred analysis_id=%s", sample.analysis_id)
+
+    def _publish_new(self, prepared, records, published):
+        new_ids = {row.analysis_id for row in records}
+        locations = set()
+        for item in prepared:
+            sample = item.sample
+            if sample.analysis_id in new_ids and sample.file_location not in locations:
+                published.append(self.storage.publish(item))
+                locations.add(sample.file_location)
 
     def submit(
         self,
@@ -85,27 +98,34 @@ class BackendService:
         _validate_idempotency_key(idempotency_key)
         if batch:
             return self._submit_batch(files, idempotency_key=idempotency_key)
-        uploaded: list[StoredSample] = []
+        published: list[StoredSample] = []
         try:
-            for stream, filename in files:
-                uploaded.append(
-                    self.storage.ingest(
-                        stream, analysis_id=f"analysis_{uuid4().hex}", filename=filename
+            with ExitStack() as staging:
+                prepared = [
+                    staging.enter_context(
+                        self.storage.prepare(
+                            stream,
+                            analysis_id=f"analysis_{uuid4().hex}",
+                            filename=filename,
+                        )
                     )
-                )
-            records = self.repository.register(
-                [asdict(sample) for sample in uploaded],
-                batch_id=None,
-                idempotency_key=idempotency_key,
-            )
+                    for stream, filename in files
+                ]
+                with self.repository.sample_transaction(
+                    [item.sample.sha256 for item in prepared]
+                ) as transaction:
+                    # Rows are invisible until all new objects have been published.
+                    # An idempotency replay publishes nothing, even after expiry.
+                    records = transaction.register(
+                        [asdict(item.sample) for item in prepared],
+                        batch_id=None,
+                        idempotency_key=idempotency_key,
+                    )
+                    self._publish_new(prepared, records, published)
         except BaseException:
-            for sample in uploaded:
+            for sample in published:
                 self._discard_unreferenced(sample)
             raise
-        retained = {row.file_location for row in records}
-        for sample in uploaded:
-            if sample.file_location not in retained:
-                self._discard_unreferenced(sample)
         return views.accepted(records[0])
 
     def submit_zip(self, files: list[tuple[BinaryIO, str]], *, idempotency_key=None):
@@ -113,22 +133,27 @@ class BackendService:
         return self._submit_batch(files, archive=True, idempotency_key=idempotency_key)
 
     def _submit_batch(self, files, *, archive=False, idempotency_key=None):
-        uploaded: list[StoredSample] = []
+        published: list[StoredSample] = []
         try:
-            with BatchInputHandler(self.config).prepare(
-                files, archive=archive
-            ) as prepared:
-                report = prepared.report.model_copy(deep=True)
+            with ExitStack() as staging:
+                inputs = staging.enter_context(
+                    BatchInputHandler(self.config).prepare(files, archive=archive)
+                )
+                report = inputs.report.model_copy(deep=True)
+                prepared = []
                 for entry in report.entries:
                     if entry.status != "ACCEPTED":
                         continue
-                    with prepared.paths[entry.input_index].open("rb") as stream:
-                        sample = self.storage.ingest(
-                            stream,
-                            analysis_id=f"analysis_{uuid4().hex}",
-                            filename=entry.filename,
+                    with inputs.paths[entry.input_index].open("rb") as stream:
+                        item = staging.enter_context(
+                            self.storage.prepare(
+                                stream,
+                                analysis_id=f"analysis_{uuid4().hex}",
+                                filename=entry.filename,
+                            )
                         )
-                    uploaded.append(sample)
+                    prepared.append(item)
+                    sample = item.sample
                     if (sample.sha256, sample.size_bytes) != (
                         entry.sha256,
                         entry.size_bytes,
@@ -139,20 +164,20 @@ class BackendService:
                             stage="UPLOAD",
                         )
                     entry.analysis_id = sample.analysis_id
-                batch = self.repository.register_batch(
-                    [asdict(sample) for sample in uploaded],
-                    batch_id=f"batch_{uuid4().hex}",
-                    input_report=report,
-                    idempotency_key=idempotency_key,
-                )
+                with self.repository.sample_transaction(
+                    [item.sample.sha256 for item in prepared]
+                ) as transaction:
+                    batch = transaction.register_batch(
+                        [asdict(item.sample) for item in prepared],
+                        batch_id=f"batch_{uuid4().hex}",
+                        input_report=report,
+                        idempotency_key=idempotency_key,
+                    )
+                    self._publish_new(prepared, batch.analyses, published)
         except BaseException:
-            for sample in uploaded:
+            for sample in published:
                 self._discard_unreferenced(sample)
             raise
-        retained = {row.file_location for row in batch.analyses}
-        for sample in uploaded:
-            if sample.file_location not in retained:
-                self._discard_unreferenced(sample)
         return batch_results.accepted(batch)
 
     def get(self, analysis_id: str) -> AnalysisRecord:
@@ -217,26 +242,53 @@ class BackendService:
             hours=self.config.retention_hours
         )
         rows = self.repository.cleanup_candidates(before, limit)
-        deleted, skipped = [], []
+        deleted, skipped, visited = [], [], set()
+        deleted_samples = 0
         for record in rows:
-            if (
-                self.config.storage_mode == "s3"
-                and (record.initial_result or {}).get("route") == "DEEP_ANALYSIS"
-            ):
-                try:
-                    safe = self.cleanup_guard is not None and self.cleanup_guard(record)
-                except Exception:  # noqa: BLE001 - preserve samples when linked job state is uncertain
-                    safe = False
-                if not safe:
-                    skipped.append(record.analysis_id)
+            if record.file_location in visited:
+                continue
+            visited.add(record.file_location)
+            with self.repository.sample_transaction([record.sha256]) as transaction:
+                references = transaction.location_records(record.file_location)
+                if not references:
                     continue
-            if delete:
-                self.storage.delete(stored_sample(record))
-                if self.repository.mark_storage_deleted(record.analysis_id):
-                    deleted.append(record.analysis_id)
+                if not all(
+                    self._can_expire(reference, before) for reference in references
+                ):
+                    skipped.extend(
+                        row.analysis_id
+                        for row in rows
+                        if row.file_location == record.file_location
+                    )
+                    continue
+                if delete:
+                    # Only sample.bin is deleted; per-run reports remain available.
+                    self.storage.delete(stored_sample(record))
+                    deleted.extend(
+                        transaction.mark_sample_deleted(record.file_location)
+                    )
+                    deleted_samples += 1
         return {
             "candidate_ids": [row.analysis_id for row in rows],
             "deleted_ids": deleted,
             "skipped_ids": skipped,
             "retention_hours": self.config.retention_hours,
+            "deleted_sample_count": deleted_samples,
         }
+
+    def _can_expire(self, record, before):
+        if (
+            not record.terminal
+            or record.completed_at is None
+            or datetime.fromisoformat(record.completed_at) >= before
+        ):
+            return False
+        if (
+            self.config.storage_mode == "s3"
+            and (record.initial_result or {}).get("route") == "DEEP_ANALYSIS"
+        ):
+            try:
+                return self.cleanup_guard is not None and self.cleanup_guard(record)
+            except Exception:  # noqa: BLE001 - uncertainty preserves shared originals
+                return False
+        return True

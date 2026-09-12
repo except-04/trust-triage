@@ -37,6 +37,7 @@ class BackendConfig:
     host: str = "127.0.0.1"
     port: int = 8000
     max_file_bytes: int = 50 * 1024 * 1024
+    max_artifact_bytes: int = 64 * 1024 * 1024
     max_batch_files: int = 10
     max_zip_bytes: int = 50 * 1024 * 1024
     max_zip_entries: int = 100
@@ -64,6 +65,12 @@ class BackendConfig:
             or not 1 <= self.max_batch_files <= 100
         ):
             raise ValueError("invalid upload limits")
+        if (
+            isinstance(self.max_artifact_bytes, bool)
+            or not isinstance(self.max_artifact_bytes, int)
+            or not 1 <= self.max_artifact_bytes <= 512 * 1024 * 1024
+        ):
+            raise ValueError("invalid artifact size limit")
         if not 1 <= self.port <= 65535 or not 1 <= self.retention_hours <= 720:
             raise ValueError("invalid server port or retention hours")
         if (
@@ -123,6 +130,7 @@ class BackendConfig:
             aws_region=os.getenv("AWS_REGION", "ap-northeast-2"),
             s3_bucket=os.getenv("BACKEND_S3_BUCKET", os.getenv("WORKER_S3_BUCKET", "")),
             s3_prefix=os.getenv("BACKEND_S3_PREFIX", "raw/"),
+            max_artifact_bytes=_integer("BACKEND_MAX_ARTIFACT_BYTES", 64 * 1024 * 1024),
             api_token=os.getenv("BACKEND_API_TOKEN", ""),
             reviewer_token=os.getenv("BACKEND_REVIEWER_TOKEN", ""),
             host=os.getenv("BACKEND_HOST", "127.0.0.1"),

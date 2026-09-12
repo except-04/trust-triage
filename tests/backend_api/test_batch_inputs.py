@@ -6,6 +6,7 @@ import stat
 import struct
 import warnings
 import zipfile
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -101,7 +102,7 @@ def test_zip_mixed_admission_duplicate_names_and_deterministic_replay(
     restored = setup.service.get_batch(first.batch_id)
     assert restored.entries == first.entries
     assert restored.summary.queued == restored.summary.total == 3
-    assert len(list(setup.config.storage_root.glob("*/sample.bin"))) == 3
+    assert len(list(setup.config.storage_root.glob("*/sample.bin"))) == 2
     assert not list(setup.config.temp_root.glob("batch-*"))
     assert not list(setup.config.storage_root.rglob("*.zip"))
     assert setup.repository.calls["claim"] == 0
@@ -418,13 +419,19 @@ def test_zip_database_failure_and_uncertain_commit_preserve_correct_files(
     with pytest.raises(BackendError):
         zip_submit(setup, data)
     assert_clean(setup)
-    original = setup.repository.register_batch
+    original = setup.repository.sample_transaction
+    calls = 0
 
-    def commit_then_disconnect(*args, **kwargs):
-        original(*args, **kwargs)
-        raise BackendError("DATABASE_ERROR", "connection lost after commit")
+    @contextmanager
+    def commit_then_disconnect(hashes):
+        nonlocal calls
+        calls += 1
+        with original(hashes) as transaction:
+            yield transaction
+        if calls == 1:
+            raise BackendError("DATABASE_ERROR", "connection lost after commit")
 
-    monkeypatch.setattr(setup.repository, "register_batch", commit_then_disconnect)
+    monkeypatch.setattr(setup.repository, "sample_transaction", commit_then_disconnect)
     with pytest.raises(BackendError):
         zip_submit(setup, data, key="uncertain")
     assert len(setup.repository.rows) == len(setup.repository.batches) == 1

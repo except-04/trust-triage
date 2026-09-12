@@ -11,6 +11,7 @@ import io
 import json
 import struct
 from collections import deque
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -64,6 +65,9 @@ def initial_result(verdict="AUTO_BENIGN", *, xai_failed=False):
         "initial_verdict": verdict,
         "route": "DEEP_ANALYSIS" if verdict == "HIGH_RISK_UNCERTAIN" else "FINAL",
         "reason": "Synthetic initial result.",
+        "triggered_signals": ["UNCERTAIN_PROBABILITY"]
+        if verdict == "HIGH_RISK_UNCERTAIN"
+        else [],
         "top_features": [],
         "feature_metadata": {"source_schema_version": "synthetic-v1"},
         "xai_status": "FAILED" if xai_failed else "SUCCESS",
@@ -256,6 +260,31 @@ def test_initial_final_flow_is_durable_and_does_not_run_deep(
     assert len(harness.initial.calls) == 1
 
 
+def test_fresh_initial_result_must_record_triggered_signals(harness):
+    harness.initial.value.pop("triggered_signals")
+    accepted = submit(harness)
+    record = harness.processor.resume(accepted.analysis_id)
+    assert record.status == "FAILED" and record.initial_result is None
+    assert record.error["code"] == "INITIAL_RESULT_INVALID"
+    assert record.final_assessment["final_verdict"] == "UNCERTAIN"
+
+
+def test_legacy_initial_checkpoint_can_resume_without_inventing_signals(harness):
+    accepted = submit(harness)
+    claim = harness.repository.claim(accepted.analysis_id, harness.config.lease_seconds)
+    legacy = initial_result()
+    legacy.pop("triggered_signals")
+    assert harness.repository.save_initial(
+        accepted.analysis_id, claim.token, legacy, False
+    )
+    harness.repository.release(accepted.analysis_id, claim.token)
+    completed = complete(harness, accepted.analysis_id)
+    assert completed.status == "COMPLETED"
+    assert harness.initial.calls == []
+    assert views.triage(completed).triggered_signals is None
+    assert "triggered_signals" not in completed.initial_result
+
+
 def test_high_risk_waits_for_deep_then_finalizes_for_review(harness):
     harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
     harness.deep.outcomes.append(
@@ -267,6 +296,8 @@ def test_high_risk_waits_for_deep_then_finalizes_for_review(harness):
     first = harness.processor.resume(accepted.analysis_id)
     assert first.phase == "WAITING_DEEP" and first.current_stage == "CAPA_FLOSS"
     assert harness.deep.calls == []
+
+    assert first.initial_result["triggered_signals"] == ["UNCERTAIN_PROBABILITY"]
     waiting = next_step(harness, accepted.analysis_id)
     assert waiting.phase == "WAITING_DEEP" and waiting.current_stage == "SPEAKEASY"
     assert waiting.deep_result["status"] == "RUNNING"
@@ -464,7 +495,7 @@ def test_checkpoint_database_failure_is_retryable_and_preserves_input(harness):
     retry = harness.processor.resume(accepted.analysis_id)
     assert retry.phase == "INITIAL" and retry.error["code"] == "DATABASE_ERROR"
     assert retry.error["retry_count"] == 1 and not retry.claimed
-    assert (harness.storage.root / accepted.analysis_id / "sample.bin").exists()
+    assert (harness.storage.root / accepted.sha256 / "sample.bin").exists()
     next_step(
         harness, accepted.analysis_id, seconds=harness.config.retry_delay_seconds + 0.01
     )
@@ -550,19 +581,23 @@ def test_resume_ready_respects_stop_and_poll_backoff(harness):
     assert len(harness.initial.calls) == 1
 
 
-def test_idempotent_replay_discards_only_the_new_upload(harness):
+def test_idempotent_replay_and_new_analysis_share_one_original(harness):
     original = submit(harness, idempotency_key="same-request")
     replay = submit(harness, idempotency_key="same-request")
     assert replay.analysis_id == original.analysis_id
     assert list(harness.repository.rows) == [original.analysis_id]
     assert [path.parent.name for path in harness.storage.root.glob("*/sample.bin")] == [
-        original.analysis_id
+        original.sha256
     ]
     # Equal hashes with a new request are separate analyses with duplicate metadata.
     duplicate = submit(harness)
     assert duplicate.analysis_id != original.analysis_id
     assert duplicate.duplicate_of == original.analysis_id
-    assert len(list(harness.storage.root.glob("*/sample.bin"))) == 2
+    assert len(list(harness.storage.root.glob("*/sample.bin"))) == 1
+    assert (
+        harness.service.get(duplicate.analysis_id).file_location
+        == harness.service.get(original.analysis_id).file_location
+    )
 
 
 def test_conflicting_idempotency_key_cleans_up_rejected_upload(harness):
@@ -572,7 +607,7 @@ def test_conflicting_idempotency_key_cleans_up_rejected_upload(harness):
     assert error.value.code == "IDEMPOTENCY_CONFLICT"
     assert list(harness.repository.rows) == [original.analysis_id]
     assert [path.parent.name for path in harness.storage.root.glob("*/sample.bin")] == [
-        original.analysis_id
+        original.sha256
     ]
 
 
@@ -612,25 +647,54 @@ def test_batch_database_failure_removes_all_unregistered_uploads(harness):
 def test_uncertain_database_commit_does_not_delete_accepted_original(
     harness, monkeypatch
 ):
-    original_register = harness.repository.register
+    original_transaction = harness.repository.sample_transaction
+    calls = 0
 
-    def commit_then_disconnect(*args, **kwargs):
-        original_register(*args, **kwargs)
-        raise BackendError(
-            "DATABASE_ERROR", "Synthetic connection loss after commit.", retryable=True
-        )
+    @contextmanager
+    def commit_then_disconnect(hashes):
+        nonlocal calls
+        calls += 1
+        with original_transaction(hashes) as transaction:
+            yield transaction
+        if calls == 1:
+            raise BackendError(
+                "DATABASE_ERROR",
+                "Synthetic connection loss after commit.",
+                retryable=True,
+            )
 
-    monkeypatch.setattr(harness.repository, "register", commit_then_disconnect)
+    monkeypatch.setattr(
+        harness.repository, "sample_transaction", commit_then_disconnect
+    )
     with pytest.raises(BackendError):
         submit(harness)
     assert len(harness.repository.rows) == 1
     analysis_id = next(iter(harness.repository.rows))
-    assert (harness.storage.root / analysis_id / "sample.bin").exists()
+    assert (
+        harness.storage.root / harness.service.get(analysis_id).sha256 / "sample.bin"
+    ).exists()
     assert harness.repository.calls["location_referenced"] == 1
 
 
-def test_database_uncertainty_during_cleanup_keeps_original(harness, caplog):
-    harness.repository.failures.update(register=1, location_referenced=1)
+def test_database_uncertainty_during_cleanup_keeps_original(
+    harness, caplog, monkeypatch
+):
+    original_transaction = harness.repository.sample_transaction
+    calls = 0
+
+    @contextmanager
+    def fail_commit(hashes):
+        nonlocal calls
+        calls += 1
+        with original_transaction(hashes) as transaction:
+            yield transaction
+            if calls == 1:
+                raise BackendError(
+                    "DATABASE_ERROR", "Synthetic rollback before commit", retryable=True
+                )
+
+    monkeypatch.setattr(harness.repository, "sample_transaction", fail_commit)
+    harness.repository.failures["location_referenced"] = 1
     with pytest.raises(BackendError) as error:
         submit(harness)
     assert error.value.code == "DATABASE_ERROR"
@@ -744,8 +808,8 @@ def test_cleanup_is_previewed_idempotent_and_never_removes_active_input(harness)
     complete(harness, old.analysis_id)
     harness.clock.advance(harness.config.retention_hours * 3600 + 1)
     active = submit(harness, marker=1)
-    old_path = harness.storage.root / old.analysis_id / "sample.bin"
-    active_path = harness.storage.root / active.analysis_id / "sample.bin"
+    old_path = harness.storage.root / old.sha256 / "sample.bin"
+    active_path = harness.storage.root / active.sha256 / "sample.bin"
     preview = harness.service.cleanup()
     assert (
         preview["candidate_ids"] == [old.analysis_id] and preview["deleted_ids"] == []
@@ -762,11 +826,11 @@ def test_cleanup_can_retry_after_file_delete_and_marker_database_failure(harness
     accepted = submit(harness)
     complete(harness, accepted.analysis_id)
     harness.clock.advance(harness.config.retention_hours * 3600 + 1)
-    harness.repository.failures["mark_storage_deleted"] = 1
+    harness.repository.failures["mark_sample_deleted"] = 1
     with pytest.raises(BackendError) as error:
         harness.service.cleanup(delete=True)
     assert error.value.code == "DATABASE_ERROR"
-    assert not (harness.storage.root / accepted.analysis_id / "sample.bin").exists()
+    assert not (harness.storage.root / accepted.sha256 / "sample.bin").exists()
     assert harness.service.get(accepted.analysis_id).storage_deleted_at is None
     assert harness.service.cleanup(delete=True)["deleted_ids"] == [accepted.analysis_id]
 
@@ -832,3 +896,212 @@ def test_operation_deadline_remains_retryable_when_observed_by_heartbeat(harness
     with pytest.raises(BackendError) as error:
         lease.check()
     assert error.value.code == "PROCESSING_TIMEOUT" and error.value.retryable is True
+
+
+def test_shared_original_preserves_request_filenames_and_independent_results(harness):
+    first = harness.service.submit([(io.BytesIO(harmless_pe_header()), "first.exe")])
+    second = harness.service.submit([(io.BytesIO(harmless_pe_header()), "second.dll")])
+    assert (
+        first.analysis_id != second.analysis_id
+        and second.duplicate_of == first.analysis_id
+    )
+    first_row, second_row = (
+        harness.service.get(row.analysis_id) for row in (first, second)
+    )
+    assert (
+        first_row.file_location
+        == second_row.file_location
+        == f"local://samples/{first.sha256}/sample.bin"
+    )
+    assert (first_row.filename, second_row.filename) == ("first.exe", "second.dll")
+    assert len(harness.repository.sample_objects) == 1
+    assert (
+        complete(harness, first.analysis_id).initial_result["initial_verdict"]
+        == "AUTO_BENIGN"
+    )
+    harness.initial.value = initial_result("AUTO_MALICIOUS")
+    assert (
+        complete(harness, second.analysis_id).initial_result["initial_verdict"]
+        == "AUTO_MALICIOUS"
+    )
+    for accepted, verdict in ((first, "AUTO_BENIGN"), (second, "AUTO_MALICIOUS")):
+        references = harness.repository.list_artifacts(accepted.analysis_id)
+        assert {ref.tool for ref in references} == {
+            "INITIAL_ANALYSIS",
+            "FINAL_ASSESSMENT",
+        }
+        initial = next(ref for ref in references if ref.tool == "INITIAL_ANALYSIS")
+        assert (
+            json.loads(harness.processor.artifacts.read(initial))["initial_verdict"]
+            == verdict
+        )
+        assert initial.identity.key.startswith(
+            f"{first.sha256}/analyses/{accepted.analysis_id}/"
+        )
+    assert len(list(harness.storage.root.glob("*/sample.bin"))) == 1
+    assert (
+        harness.storage.root / first.sha256 / "sample.bin"
+    ).read_bytes() == harmless_pe_header()
+
+
+def test_shared_original_waits_for_all_references_to_finish_and_expire(harness):
+    old = submit(harness)
+    complete(harness, old.analysis_id)
+    harness.clock.advance(harness.config.retention_hours * 3600 + 1)
+    newer = submit(harness)
+    path = harness.storage.root / old.sha256 / "sample.bin"
+    active = harness.service.cleanup(delete=True)
+    assert active["deleted_ids"] == [] and active["skipped_ids"] == [old.analysis_id]
+    assert path.exists()
+    complete(harness, newer.analysis_id)
+    young = harness.service.cleanup(delete=True)
+    assert young["deleted_ids"] == [] and path.exists()
+    harness.clock.advance(harness.config.retention_hours * 3600 + 1)
+    # Even a limit of one candidate must examine every reference to that object.
+    deleted = harness.service.cleanup(delete=True, limit=1)
+    assert set(deleted["deleted_ids"]) == {old.analysis_id, newer.analysis_id}
+    assert deleted["deleted_sample_count"] == 1 and not path.exists()
+    for accepted in (old, newer):
+        assert harness.service.get(accepted.analysis_id).storage_deleted_at is not None
+        for reference in harness.repository.list_artifacts(accepted.analysis_id):
+            assert json.loads(harness.processor.artifacts.read(reference))
+    assert harness.service.cleanup(delete=True)["candidate_ids"] == []
+
+
+def test_shared_cleanup_checks_worker_guard_for_other_analysis_references(harness):
+    harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
+    first, second = submit(harness), submit(harness)
+    complete(harness, first.analysis_id)
+    complete(harness, second.analysis_id)
+    harness.clock.advance(harness.config.retention_hours * 3600 + 1)
+    harness.service.config = replace(
+        harness.config, storage_mode="s3", s3_bucket="backend-test-only"
+    )
+    checked = []
+
+    def worker_guard(record):
+        checked.append(record.analysis_id)
+        return record.analysis_id != second.analysis_id
+
+    harness.service.cleanup_guard = worker_guard
+    result = harness.service.cleanup(delete=True, limit=1)
+    assert second.analysis_id in checked and result["deleted_ids"] == []
+    assert (harness.storage.root / first.sha256 / "sample.bin").exists()
+
+
+def test_expired_idempotency_replay_does_not_recreate_original_but_new_request_does(
+    harness,
+):
+    original = submit(harness, idempotency_key="expired-request")
+    complete(harness, original.analysis_id)
+    harness.clock.advance(harness.config.retention_hours * 3600 + 1)
+    assert harness.service.cleanup(delete=True)["deleted_sample_count"] == 1
+    path = harness.storage.root / original.sha256 / "sample.bin"
+    assert not path.exists()
+    assert (
+        submit(harness, idempotency_key="expired-request").analysis_id
+        == original.analysis_id
+    )
+    assert not path.exists()
+    newer = submit(harness)
+    assert newer.analysis_id != original.analysis_id and path.exists()
+    record = harness.service.get(newer.analysis_id)
+    assert record.storage_deleted_at is None
+    assert harness.repository.sample_objects[record.file_location][2] is None
+    assert harness.service.get(original.analysis_id).storage_deleted_at is not None
+
+
+def test_publish_failure_rolls_back_batch_and_preserves_preexisting_shared_sample(
+    harness, monkeypatch
+):
+    existing = submit(harness)
+    original_publish = harness.storage.publish
+    calls = 0
+
+    def fail_third(prepared):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise BackendError(
+                "STORAGE_UNAVAILABLE", "Synthetic publish failure", retryable=True
+            )
+        return original_publish(prepared)
+
+    monkeypatch.setattr(harness.storage, "publish", fail_third)
+    with pytest.raises(BackendError):
+        harness.service.submit(
+            [(io.BytesIO(harmless_pe_header(i)), f"sample-{i}.exe") for i in range(3)],
+            batch=True,
+            idempotency_key="failed-publication",
+        )
+    assert list(harness.repository.rows) == [existing.analysis_id]
+    assert (
+        harness.repository.batches == {}
+        and "failed-publication" not in harness.repository.idempotency
+    )
+    assert len(harness.repository.sample_objects) == 1
+    assert list(harness.storage.root.glob("*/sample.bin")) == [
+        harness.storage.root / existing.sha256 / "sample.bin"
+    ]
+    assert not list(harness.storage.root.glob(".upload-*"))
+
+
+def test_artifact_and_checkpoint_registration_roll_back_together(harness):
+    accepted = submit(harness)
+    harness.repository.failures["save_initial"] = 1
+    deferred = harness.processor.resume(accepted.analysis_id)
+    assert deferred.initial_result is None and deferred.phase == "INITIAL"
+    assert harness.repository.list_artifacts(accepted.analysis_id) == []
+    # A published but uncommitted attempt never becomes a successful checkpoint.
+    assert list(
+        (harness.storage.root / accepted.sha256 / "analyses").rglob("report.json")
+    )
+    harness.clock.advance(harness.config.retry_delay_seconds + 1)
+    completed = complete(harness, accepted.analysis_id)
+    assert completed.status == "COMPLETED"
+    assert len(harness.repository.list_artifacts(accepted.analysis_id)) == 2
+
+
+def test_artifact_publication_cannot_commit_a_checkpoint_past_the_operation_deadline(
+    harness, monkeypatch
+):
+    accepted = submit(harness)
+    original = harness.processor.artifacts.put_json
+
+    def slow_publication(*args, **kwargs):
+        reference = original(*args, **kwargs)
+        harness.clock.advance(harness.config.operation_timeout_seconds + 0.01)
+        return reference
+
+    monkeypatch.setattr(harness.processor.artifacts, "put_json", slow_publication)
+    record = harness.processor.resume(accepted.analysis_id)
+    assert (
+        record.error["code"] == "PROCESSING_TIMEOUT" and record.initial_result is None
+    )
+    assert harness.repository.list_artifacts(accepted.analysis_id) == []
+
+
+@pytest.mark.parametrize(
+    "code,retryable",
+    [("ARTIFACT_STORAGE_ERROR", True), ("UNSAFE_ARTIFACT_PATH", False)],
+)
+def test_artifact_storage_failure_is_recorded_without_a_malicious_verdict(
+    harness, monkeypatch, code, retryable
+):
+    from trust_triage.storage import ArtifactError
+
+    accepted = submit(harness)
+
+    def unavailable(*args, **kwargs):
+        raise ArtifactError(code, "Synthetic storage failure", retryable=retryable)
+
+    monkeypatch.setattr(harness.processor.artifacts, "put_json", unavailable)
+    for _ in range(harness.config.max_attempts):
+        row = next_step(
+            harness,
+            accepted.analysis_id,
+            seconds=harness.config.retry_delay_seconds + 1,
+        )
+    assert row.status == "FAILED" and row.error["code"] == code
+    assert row.final_assessment["final_verdict"] == "UNCERTAIN"
+    assert harness.repository.list_artifacts(accepted.analysis_id) == []
