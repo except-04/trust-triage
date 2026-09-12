@@ -1,0 +1,610 @@
+"""Deterministic, detached persistence for HTTP/processor tests without PostgreSQL."""
+
+from __future__ import annotations
+
+import json
+import threading
+from collections import Counter
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+from trust_triage.backend_api.errors import BackendError
+from trust_triage.backend_api.repository import (
+    AnalysisRecord,
+    BatchRecord,
+    Claim,
+    json_object,
+    registration_input,
+    validate_listing,
+    validate_review,
+)
+from trust_triage.storage.artifacts import ArtifactReference
+
+
+def _copy(value):
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+class MemoryAnalysisRepository:
+    def __init__(self):
+        self.rows = {}
+        self.batches = {}
+        self.input_reports = {}
+        self.idempotency = {}
+        self.leases = {}
+        self.retries = {}
+        self.reviews = {}
+        self.sample_objects = {}
+        self.artifacts = {}
+        self.calls = Counter()
+        self.failures = Counter()
+        self.now = datetime.now(timezone.utc)
+        self._lock = threading.RLock()
+
+    def _fault(self, operation):
+        self.calls[operation] += 1
+        if self.failures[operation] > 0:
+            self.failures[operation] -= 1
+            raise BackendError(
+                "DATABASE_ERROR",
+                "Synthetic temporary storage failure",
+                http_status=503,
+                retryable=True,
+            )
+
+    def _tick(self):
+        self.now += timedelta(microseconds=1)
+        return self.now.isoformat()
+
+    def advance(self, seconds):
+        self.now += timedelta(seconds=seconds)
+
+    def initialize(self):
+        self._fault("initialize")
+
+    def check(self):
+        self._fault("check")
+
+    @contextmanager
+    def sample_transaction(self, sha256s):
+        with self._lock:
+            names = (
+                "rows",
+                "batches",
+                "input_reports",
+                "idempotency",
+                "reviews",
+                "sample_objects",
+                "artifacts",
+                "leases",
+                "retries",
+            )
+            snapshot = {name: deepcopy(getattr(self, name)) for name in names}
+            try:
+                yield self
+            except BaseException:
+                for name, value in snapshot.items():
+                    setattr(self, name, value)
+                raise
+
+    def register(self, analyses, *, batch_id=None, idempotency_key=None):
+        return self._register(
+            analyses, batch_id=batch_id, idempotency_key=idempotency_key
+        ).analyses
+
+    def register_batch(self, analyses, *, batch_id, input_report, idempotency_key=None):
+        return self._register(
+            analyses,
+            batch_id=batch_id,
+            input_report=input_report,
+            idempotency_key=idempotency_key,
+        )
+
+    def _register(
+        self, analyses, *, batch_id=None, idempotency_key=None, input_report=None
+    ):
+        self._fault("register")
+        inputs, fingerprint, kind = registration_input(
+            analyses, batch_id, idempotency_key, input_report
+        )
+        with self._lock:
+            previous = (
+                self.idempotency.get(idempotency_key)
+                if idempotency_key is not None
+                else None
+            )
+            if previous is not None:
+                if previous[:2] != (fingerprint, kind):
+                    raise BackendError(
+                        "IDEMPOTENCY_CONFLICT",
+                        "Idempotency key was already used for a different request",
+                        http_status=409,
+                    )
+                report = self.input_reports.get(previous[3])
+                return BatchRecord(
+                    previous[3],
+                    [self.get(key) for key in previous[2]],
+                    report.model_copy(deep=True) if report else None,
+                )
+            if (batch_id is not None and batch_id in self.batches) or any(
+                item["analysis_id"] in self.rows for item in inputs
+            ):
+                raise BackendError(
+                    "REGISTRATION_CONFLICT",
+                    "Analysis registration conflicts with existing input",
+                    http_status=409,
+                )
+            for item in inputs:
+                existing = self.sample_objects.get(item["file_location"])
+                if existing is not None and existing[:2] != (
+                    item["sha256"],
+                    item["size_bytes"],
+                ):
+                    raise BackendError(
+                        "STORAGE_IDENTITY_CONFLICT",
+                        "Storage identifies different bytes",
+                        http_status=409,
+                    )
+            ids = []
+            for item in inputs:
+                self.sample_objects[item["file_location"]] = (
+                    item["sha256"],
+                    item["size_bytes"],
+                    None,
+                )
+                duplicate = next(
+                    (
+                        row.analysis_id
+                        for row in self.rows.values()
+                        if row.sha256 == item["sha256"]
+                    ),
+                    None,
+                )
+                stamp = self._tick()
+                record = AnalysisRecord(
+                    **item,
+                    batch_id=batch_id,
+                    duplicate_of=duplicate,
+                    created_at=stamp,
+                    updated_at=stamp,
+                )
+                self.rows[record.analysis_id] = record
+                ids.append(record.analysis_id)
+            if batch_id is not None:
+                self.batches[batch_id] = ids
+                self.input_reports[batch_id] = (
+                    input_report.model_copy(deep=True) if input_report else None
+                )
+            if idempotency_key is not None:
+                self.idempotency[idempotency_key] = (fingerprint, kind, ids, batch_id)
+            return BatchRecord(
+                batch_id,
+                [self.get(key) for key in ids],
+                input_report.model_copy(deep=True) if input_report else None,
+            )
+
+    def get(self, analysis_id):
+        self._fault("get")
+        with self._lock:
+            row = self.rows.get(analysis_id)
+            if row is None:
+                return None
+            lease = self.leases.get(analysis_id)
+            return replace(
+                row,
+                claimed=bool(lease and lease[1] > self.now),
+                initial_result=_copy(row.initial_result),
+                deep_result=_copy(row.deep_result),
+                final_assessment=_copy(row.final_assessment),
+                error=_copy(row.error),
+            )
+
+    def list_analyses(
+        self,
+        limit=20,
+        offset=0,
+        status=None,
+        sha256=None,
+        *,
+        batch_id=None,
+        verdict=None,
+        sort="newest",
+    ):
+        self._fault("list_analyses")
+        validate_listing(batch_id, verdict, sort)
+        with self._lock:
+            if batch_id is not None and batch_id not in self.batches:
+                raise BackendError(
+                    "BATCH_NOT_FOUND", "Batch was not found", http_status=404
+                )
+            records = sorted(
+                (
+                    row
+                    for row in self.rows.values()
+                    if (status is None or row.status == status)
+                    and (sha256 is None or row.sha256 == sha256)
+                    and (batch_id is None or row.batch_id == batch_id)
+                    and (
+                        verdict is None
+                        or (row.initial_result or {}).get("initial_verdict") == verdict
+                    )
+                ),
+                key=lambda row: (row.created_at, row.analysis_id),
+                reverse=True,
+            )
+            if sort == "high_risk_first":
+                priorities = {
+                    "HIGH_RISK_UNCERTAIN": 0,
+                    "AUTO_MALICIOUS": 1,
+                    "AUTO_BENIGN": 2,
+                }
+                records.sort(
+                    key=lambda row: (
+                        4
+                        if row.status == "FAILED"
+                        else priorities.get(
+                            (row.initial_result or {}).get("initial_verdict"), 3
+                        )
+                    )
+                )
+            elif sort == "input_order":
+                positions = {
+                    key: index for index, key in enumerate(self.batches[batch_id])
+                }
+                records.sort(key=lambda row: positions[row.analysis_id])
+            return [
+                self.get(row.analysis_id) for row in records[offset : offset + limit]
+            ], len(records)
+
+    def get_batch(self, batch_id):
+        result = self.batch_record(batch_id)
+        return None if result is None else result.analyses
+
+    def batch_record(self, batch_id):
+        self._fault("get_batch")
+        with self._lock:
+            ids = self.batches.get(batch_id)
+            report = self.input_reports.get(batch_id)
+            return (
+                None
+                if ids is None
+                else BatchRecord(
+                    batch_id,
+                    [self.get(key) for key in ids],
+                    report.model_copy(deep=True) if report else None,
+                )
+            )
+
+    def _ready(self, row):
+        lease = self.leases.get(row.analysis_id)
+        retry = self.retries.get(row.analysis_id)
+        return (
+            not row.terminal
+            and (not lease or lease[1] <= self.now)
+            and (retry is None or retry <= self.now)
+        )
+
+    def pending_ids(self, limit=10):
+        self._fault("pending_ids")
+        with self._lock:
+            return [
+                row.analysis_id
+                for row in sorted(
+                    self.rows.values(),
+                    key=lambda row: (row.updated_at, row.analysis_id),
+                )
+                if self._ready(row)
+            ][:limit]
+
+    def claim(self, analysis_id, lease_seconds):
+        self._fault("claim")
+        with self._lock:
+            row = self.get(analysis_id)
+            if row is None:
+                raise BackendError(
+                    "ANALYSIS_NOT_FOUND", "Analysis was not found", http_status=404
+                )
+            if not self._ready(row):
+                return Claim(row)
+            token = str(uuid4())
+            self.leases[analysis_id] = (
+                token,
+                self.now + timedelta(seconds=lease_seconds),
+            )
+            self.rows[analysis_id] = replace(
+                row,
+                status="RUNNING",
+                current_stage="INITIAL_ANALYSIS"
+                if row.phase == "INITIAL"
+                else row.current_stage,
+                attempt_count=row.attempt_count + 1,
+                updated_at=self._tick(),
+            )
+            return Claim(self.get(analysis_id), token)
+
+    def _owns(self, analysis_id, token):
+        row = self.rows.get(analysis_id)
+        lease = self.leases.get(analysis_id)
+        return bool(
+            row
+            and not row.terminal
+            and lease
+            and lease[0] == token
+            and lease[1] > self.now
+        )
+
+    def renew(self, analysis_id, token, lease_seconds):
+        self._fault("renew")
+        with self._lock:
+            if not self._owns(analysis_id, token):
+                return False
+            self.leases[analysis_id] = (
+                token,
+                self.now + timedelta(seconds=lease_seconds),
+            )
+            self.rows[analysis_id] = replace(
+                self.rows[analysis_id], updated_at=self._tick()
+            )
+            return True
+
+    def release(self, analysis_id, token, error=None, next_retry_at=None):
+        self._fault("release")
+        with self._lock:
+            if not self._owns(analysis_id, token):
+                return False
+            retry = (
+                datetime.fromisoformat(next_retry_at.replace("Z", "+00:00"))
+                if isinstance(next_retry_at, str)
+                else next_retry_at
+            )
+            if retry is not None and (
+                not isinstance(retry, datetime) or retry.tzinfo is None
+            ):
+                raise ValueError("Timezone-aware next_retry_at required")
+            payload = json_object(error) if error is not None else None
+            self.rows[analysis_id] = replace(
+                self.rows[analysis_id], error=payload, updated_at=self._tick()
+            )
+            self.leases.pop(analysis_id, None)
+            self.retries[analysis_id] = retry
+            return True
+
+    @staticmethod
+    def _identity(row, payload):
+        if any(
+            key in payload and payload[key] != getattr(row, key)
+            for key in ("sha256", "analysis_id")
+        ):
+            raise BackendError(
+                "INVALID_PERSISTED_STATE",
+                "Analysis state failed persistence validation",
+                http_status=422,
+            )
+
+    def save_initial(self, analysis_id, token, result, needs_deep):
+        self._fault("save_initial")
+        payload = json_object(result)
+        with self._lock:
+            if (
+                not self._owns(analysis_id, token)
+                or self.rows[analysis_id].phase != "INITIAL"
+            ):
+                return False
+            row = self.rows[analysis_id]
+            self._identity(row, payload)
+            self.rows[analysis_id] = replace(
+                row,
+                initial_result=payload,
+                phase="WAITING_DEEP" if needs_deep else "FINALIZING",
+                current_stage="CAPA_FLOSS" if needs_deep else "FINAL_ASSESSMENT",
+                error=None,
+                updated_at=self._tick(),
+            )
+            self.retries.pop(analysis_id, None)
+            return True
+
+    def save_deep(self, analysis_id, token, snapshot, *, finished, current_stage):
+        self._fault("save_deep")
+        payload = json_object(snapshot)
+        with self._lock:
+            if (
+                not self._owns(analysis_id, token)
+                or self.rows[analysis_id].phase != "WAITING_DEEP"
+            ):
+                return False
+            row = self.rows[analysis_id]
+            self._identity(row, payload)
+            self.rows[analysis_id] = replace(
+                row,
+                deep_result=payload,
+                phase="FINALIZING" if finished else "WAITING_DEEP",
+                current_stage="FINAL_ASSESSMENT" if finished else current_stage,
+                error=None,
+                updated_at=self._tick(),
+            )
+            self.retries.pop(analysis_id, None)
+            return True
+
+    def finish(self, analysis_id, token, final_assessment, *, error=None):
+        self._fault("finish")
+        payload = json_object(final_assessment)
+        failure = json_object(error) if error is not None else None
+        with self._lock:
+            if not self._owns(analysis_id, token):
+                return False
+            row = self.rows[analysis_id]
+            if failure is None and row.phase != "FINALIZING":
+                return False
+            self._identity(row, payload)
+            stamp = self._tick()
+            status = "FAILED" if failure is not None else "COMPLETED"
+            self.rows[analysis_id] = replace(
+                row,
+                final_assessment=payload,
+                error=failure,
+                phase="DONE",
+                status=status,
+                current_stage="FINAL_ASSESSMENT",
+                updated_at=stamp,
+                completed_at=stamp,
+            )
+            self.leases.pop(analysis_id, None)
+            self.retries.pop(analysis_id, None)
+            return True
+
+    def cleanup_candidates(self, before_datetime, limit=10):
+        self._fault("cleanup_candidates")
+        with self._lock:
+            return [
+                self.get(row.analysis_id)
+                for row in sorted(
+                    self.rows.values(),
+                    key=lambda row: (row.completed_at or "", row.analysis_id),
+                )
+                if row.terminal
+                and row.storage_deleted_at is None
+                and datetime.fromisoformat(row.completed_at) < before_datetime
+            ][:limit]
+
+    def location_records(self, location):
+        self._fault("location_records")
+        with self._lock:
+            return [
+                self.get(row.analysis_id)
+                for row in sorted(self.rows.values(), key=lambda row: row.analysis_id)
+                if row.file_location == location and row.storage_deleted_at is None
+            ]
+
+    def mark_sample_deleted(self, location):
+        self._fault("mark_sample_deleted")
+        with self._lock:
+            references = self.location_records(location)
+            if any(not row.terminal for row in references):
+                raise BackendError(
+                    "SAMPLE_IN_USE",
+                    "Sample is still used by an analysis",
+                    http_status=409,
+                )
+            stamp = self._tick()
+            for row in references:
+                self.rows[row.analysis_id] = replace(row, storage_deleted_at=stamp)
+            if location in self.sample_objects:
+                sha256, size, deleted = self.sample_objects[location]
+                self.sample_objects[location] = (sha256, size, deleted or stamp)
+            return [row.analysis_id for row in references]
+
+    def location_referenced(self, location):
+        self._fault("location_referenced")
+        return any(
+            row.file_location == location and row.storage_deleted_at is None
+            for row in self.rows.values()
+        )
+
+    def record_artifact(self, reference, token):
+        self._fault("record_artifact")
+        reference = ArtifactReference(**reference.to_dict())
+        with self._lock:
+            if not self._owns(reference.analysis_id, token):
+                return False
+            row = self.rows[reference.analysis_id]
+            if row.sha256 != reference.sha256:
+                raise BackendError(
+                    "ARTIFACT_IDENTITY_CONFLICT",
+                    "Artifact belongs to another sample",
+                    http_status=409,
+                )
+            key = (
+                reference.analysis_id,
+                reference.tool,
+                reference.tool_run_id,
+                reference.name,
+            )
+            existing = self.artifacts.get(key)
+            if existing is not None and any(
+                getattr(existing, name) != value
+                for name, value in reference.to_dict().items()
+                if name != "created_at"
+            ):
+                raise BackendError(
+                    "ARTIFACT_CONFLICT",
+                    "Artifact reference already exists",
+                    http_status=409,
+                )
+            self.artifacts.setdefault(key, reference)
+            return True
+
+    def list_artifacts(self, analysis_id):
+        self._fault("list_artifacts")
+        with self._lock:
+            return sorted(
+                [
+                    value
+                    for value in self.artifacts.values()
+                    if value.analysis_id == analysis_id
+                ],
+                key=lambda ref: (ref.created_at, ref.tool, ref.tool_run_id, ref.name),
+            )
+
+    def save_review(
+        self,
+        analysis_id,
+        *,
+        analyst_final_verdict,
+        analyst_notes,
+        reviewer_id,
+        expected_revision,
+    ):
+        self._fault("save_review")
+        validate_review(
+            analyst_final_verdict, analyst_notes, reviewer_id, expected_revision
+        )
+        with self._lock:
+            row = self.rows.get(analysis_id)
+            if row is None:
+                raise BackendError(
+                    "ANALYSIS_NOT_FOUND", "Analysis was not found", http_status=404
+                )
+            if not row.terminal:
+                raise BackendError(
+                    "ANALYSIS_NOT_FINISHED",
+                    "Analysis must finish before analyst review",
+                    http_status=409,
+                )
+            if row.review_revision != expected_revision:
+                raise BackendError(
+                    "REVIEW_CONFLICT",
+                    "A newer analyst review already exists",
+                    http_status=409,
+                )
+            revision, stamp = expected_revision + 1, self._tick()
+            review = {
+                "review_id": str(uuid4()),
+                "analysis_id": analysis_id,
+                "revision": revision,
+                "analyst_final_verdict": analyst_final_verdict,
+                "analyst_notes": analyst_notes,
+                "reviewer_id": reviewer_id,
+                "review_status": "PENDING"
+                if analyst_final_verdict is None
+                else "COMPLETED",
+                "reviewed_at": stamp,
+            }
+            self.reviews.setdefault(analysis_id, []).append(review)
+            self.rows[analysis_id] = replace(
+                row,
+                review_revision=revision,
+                analyst_final_verdict=analyst_final_verdict,
+                updated_at=stamp,
+            )
+            return _copy(review)
+
+    def list_reviews(self, analysis_id):
+        self._fault("list_reviews")
+        return _copy(self.reviews.get(analysis_id, []))
+
+
+# Short alias for application test fixtures.
+MemoryRepository = MemoryAnalysisRepository

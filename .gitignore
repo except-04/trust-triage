@@ -237,6 +237,8 @@ __pycache__/
 
 # Environment variables
 .env
+docs/backend-api/.env.*
+!docs/backend-api/.env.example
 
 # MLflow local files
 mlflow.db

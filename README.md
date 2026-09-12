@@ -2,6 +2,14 @@
 
 악성코드 정적 분석 결과와 AI 모델의 신뢰도 정보를 결합하여 자동 판정, 심층 분석 및 분석가 검토 대상을 분류하는 신뢰도 기반 악성코드 Triage 시스템입니다.
 
+## Backend API
+
+파일 접수·진행 상태·분석 결과·전문가 검토를 제공하는 FastAPI 백엔드는 `src/trust_triage/backend_api`에 있습니다. [소스코드 구조와 처리 흐름](docs/backend-api/backend-structure.md), [API 종류와 설명](docs/backend-api/api-reference.md)을 참고하세요. [생성된 OpenAPI 명세](docs/backend-api/openapi.json)도 함께 제공합니다.
+
+HTTP 서버와 분석 처리기는 별도 프로세스로 실행합니다. 실제 모델 파일과 심층 분석 서비스는 해당 모듈의 준비가 필요하며, 미설정 상태에서 가짜 분석 결과를 반환하지 않습니다.
+
+DB·S3 등의 설정 예시는 루트의 [.env.backend.example](.env.backend.example)에 있습니다. 처음 설정할 때 이 파일을 `.env`로 복사해 실제 값을 채우고, 백엔드 실행 명령에 `--env-file .env`를 지정합니다.
+
 ## 개발 환경 설정
 
 아래 과정은 Windows 환경을 기준으로 작성되었습니다.
@@ -225,3 +233,10 @@ PE Feature 추출 방법은
 [`docs/feature-extraction/feature-extraction.md`](docs/feature-extraction/feature-extraction.md)에 정리되어 있습니다.
 공식 EMBER2024 Feature Version 3만 사용하며, `.exe`와 `.dll`을 실행하지 않고
 정적으로 읽어 고정 벡터를 반환합니다.
+
+## Backend API
+
+파일 접수·분석 결과·전문가 검토 API는 [API 안내](docs/backend-api/api-reference.md),
+실행 프로세스와 소스 구조는 [백엔드 구조](docs/backend-api/backend-structure.md)를 참고합니다.
+원본은 SHA-256 기준으로 공유하고 실행별 리포트를 함께 보관합니다.
+기존 DB 전환과 Worker용 저장 인터페이스는 [저장 구조 안내](docs/backend-api/storage.md)에 정리되어 있습니다.
