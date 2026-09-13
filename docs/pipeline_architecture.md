@@ -273,11 +273,11 @@ trust-triage/
 #### 모델 파일
 
 ```text
-baseline_model_lightgbm_tuned_500.pkl
+baseline_model_lightgbm_tuned_500_4way.pkl
 → 공식 Baseline
-→ TPR@FPR 0.1% = 91.20%
+→ TPR@FPR 0.1% = 92.49%
 
-baseline_model_xgb_500.pkl
+baseline_model_xgb_500_4way_1000cap.pkl
 → Disagreement 계산용
 
 baseline_model_500.pkl
