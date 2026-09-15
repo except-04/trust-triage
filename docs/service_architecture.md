@@ -5,7 +5,7 @@
 >
 > 본 문서는 **“어떤 모듈이 어디에서 실행되고, 서로 어떻게 연결되는가”**를 설명합니다.
 >
-> - 분석 로직 순서: `pipeline_architecture.md`
+> - 분석 로직 순서: `pipeline_architecture_v3.md`
 > - 세부 JSON/API/Queue 계약: `interface_spec.md`
 > - 본 문서: `service_architecture.md`
 

@@ -202,19 +202,7 @@ accuracy/F1이 아니라 **ROC-AUC와 고정 FPR에서의 TPR**을 씁니다.
 - **디스크 부족** — 01의 `--min-free-gb`가 미리 잡아줍니다. HF 캐시가 별도
   드라이브에 쌓일 수 있으니 두 드라이브를 모두 보세요.
 
-## 현재 상태 (2026-08-24)
+## 현재 상태 (2026-09-10)
 
-`C:\EMBER\result`는 01~06을 완주한 상태지만 **3분할(train 0–39) 기준**입니다.
-코드는 4분할로 갱신되었으므로 `out\dev`는 지금 코드와 어긋나 있습니다.
-`X_tr.npy`가 옛 기준(3,200,000행)이고 `idx_val.npy`가 없습니다. 아래를 돌리면
-정합해집니다 (약 8분):
-
-```bash
-python split_qc.py --root C:\EMBER\result --force
-```
-```bash
-python materialize.py --root C:\EMBER\result --skip-lockbox --verify
-```
-```bash
-python manifest.py --root C:\EMBER\result --thrember-repo C:\EMBER\src\EMBER2024
-```
+`C:\EMBER\result`는 01~06을 완주하여 **4분할 구조(train/val/calib/eval)**로 정상 갱신되었습니다.
+코드와 데이터가 완벽히 정합된 상태이므로 추가적인 분할 재수행이 필요하지 않습니다.

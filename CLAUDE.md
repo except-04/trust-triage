@@ -58,7 +58,7 @@ Key invariant repeated throughout this module: **training data and a live extrac
 
 Six numbered stage scripts (`download.py` … `manifest.py`, run via `run_all.ps1`/`run_all.sh`) turn raw EMBER2024 Win32/Win64 data into a reproducible, time-based train/calibration/eval split plus a sealed lockbox (test/challenge). Each stage writes a completion marker under `.state/` so reruns skip finished stages (`--force` to redo). `src/preprocessing/README.md` documents *why* each design choice was made — read it before touching this pipeline; the highlights:
 
-- **Time-based split only**, via `week_id`: weeks 0–39 = train, 40–45 = calibration, 46–51 = eval. Never re-split randomly/by stratification — EMBER2024 is explicitly non-IID over time, and calibration/eval must stay equal-width (6 weeks each) so eval's performance drift is a valid proxy for lockbox drift.
+- **Time-based split only**, via `week_id`: weeks 0–33 = train, 34–39 = validation, 40–45 = calibration, 46–51 = eval. Never re-split randomly/by stratification — EMBER2024 is explicitly non-IID over time, and calibration/eval must stay equal-width (6 weeks each) so eval's performance drift is a valid proxy for lockbox drift.
 - **Never call `thrember.read_vectorized_features()`** — it materializes the full matrix in RAM (~21GB+). Use `common.open_dat()` / `np.memmap` instead; `common.py`'s `Layout` class centralizes the on-disk directory structure (`dataset/`, `out/dev/`, `out/lockbox/`, `out/index/`, `out/reports/`).
 - Metadata (`sha256`, `week_id`, `file_type`, `family`, `label`) is extracted separately in stage 03, in the same row order as the vectorized features, and stored as pandas pickle (not parquet — avoids native DLLs that Windows application-control policies can block). Row-count/label consistency is asserted immediately; a mismatch aborts the pipeline because it would silently invalidate every downstream split.
 - **NaN/inf are preserved, never imputed**, because missingness itself is a predictive signal in EMBER features. LightGBM handles NaN natively; only sklearn/neural-net models should impute (train-set median + a missingness-indicator column, to avoid leakage).
@@ -74,7 +74,7 @@ Standalone scripts (not a package) that train/compare LightGBM baselines against
 - `docs/feature_schema.md` — canonical list of every feature name/block the extraction module must produce and the model/calibration/JRR teams consume. Do not introduce feature names not listed here without a full-team doc update first.
 - `docs/docs_api_contract.md` — draft REST endpoints for the not-yet-built FastAPI service (`/analyze/file`, `/analyze/hash`, `/queue/*`, `/review/{file_id}/verdict`) and the Slack alert payload shape.
 - `docs/docs_eval_lockbox_policy.md` — binding policy: metrics (ROC-AUC + TPR@FPR only), threshold-from-calibration-only rule, lockbox handling, kill-test criteria for the Joint Risk Router and the Speakeasy emulation extension.
-- `docs/docs_sqlite_schema.md` — planned SQLite schema (`feature_cache`, `analysis_records`, `emulation_results`) for hash lookup and the review queue, not yet implemented.
+- `docs/docs_sqlite_schema.md` — (Legacy) planned SQLite schema. See PostgreSQL `schema.sql` and `docs/backend-api/storage.md` instead.
 - `docs/feature-extraction/` — feature-extraction module docs: `feature-extraction.md` (usage), `feature-selection.md` (selection-manifest contract), `ember-v3-schema.json` (schema manifest asserted against at runtime by `test_documented_ember_schema_matches_runtime_schema`), `plan.md` (module status/roadmap).
 
 ## Testing notes
@@ -86,8 +86,8 @@ Standalone scripts (not a package) that train/compare LightGBM baselines against
 
 For cross-module pipeline interfaces, follow:
 
-- `docs/pipeline_architecture.md`
-- `docs/feature_schema.md`
+- `docs/pipeline_architecture_v3.md`
+- `docs/interface_spec.md`
 - `docs/docs_eval_lockbox_policy.md`
 
 If code and these documents conflict, do not silently change the interface.
@@ -99,4 +99,4 @@ Team members work on separate branches and modules.
 
 - Do not modify another module just to make the current task easier.
 - If another module's interface needs to change, report the required change first.
-- Cross-module interface changes must be reflected in `docs/pipeline_architecture.md`. 
+- Cross-module interface changes must be reflected in `docs/pipeline_architecture_v3.md` and `docs/interface_spec.md`. 

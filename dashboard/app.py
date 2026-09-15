@@ -335,7 +335,6 @@ def mock_triage_profile(index):
             "disagreement": 0.02,
             "ood_score": 0.084,
             "difficulty_score": 2,
-            "risk_score": 8,
             "initial_verdict": initial_verdict,
             "route": "FINAL",
             "reason": "High Benign Confidence",
@@ -349,7 +348,6 @@ def mock_triage_profile(index):
             "disagreement": 0.01,
             "ood_score": 0.072,
             "difficulty_score": 3,
-            "risk_score": 96,
             "initial_verdict": initial_verdict,
             "route": "FINAL",
             "reason": "High Malicious Confidence",
@@ -368,7 +366,6 @@ def mock_triage_profile(index):
         "disagreement": 0.13,
         "ood_score": -0.031,
         "difficulty_score": 6,
-        "risk_score": 82,
         "initial_verdict": initial_verdict,
         "route": "DEEP_ANALYSIS",
         "reason": review_reasons[index % len(review_reasons)],
@@ -1563,10 +1560,6 @@ else:
             <div>
                 <div class="summary-label">Final Verdict</div>
                 {verdict_badge_markup(result.get('final_verdict') or 'Pending')}
-            </div>
-            <div>
-                <div class="summary-label">Risk Score</div>
-                <div class="summary-value summary-score">{result['risk_score']}</div>
             </div>
             <div>
                 <div class="summary-label">Route</div>

@@ -17,7 +17,7 @@
 ## 3. 데이터 분할 정책
 
 - **시간 기반 분할만 사용** (week_id 등), 무작위/층화 재분할 금지
-- train/calibration/eval 3분할 유지, calibration·eval 폭은 동일하게 (비대칭 시 시간 이동 대리지표로서의 의미 상실)
+- **train / val / calib / eval 4분할 유지**, calib·eval 폭은 동일하게 (비대칭 시 시간 이동 대리지표로서의 의미 상실)
 - **협회 데이터 수령 시**: 협회 데이터도 자체 시간 정보(수집일 등) 있으면 동일 원칙 적용. 없으면 Group-based Split(계열 단위)으로 대체하고 별도 정책 문서화
 
 ## 4. Lockbox 취급 규칙
@@ -32,20 +32,23 @@
 
 위험 신호(Calibration, 모델 불일치, OOD, 분석 난이도, 확장안) 각각을 제거했을 때 성능 변화를 반드시 확인. 효과 없는 신호는 최종 파이프라인에서 제외.
 
-## 6. Kill Test 기준
+## 6. Kill Test 기준 (부분 미구현)
 
 | 대상 | 기준 | 폐기 조건 |
 |---|---|---|
 | Joint Risk Router | 여러 검토예산(1/5/10/20%)에서 단순 confidence threshold보다 일관되게 우수해야 함 | 못 이기면 단순 정책으로 축소 |
 | 확장안(Speakeasy 에뮬레이션) | confidence/OOD 대비 추가 오판 회수 여부 | 추가 이득 없으면 정규 범위에서 제외 |
 
-## 7. 서비스 레벨 평가 (검토예산 정책 비교)
+> **참고**: 검토예산 1/5/10/20% 비율 비교 테스트는 현재 JRR 평가 코드(`evaluate_jrr.py`)에 정식 구현되지 않은 기획 단계의 과제입니다.
 
-무작위 선별 / 낮은 Confidence 순 / 높은 OOD 순 / 모델 불일치 순 / Joint Risk Router 순, 5개 정책을 검토예산 1/5/10/20% 각각에서 비교. 지표: 회수 오판 수, Review Yield.
+## 7. 서비스 레벨 평가 (검토예산 정책 비교 — 미구현)
+
+무작위 선별 / 낮은 Confidence 순 / 높은 OOD 순 / 모델 불일치 순 / Joint Risk Router 순, 5개 정책을 검토예산 1/5/10/20% 각각에서 비교. 지표: 회수 오판 수, Review Yield. (현재 파이프라인 미구현, 분석용 Jupyter Notebook 등에서 별도 수행 권장)
 
 ## 8. 재현성
 
 - 모든 실험은 MLflow에 기록 (`dataset_source`, `feature_set`, `split_type` 태그 필수)
+  - **주의**: 현재 JRR 스크립트(`evaluate_jrr.py` 등) 코드상에 MLflow 태그 자동 삽입이 미구현 상태이므로, 실험 실행 전 전역 환경 변수나 MLflow UI를 통해 **수동 지정**이 필요합니다.
 - Lockbox 파일 sha256은 `manifest.json` 기준으로 무결성 확인 가능해야 함
 
 ## 확정 필요 (회의 안건)
