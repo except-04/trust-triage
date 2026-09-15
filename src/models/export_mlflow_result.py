@@ -6,7 +6,7 @@ runs = mlflow.search_runs(order_by=["start_time"])
 
 results_df = runs[runs["status"] == "FINISHED"][[
     "tags.feature_set", "tags.top_n",
-    "metrics.roc_auc", "metrics.tpr_at_fpr", "metrics.threshold"
+    "metrics.validation_tpr_at_fpr", "metrics.validation_selection_threshold", "metrics.best_validation_tpr_at_fpr"
 ]]
 
 print(results_df)

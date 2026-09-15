@@ -62,18 +62,18 @@ py --version
 프로젝트 루트 디렉터리에서 다음 명령어를 실행합니다.
 
 ```bash
-python -m venv .venv
+python -m venv trust-triage-env
 ```
 
 `python` 명령어가 작동하지 않고 `py`만 작동하는 경우에는 다음과 같이 실행합니다.
 
 ```bash
-py -m venv .venv
+py -m venv trust-triage-env
 ```
 
-가상환경을 생성하면 프로젝트 폴더 내부에 `.venv` 디렉터리가 생성됩니다.
+가상환경을 생성하면 프로젝트 폴더 내부에 `trust-triage-env` 디렉터리가 생성됩니다.
 
-`.venv`는 개인별 로컬 개발 환경이므로 GitHub 저장소에는 업로드하지 않습니다.
+`trust-triage-env`는 개인별 로컬 개발 환경이므로 GitHub 저장소에는 업로드하지 않습니다.
 
 ---
 
@@ -82,25 +82,25 @@ py -m venv .venv
 #### Windows CMD
 
 ```cmd
-.venv\Scripts\activate
+trust-triage-env\Scripts\activate
 ```
 
 #### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\trust-triage-env\Scripts\Activate.ps1
 ```
 
 #### Git Bash
 
 ```bash
-source .venv/Scripts/activate
+source trust-triage-env/Scripts/activate
 ```
 
-가상환경이 정상적으로 활성화되면 터미널 경로 앞에 `(.venv)`가 표시됩니다.
+가상환경이 정상적으로 활성화되면 터미널 경로 앞에 `(trust-triage-env)`가 표시됩니다.
 
 ```text
-(.venv) C:\Users\사용자명\trust-triage>
+(trust-triage-env) C:\Users\사용자명\trust-triage>
 ```
 
 ---
@@ -177,7 +177,7 @@ Ctrl + C
 deactivate
 ```
 
-터미널 경로 앞에 표시되던 `(.venv)`가 사라지면 가상환경이 정상적으로 종료된 것입니다.
+터미널 경로 앞에 표시되던 `(trust-triage-env)`가 사라지면 가상환경이 정상적으로 종료된 것입니다.
 
 ---
 
@@ -189,7 +189,7 @@ deactivate
 
 ```bash
 cd trust-triage
-.venv\Scripts\activate
+trust-triage-env\Scripts\activate
 git pull origin main
 python -m pip install -r requirements.txt
 mlflow server --port 5000

@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--top-indices",
         type=Path,
-        default=PROJECT_ROOT / "top_feature_indices_500.npy",
+        default=PROJECT_ROOT / "data" / "top_feature_indices_500.npy",
     )
     parser.add_argument("--model-output", type=Path, required=True)
     return parser.parse_args()

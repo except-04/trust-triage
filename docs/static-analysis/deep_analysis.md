@@ -21,6 +21,12 @@ Speakeasy 구현을 복사하지 않는다. 통합 시 `FlossAnalyzer`와
 `SpeakeasyAnalyzer` 객체를 `DeepAnalysisOrchestrator`에 주입한다.
 Ghidra CAPA는 코드를 보존하되 기본값으로 비활성화한다.
 
+> **[주의: 미구현 상태 명시]**  
+> 현재 SQS Worker를 통한 비동기 큐잉 및 MonoGPT 연동은 아키텍처 설계상으로만 존재하며, 실제 서비스 백엔드 런타임에는 연동(구현)되어 있지 않습니다. (향후 개발 과제)
+
+> **[주의: 미구현 상태 명시]**  
+> 현재 SQS Worker를 통한 비동기 큐잉 및 MonoGPT 연동은 아키텍처 설계상으로만 존재하며, 실제 서비스 백엔드 런타임에는 연동(구현)되어 있지 않습니다. (향후 개발 과제)
+
 ## 사용 예시
 
 ```python
@@ -128,7 +134,11 @@ orchestrator = DeepAnalysisOrchestrator(
 )
 ```
 
-## MonoGPT Claude Evidence 해석
+## MonoGPT Claude Evidence 해석 (미구현 상태)
+
+> **주의**: LLM 연동 모듈은 스크립트 인터페이스 수준까지만 구현되었으며, 실제 서비스 백엔드 라우팅 및 데모 런타임 환경에는 통합되어 있지 않습니다. (미구현 상태)
+
+> **주의**: LLM 연동 모듈은 스크립트 인터페이스 수준까지만 구현되었으며, 실제 서비스 백엔드 라우팅 및 데모 런타임 환경에는 통합되어 있지 않습니다.
 
 선택된 분석 단계가 정상 종료하면 `MonoGPTClaudeInterpreter`를 주입해 정규화된
 Evidence만 MonoGPT MonoRouter의 OpenAI 호환 API로 보낼 수 있다. PE 파일,

@@ -176,13 +176,10 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 - `reason`: 여러 위험 신호를 전부 나열한 목록이 아니라, **4장 우선순위 규칙에서 최초로 매칭된 대표 사유 하나**입니다. `"Uncertain Probability"`는 별도의 불확실성 점수가 아니라, **확률이 `tau_low`와 `tau_high` 사이 그레이존에 걸렸을 때 붙는 reason 라벨**입니다(`docs/interface_spec.md` §4.4 CRITICAL, `docs/pipeline_architecture_v3.md` "Uncertain Probability 표현" 절에서 동일하게 재확인).
 - `triggered_signals`: `reason`과 별개로, **동시에 발현된 모든 위험 신호**를 담는 배열입니다(`src/jrr/jrr_router.py:36-60`). 각 규칙(OOD → Disagreement → Difficulty → Uncertain Probability)이 독립적으로 검사되어 조건을 만족할 때마다 `"OOD"`/`"DISAGREEMENT"`/`"DIFFICULTY"`/`"UNCERTAIN_PROBABILITY"` 중 해당 값이 추가됩니다. 위험 신호가 하나도 없는 `AUTO_BENIGN`/`AUTO_MALICIOUS`에서는 빈 배열 `[]`입니다. 4장에서 설명한 Priority-ordered Routing과 대표 `reason` 산출 방식은 `triggered_signals` 도입 이후에도 그대로입니다.
 
-### 파이프라인 표준 결과 객체와의 관계 (아직 코드로 조립되지 않음)
+### 파이프라인 표준 결과 객체와의 관계
 
-`docs/interface_spec.md` §4.1과 `docs/pipeline_architecture_v3.md` §2가 정의하는 전체 분석 결과 객체는 `calibrated_probability`를 `prediction.calibrated_probability`로, 나머지 3개 신호를 `risk_signals.{disagreement, ood_score, difficulty_score}`로 **중첩(nest)** 시킵니다. 그러나 `JointRiskRouter.route_sample()`이 실제로 반환하는 것은 **평평한(flat) dict**입니다. 이 중첩은 FastAPI 백엔드(아직 리포지토리에 구현 없음, 14장 참고)가 라우터 출력과 모델 예측값을 하나의 분석 레코드로 조립할 때 수행하도록 설계되어 있으며, 현재는 그 조립 코드 자체가 존재하지 않습니다.
+`docs/interface_spec.md` §4.1과 `docs/pipeline_architecture_v3.md` §2가 정의하는 전체 분석 결과 객체는 `calibrated_probability`를 `prediction.calibrated_probability`로, 나머지 3개 신호를 `risk_signals.{disagreement, ood_score, difficulty_score}`로 **중첩(nest)** 시킵니다. `JointRiskRouter.route_sample()`이 반환하는 평평한(flat) dict는 FastAPI 백엔드에 의해 실제 라우터 출력과 모델 예측값을 하나의 분석 레코드로 조립하여 처리됩니다.
 
-### 레거시 데모(`tests/demo/01/demo.py`)는 현재 시그니처와 맞지 않음
-
-`demo.py`는 여전히 `router.route_sample(p_calib, disagreement)`를 **인자 2개**로 호출합니다(`demo.py:156-157`). 하지만 현재 `route_sample()`은 `(p_calib, disagreement, ood_score, difficulty_score)` **4개의 위치 인자**를 요구하므로, 이 데모를 그대로 실행하면 `TypeError: route_sample() missing 2 required positional arguments`가 발생합니다. 또한 `verdict` 판정부는 여전히 `"AUTO_PASS"`/`"AUTO_QUARANTINE"`이라는 구용어와 비교하는데, 라우터는 `"AUTO_BENIGN"`/`"AUTO_MALICIOUS"`를 반환하므로 이 비교도 항상 실패합니다. **`demo.py`는 현재 라우터 인터페이스와 더 이상 호환되지 않는 레거시 코드이며, 사용 예시로 참고하면 안 됩니다.**
 
 ---
 
@@ -391,7 +388,7 @@ AUTO_BENIGN / AUTO_MALICIOUS
 
 ## 14. Service Integration
 
-`docs/interface_spec.md`, `docs/service_architecture.md`(둘 다 2026-09-07, 상태: Draft) 기준 설계입니다. **FastAPI 백엔드는 이 세션 시점 리포지토리(`src/` 하위)에 구현되어 있지 않습니다** — `src/` 아래에는 `jrr`, `models`, `preprocessing`, `trust_triage`(feature_extraction/explanation/static_analysis/dynamic_analysis/deep_analysis)만 있고 API/서비스 계층 코드는 없습니다.
+`docs/interface_spec.md`, `docs/service_architecture.md`(둘 다 2026-09-07, 상태: Draft) 기준 설계입니다. **현재 백엔드(FastAPI), PostgreSQL 연동 및 초기 분석 라우팅은 구현되어 있습니다.**
 
 설계상 의도된 흐름:
 
@@ -402,8 +399,7 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 ```
 
 - `docs/interface_spec.md`는 상태 조회(`current_stage`), Batch(`batch_id`+개별 `analysis_id`), Task Queue 메시지(SQS 후보) 등을 정의하지만 다수가 **TBD**입니다(§22): Task Queue 최종 확정, PostgreSQL 배포 방식, Batch 파일 수/크기 제한, `final_verdict` Enum, Final Assessment 자동 판정 로직 등.
-- **`dashboard/app.py`(현재 `main`)는 위 인터페이스 계약과 다른 필드명을 쓰는 단순 단일 목업**입니다(`build_mock_result()`): `route: "Deep Analysis"`(문자열 표기가 `"DEEP_ANALYSIS"`가 아님), `initial_verdict: "High-Risk Uncertain"`(`"HIGH_RISK_UNCERTAIN"`이 아님), `ood: True`(불리언, `ood_score`가 아님), `risk_score: 82`(현재 JRR 공식 출력에 없는 필드, 15장 참고). 즉 현재 대시보드는 `interface_spec.md`의 CRITICAL 규칙이 확정되기 이전에 작성된 것으로 보이는 **자체 목업 스키마**를 쓰고 있어, 실제 JRR 출력이나 `interface_spec.md`와 아직 정렬되어 있지 않습니다.
-- (참고) 다중 파일/ZIP 배치 업로드 UI가 담긴 `dashboard/app.py` 버전은 이번 조사에서 확인한 `main`에는 없었습니다. 그런 코드가 존재한다면 이는 아직 `main`에 병합되지 않은 별도 feature 브랜치의 구현이며, 이 문서에는 포함하지 않았습니다(사용자 지시: unmerged 브랜치 구현을 현재 공식 설계로 섞지 말 것).
+- **현재 대시보드(`dashboard/app.py`)는 실제 API와 목업(Mock) 구현이 혼재된 상태로 동작합니다.** 과거 존재했던 전체 Mock 함수인 `build_mock_result()` 기반에서 발전하여 부분적으로 실제 백엔드 연동을 진행하고 있으며, 실제 FastAPI 통신과 Mock 응답 처리를 혼용하고 있습니다. 다중 파일/ZIP 배치 업로드 UI도 대시보드에 통합되어 구현되어 있습니다.
 
 ---
 
@@ -413,11 +409,8 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 - **Kill Test/OOD 검증이 내부 시뮬레이션 방식**: 별도의 외부 미지 OOD 데이터셋을 주입하는 대신, Eval 세트 자체에서 `ood_score < 0`인 샘플을 "가상의 OOD 테스트셋"으로 재활용합니다(`risk_routing_simulation_test.md` §2 "새로운 외부 데이터셋을 수집하는 대신"). 이는 팀이 의도적으로 선택한 방법론이지만, 완전히 독립적인 held-out OOD 벤치마크는 아닙니다.
 - **Review Yield 예산 정책 보류**: `docs_eval_lockbox_policy.md` §7이 요구하는 "검토예산 1/5/10/20%별 비교"는 현재 구현되지 않았고, `calculate_review_yield()`는 예산 제약 없이 큐 전체를 기준으로 계산합니다(10장).
 - **Deep Analysis Tier 3 명칭 불일치**: 코드 계약(`deep_analysis.md`: Ghidra CAPA, 기본 비활성화)과 상위 설계 문서(`pipeline_architecture_v3.md`: CAPE)가 다른 이름을 사용합니다(12장).
-- **SHAP — Backend inference와 모델 인스턴스 공유 wiring 미구현**: SHAP 대상 모델은 현재 4-way 공식 LightGBM(`baseline_model_lightgbm_tuned_500_4way.pkl`)과 정렬됐지만(13장), FastAPI/Streamlit 등 서비스 계층이 아직 없어 inference가 로드한 것과 **동일한 `LGBMClassifier` 인스턴스를 SHAP explainer에 전달하는 배선**은 구현되어 있지 않습니다(`shap-explanation-module.md` §8).
 - **SHAP — `models/`/`data/` artifact 경로 미통일**: 공식 artifact 위치는 `models/baseline_model_lightgbm_tuned_500_4way.pkl`이지만 현재 JRR inference 스크립트는 같은 파일명을 `data/` 아래에서 별도로 staging해 로드합니다(`shap-explanation-module.md` §2). 서비스 통합 전 두 경로를 하나로 통일해야 합니다.
 - **SHAP — `top_feature_indices_500.npy` 배포 경로 미정**: 모델 artifact 자체에는 feature metadata가 없어, 배포 시 모델과 `data/top_feature_indices_500.npy`, selection manifest를 하나의 검증 가능한 bundle로 함께 배치하는 방식이 아직 정해지지 않았습니다(`shap-explanation-module.md` §8). 자동화된 PE E2E 회귀 테스트 추가도 마찬가지로 남은 작업입니다.
-- **레거시 데모(`tests/demo/01/demo.py`)가 현재 라우터 시그니처와 불일치해 실행 시 오류 발생**(6장) — 사용 예시로 삼지 말 것.
-- **서비스 계층(FastAPI/PostgreSQL/Task Queue/대시보드 연동) 대부분 미구현/TBD**: JRR 자체는 구현·평가가 끝났지만, 이를 감싸는 API/DB/큐/프론트엔드 통합은 아직 설계 초안(Draft) 단계입니다(14장).
 - **`risk_score`는 현재 공식 JRR 설계/코드에 존재하지 않습니다.** `docs/pipeline_architecture_v3.md` CRITICAL-03: "risk_score는 필수 런타임 출력으로 간주하지 않는다." `dashboard/app.py`의 목업 데이터에만 레거시로 남아 있습니다(14장). Weighted Risk Score 방식 자체도 현재 공식 설계에 없습니다(4장).
 - **Final Eval 미실행**: `tau_low=0.65`/`tau_difficulty=6.0`이 Calibration 세트 2차원 Grid Search로 freeze된 이후의 공식 Final Eval이 아직 별도로 실행·보고되지 않았습니다. 10, 11장에 인용된 수치는 개발 중 반복 확인해 온 Engineering Eval 기록입니다(7장 참고).
 - **§11 Risk Signal Analysis의 신호별 breakdown이 현재 threshold(`0.65`/`6.0`) 기준으로 재산출되지 않음**: Difficulty 단독/결합 건수, Probability Gray-zone 건수, Signal Overlap 표는 모두 이전 threshold(`tau_low=0.60`, `tau_difficulty=5.0`) 기준 수치입니다. 현재 공식 총량(HIGH_RISK_UNCERTAIN 55,114건/11.48%, 10장)은 확인되었으나, 신호별 세부 breakdown 재산출은 아직 없습니다(11장 참고).

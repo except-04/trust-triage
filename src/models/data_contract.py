@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -11,6 +12,7 @@ import numpy as np
 EXPECTED_FEATURE_DIM = 2568
 EXPECTED_ROWS = {"tr": 2_720_000, "val": 480_000, "calib": 480_000, "eval": 480_000}
 SPLITS = tuple(EXPECTED_ROWS)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class DataContractError(ValueError):
@@ -92,6 +94,16 @@ def load_top_indices(path: str | Path, *, expected_count: int = 500) -> np.ndarr
         raise DataContractError("top-feature indices must be unique")
     if indices[0] < 0 or indices[-1] >= EXPECTED_FEATURE_DIM:
         raise DataContractError("top-feature index is outside [0, 2568)")
+
+    manifest_path = PROJECT_ROOT / "docs" / "feature-extraction" / "feature-selection-ember-v3-top500.json"
+    if manifest_path.is_file():
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        if "source_indices" in manifest:
+            source_indices = np.array(manifest["source_indices"], dtype=np.int64)
+            if not np.array_equal(indices, source_indices):
+                raise DataContractError("Top500 indices do not match the official manifest")
+
     return indices
 
 

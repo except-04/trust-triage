@@ -70,7 +70,7 @@ JSON 출력을 한 줄로 보려면 `--compact`를 추가합니다.
 ```powershell
 .\trust-triage-env\Scripts\python.exe -m trust_triage.feature_extraction.cli `
   .\path\to\sample.exe `
-  --selection-file .\docs\feature-extraction\feature-selection.example.json
+  --selection-file .\docs\feature-extraction\feature-selection-ember-v3-top500.json
 ```
 
 ## 요약 출력
