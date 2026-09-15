@@ -8,6 +8,13 @@ from api_client import ApiError
 import matplotlib.pyplot as plt
 import streamlit as st
 
+# 진행 상황 패널의 자동 갱신 주기. 전체 app rerun이 아니라 fragment만 다시 돈다.
+POLL_INTERVAL_SECONDS = 2
+# 백엔드가 응답은 하지만 상태가 끝나지 않는 경우까지 대비한 상한. 무한 폴링 방지용.
+POLL_TIMEOUT_SECONDS = 600
+# 더 이상 조회할 필요가 없는 상태.
+TERMINAL_STATUSES = ("COMPLETED", "FAILED")
+
 
 def reset_analysis_result():
     """Clear stale batch results whenever the selected uploads change."""
@@ -18,6 +25,8 @@ def reset_analysis_result():
     st.session_state.pop("selected_analysis_id", None)
     st.session_state.pop("batch_group", None)
     st.session_state.pop("group_analysis_selector", None)
+    st.session_state.pop("poll_started_at", None)
+    st.session_state.pop("poll_timed_out", None)
 
 
 def reset_analysis_session():
@@ -648,6 +657,105 @@ def to_view(full, previous):
         "error": full.get("error"),
     }
 
+def pending_analyses(batch_data):
+    """아직 종료되지 않은 분석만 고른다."""
+    return [
+        analysis
+        for analysis in batch_data.get("analyses", [])
+        if analysis.get("status") not in TERMINAL_STATUSES
+    ]
+
+
+def poll_status_counts(analyses):
+    """진행 상황 패널용 상태별 건수.
+
+    완료 화면의 derive_batch_summary()는 초기 판정을 세고, 이쪽은 작업 상태를 센다.
+    서로 다른 집계이므로 합치지 않는다.
+    """
+    counts = {"QUEUED": 0, "RUNNING": 0, "COMPLETED": 0, "FAILED": 0}
+    for analysis in analyses:
+        status = analysis.get("status") or "QUEUED"
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def sync_selected_analysis(batch_data):
+    """갱신된 batch_data를 session_state에 다시 연결한다.
+
+    refresh_batch()/refresh_pending()은 완료된 건의 리스트 요소를 새 dict로
+    교체한다. 이 재연결을 빼먹으면 상세 화면이 접수 직후의 빈 dict를 계속 본다.
+    """
+    st.session_state.batch_data = batch_data
+    st.session_state.batch_results = batch_data["analyses"]
+    selected_id = st.session_state.get("selected_analysis_id")
+    for analysis in batch_data["analyses"]:
+        if analysis["analysis_id"] == selected_id:
+            st.session_state.analysis_result = analysis
+            break
+
+
+def refresh_batch(batch_data):
+    """배치 전체 상태를 요청 한 번으로 갱신한다.
+
+    GET /batches/{batch_id}의 analyses는 GET /analyses/{id}와 같은 종합 결과라서
+    파일별 status/result 반복 조회를 대신할 수 있다. batch_id가 없거나 배치 조회가
+    실패하면 기존 파일별 폴링(refresh_pending)으로 물러난다.
+
+    반환: 아직 진행 중인 건이 하나라도 있으면 True
+    """
+    batch_id = batch_data.get("batch_id")
+    if not batch_id:
+        return refresh_pending(batch_data)
+
+    try:
+        batch = api_client.get_batch(batch_id)
+    except ApiError:
+        return refresh_pending(batch_data)
+
+    by_id = {
+        item["analysis_id"]: item
+        for item in batch.get("analyses", [])
+        if item.get("analysis_id")
+    }
+
+    still_running = False
+    for index, analysis in enumerate(batch_data["analyses"]):
+        # 이미 끝난 건은 다시 반영하지 않는다
+        if analysis.get("status") in TERMINAL_STATUSES:
+            continue
+
+        full = by_id.get(analysis["analysis_id"])
+        if full is None:
+            # 배치 응답에 없는 건은 상태를 추측하지 않고 진행 중으로 둔다
+            still_running = True
+            continue
+
+        status = full.get("status") or analysis.get("status") or "QUEUED"
+        if status == "COMPLETED":
+            # 완료된 건만 상세 뷰 모델로 옮긴다. refresh_pending과 같은 기준이다.
+            batch_data["analyses"][index] = to_view(full, analysis)
+        else:
+            analysis["status"] = status
+            analysis["error"] = full.get("error")
+            if status != "FAILED":
+                still_running = True
+
+    return still_running
+
+
+def poll_started_at():
+    """폴링 시작 시각. 세션이 이어진 경우를 대비해 없으면 지금으로 채운다."""
+    if "poll_started_at" not in st.session_state:
+        st.session_state.poll_started_at = time.monotonic()
+    return st.session_state.poll_started_at
+
+
+def resume_polling():
+    """시간 초과 뒤 수동 재조회. 경과 시간을 다시 센다."""
+    st.session_state.poll_timed_out = False
+    st.session_state.poll_started_at = time.monotonic()
+
+
 def load_mock_analysis(analysis_id, batch_data=None):
     """Mock detail endpoint; replace with get_analysis_from_api(analysis_id)."""
     batch = batch_data or st.session_state.get("batch_data", {})
@@ -709,6 +817,9 @@ def store_mock_batch(batch_data):
     st.session_state.batch_results = batch_data["analyses"]
     st.session_state.selected_analysis_id = initial_analysis["analysis_id"]
     st.session_state.analysis_result = initial_analysis
+    # 새 배치이므로 폴링 타이머를 다시 시작한다
+    st.session_state.poll_started_at = time.monotonic()
+    st.session_state.poll_timed_out = False
 
 
 def render_input_view():
@@ -965,6 +1076,126 @@ def render_batch_triage(batch_data):
         )
 
 
+def render_polling_panel(batch_data, auto_refresh):
+    """진행 상황만 보여주는 영역.
+
+    그룹 테이블·selectbox·상세 결과는 여기에 넣지 않는다. 완료 후 화면과 구성이
+    겹치면 자동 갱신 때마다 그 위젯들이 다시 그려지기 때문이다.
+    """
+    analyses = batch_data["analyses"]
+    counts = poll_status_counts(analyses)
+    total = len(analyses)
+    finished = counts["COMPLETED"] + counts["FAILED"]
+
+    st.markdown(
+        f"""
+        <div class="batch-section-heading batch-section-heading-first">
+            <span>분석 진행 중</span>
+            <span class="batch-context">
+                Batch ID · {escape(str(batch_data.get("batch_id", "-")))}
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    panel = st.container(border=True, key="batch_polling_panel")
+    panel.markdown(
+        f"""
+        <div class="batch-summary-grid">
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Total</div>
+                <div class="batch-summary-value">{total}</div>
+            </div>
+            <div class="batch-summary-item batch-summary-priority">
+                <div class="batch-summary-label">Queued</div>
+                <div class="batch-summary-value">{counts["QUEUED"]}</div>
+            </div>
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Running</div>
+                <div class="batch-summary-value">{counts["RUNNING"]}</div>
+            </div>
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Completed</div>
+                <div class="batch-summary-value">{counts["COMPLETED"]}</div>
+            </div>
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Failed</div>
+                <div class="batch-summary-value">{counts["FAILED"]}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    panel.progress(
+        finished / total if total else 0.0,
+        text=f"{finished} / {total} 처리 종료",
+    )
+    panel.dataframe(
+        [
+            {
+                "File": analysis.get("filename", "(이름 없음)"),
+                "Status": analysis.get("status") or "QUEUED",
+            }
+            for analysis in analyses
+        ],
+        hide_index=True,
+        width="stretch",
+        # 건수는 폴링 중 변하지 않으므로 높이가 흔들리지 않는다
+        height=min(38 * (total + 1), 300),
+    )
+
+    elapsed = int(max(0.0, time.monotonic() - poll_started_at()))
+    clock = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+    if auto_refresh:
+        panel.caption(
+            f"경과 {clock} · {POLL_INTERVAL_SECONDS}초마다 이 영역만 자동 갱신됩니다."
+        )
+    else:
+        panel.caption(f"경과 {clock} · 자동 갱신이 멈춘 상태입니다.")
+
+
+@st.fragment(run_every=POLL_INTERVAL_SECONDS)
+def polling_fragment():
+    """이 함수 안에서만 재실행된다.
+
+    CSS 블록·상단 레이아웃·완료 결과 화면은 fragment 밖에 있어서 자동 갱신 대상이
+    아니다. 모든 건이 종료되면 app 전체를 딱 한 번 재실행해 완료 화면으로 넘긴다.
+    """
+    batch_data = st.session_state.get("batch_data")
+    if not batch_data:
+        return
+
+    still_running = refresh_batch(batch_data)
+    sync_selected_analysis(batch_data)
+
+    if not still_running:
+        # 종료 조건 1: 전부 COMPLETED/FAILED. 완료 화면 전환용 app rerun 1회.
+        st.rerun()
+
+    if time.monotonic() - poll_started_at() > POLL_TIMEOUT_SECONDS:
+        # 종료 조건 2: 상한 초과. fragment 렌더를 멈추게 해서 자동 갱신을 끊는다.
+        st.session_state.poll_timed_out = True
+        st.rerun()
+
+    render_polling_panel(batch_data, auto_refresh=True)
+
+
+def render_polling_view(batch_data):
+    """진행 중 화면. 시간 초과 뒤에는 자동 갱신 없이 같은 패널을 그린다."""
+    if st.session_state.get("poll_timed_out"):
+        render_polling_panel(batch_data, auto_refresh=False)
+        st.warning(
+            f"{POLL_TIMEOUT_SECONDS // 60}분 안에 분석이 끝나지 않아 자동 갱신을 "
+            "멈췄습니다. 백엔드 처리 상태를 확인한 뒤 다시 조회하세요."
+        )
+        st.button("지금 다시 확인", key="poll_resume", on_click=resume_polling)
+        return
+
+    polling_fragment()
+
+
 st.set_page_config(
     page_title="EXCEPT 04 Trust Triage",
     page_icon="🛡️",
@@ -1107,6 +1338,7 @@ st.markdown(
 
         .st-key-batch_input_panel [data-testid="stVerticalBlock"],
         .st-key-batch_triage_area [data-testid="stVerticalBlock"],
+        .st-key-batch_polling_panel [data-testid="stVerticalBlock"],
         .st-key-batch_group_results [data-testid="stVerticalBlock"] {
             gap: 1.5rem;
         }
@@ -1459,23 +1691,15 @@ if result is None:
 else:
     batch_data = st.session_state.get("batch_data")
     if batch_data:
-        still_running = refresh_pending(batch_data)
+        sync_selected_analysis(batch_data)
 
-        # 갱신된 내용을 session_state에 반영
-        st.session_state.batch_data = batch_data
-        st.session_state.batch_results = batch_data["analyses"]
-        selected_id = st.session_state.get("selected_analysis_id")
-        for analysis in batch_data["analyses"]:
-            if analysis["analysis_id"] == selected_id:
-                st.session_state.analysis_result = analysis
-                break
+        if pending_analyses(batch_data):
+            # 진행 중에는 폴링 패널만 그린다. 아래 완료 화면은 종료 후에 렌더된다.
+            render_polling_view(batch_data)
+            st.stop()
 
         render_batch_triage(batch_data)
         result = st.session_state.analysis_result
-
-        if still_running:
-            time.sleep(3)
-            st.rerun()
 
     status = result.get("status")
     if status != "COMPLETED":
