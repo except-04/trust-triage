@@ -1,6 +1,9 @@
 import hashlib
+import api_client
+import time
 from html import escape
 from uuid import uuid4
+from api_client import ApiError
 
 import matplotlib.pyplot as plt
 import streamlit as st
@@ -549,6 +552,104 @@ def load_mock_batch(file_descriptors):
         "analyses": analyses,
     }
 
+def submit_batch(file_descriptors):
+    """파일을 백엔드에 접수하고, 결과가 아직 비어 있는 batch_data를 만든다"""
+    payload = [(d["filename"], d["content"]) for d in file_descriptors]
+    accepted = api_client.upload_batch(payload)
+
+    by_hash = {
+        hashlib.sha256(d["content"]).hexdigest(): d
+        for d in file_descriptors
+    }
+
+    analyses = []
+    for item in accepted["analyses"]:
+        source = by_hash.get(item["sha256"], {})
+        analyses.append({
+            "analysis_id": item["analysis_id"],
+            "sha256": item["sha256"],
+            "status": item.get("status", "QUEUED"),
+            "filename": source.get("filename", "(이름 없음)"),
+            "file_size": source.get("size", 0),
+            "initial_verdict": None,
+            "route": None,
+            "reason": None,
+            "final_verdict": None,
+            "calibrated_probability": None,
+            "raw_probability": None,
+            "disagreement": None,
+            "ood_score": None,
+            "difficulty_score": None,
+            "top_features": [],
+            "deep_analysis_status": {},
+            "evidence": [],
+            "llm_summary": None,
+            "error": None,
+        })
+
+    return {"batch_id": accepted["batch_id"], "analyses": analyses}
+
+def refresh_pending(batch_data):
+    """끝나지 않은 분석들의 상태를 백엔드에 다시 묻고 갱신한다.
+
+    반환: 아직 진행 중인 건이 하나라도 있으면 True
+    """
+    still_running = False
+
+    for index, analysis in enumerate(batch_data["analyses"]):
+        # 이미 끝난 건 다시 묻지 않는다
+        if analysis.get("status") in ("COMPLETED", "FAILED"):
+            continue
+
+        try:
+            progress = api_client.get_status(analysis["analysis_id"])
+        except ApiError as e:
+            analysis["status"] = "FAILED"
+            analysis["error"] = {
+                "code": e.code, "message": e.message, "stage": e.stage,
+            }
+            continue
+
+        analysis["status"] = progress.get("status", "QUEUED")
+        analysis["error"] = progress.get("error")
+
+        if analysis["status"] == "COMPLETED":
+            # 완료된 것만 전체 결과를 한 번 가져온다
+            try:
+                full = api_client.get_result(analysis["analysis_id"])
+                batch_data["analyses"][index] = to_view(full, analysis)
+            except ApiError as e:
+                analysis["error"] = {
+                    "code": e.code, "message": e.message, "stage": e.stage,
+                }
+        elif analysis["status"] != "FAILED":
+            still_running = True
+
+    return still_running
+
+def to_view(full, previous):
+    """API 응답을 대시보드가 읽는 평면 키로 옮긴다."""
+    prediction = full.get("prediction") or {}
+    signals = full.get("risk_signals") or {}
+
+    return {
+        **previous,
+        "status": full.get("status"),
+        "initial_verdict": full.get("initial_verdict"),
+        "route": full.get("route"),
+        "reason": full.get("reason"),
+        "final_verdict": full.get("final_verdict"),
+        "raw_probability": prediction.get("lgbm_raw_probability"),
+        "calibrated_probability": prediction.get("calibrated_probability"),
+        "disagreement": signals.get("disagreement"),
+        "ood_score": signals.get("ood_score"),
+        "difficulty_score": signals.get("difficulty_score"),
+        "top_features": full.get("top_features", []),
+        "deep_analysis_status": full.get("deep_analysis_status", {}),
+        "evidence": full.get("evidence", []),
+        "llm_summary": full.get("llm_summary"),
+        "error": full.get("error"),
+    }
 
 def load_mock_analysis(analysis_id, batch_data=None):
     """Mock detail endpoint; replace with get_analysis_from_api(analysis_id)."""
@@ -682,8 +783,11 @@ def render_input_view():
         type="primary",
         disabled=not file_descriptors,
     ):
-        store_mock_batch(load_mock_batch(file_descriptors))
-        st.rerun()
+        try:
+            store_mock_batch(submit_batch(file_descriptors))
+            st.rerun()
+        except ApiError as e:
+            input_panel.error(f"접수 실패: {e.message}")
 
 
 def render_batch_summary(batch_data):
@@ -1358,8 +1462,34 @@ if result is None:
 else:
     batch_data = st.session_state.get("batch_data")
     if batch_data:
+        still_running = refresh_pending(batch_data)
+
+        # 갱신된 내용을 session_state에 반영
+        st.session_state.batch_data = batch_data
+        st.session_state.batch_results = batch_data["analyses"]
+        selected_id = st.session_state.get("selected_analysis_id")
+        for analysis in batch_data["analyses"]:
+            if analysis["analysis_id"] == selected_id:
+                st.session_state.analysis_result = analysis
+                break
+
         render_batch_triage(batch_data)
         result = st.session_state.analysis_result
+
+        if still_running:
+            time.sleep(3)
+            st.rerun()
+
+    status = result.get("status")
+    if status != "COMPLETED":
+        if status == "FAILED":
+            error = result.get("error") or {}
+            st.error(f"분석 실패: {error.get('message', '원인을 확인할 수 없습니다.')}")
+            if error.get("code"):
+                st.caption(f"코드 {error['code']} · 단계 {error.get('stage') or '-'}")
+        else:
+            st.info(f"분석이 진행 중입니다. (상태: {status or '대기 중'})")
+        st.stop()
 
     difficulty_labels = {
         "Low": "낮음 (Low)",
