@@ -64,18 +64,19 @@ python demo\demo.py --path "C:\Windows\System32\notepad.exe"
   "verdict": "자동 악성",
   "analysis_status": "SUCCESS",
   "calibrated_probability": 0.9731,
-  "risk_score": null,
-  "route": "AUTO_QUARANTINE",
+  "initial_verdict": "AUTO_MALICIOUS",
+  "route": "FINAL",
   "top_features": []
 }
 ```
 
 | 필드 | 의미 |
 |---|---|
-| `verdict` | `자동 정상`(AUTO_PASS) / `자동 악성`(AUTO_QUARANTINE) / `심층 분석`(그 외, 초기값) |
-| `route` | JRR 라우팅 결정. 기본값은 `MANUAL_REVIEW` |
+| `verdict` | `자동 정상`(AUTO_BENIGN) / `자동 악성`(AUTO_MALICIOUS) / `심층 분석`(그 외, 초기값) |
+| `initial_verdict` | JRR 초기 판정. 기본값은 `HIGH_RISK_UNCERTAIN` |
+| `route` | 다음 단계 처리 지시. 기본값은 `DEEP_ANALYSIS` |
 | `calibrated_probability` | 보정된 악성 확률 |
-| `risk_score`, `top_features` | 추후 추가 |
+| `top_features` | 추후 추가 |
 
 ### 종료 코드
 
@@ -95,8 +96,10 @@ python demo\demo.py --path "C:\Windows\System32\notepad.exe"
 바꾸려면 `demo.py` 상단 상수를 수정해야 합니다.
 
 ```python
-TAU_LOW            = 0.1    # 자동 통과 임계값
+TAU_LOW            = 0.65   # 자동 통과 임계값
 TAU_DISAGREE       = 0.3    # 모델 간 불일치 임계값
+TAU_OOD            = 0.0    # OOD 임계값
+TAU_DIFFICULTY     = 6.0    # 분석 난이도 임계값
 EXTRACT_TIMEOUT_SEC = 30.0  # 특징 추출 타임아웃(초)
 ```
 

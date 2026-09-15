@@ -1,24 +1,24 @@
-# CAPA 정적 분석 모듈
+﻿# CAPA ?뺤쟻 遺꾩꽍 紐⑤뱢
 
-이 모듈은 JRR이 `CAPA_SCAN`을 선택했을 때 CAPA를 별도 프로세스로 실행하고,
-CAPA JSON 결과를 TRUST-TRIAGE의 공통 Evidence 형식으로 변환한다.
+??紐⑤뱢? JRR??`CAPA_SCAN`???좏깮?덉쓣 ??CAPA瑜?蹂꾨룄 ?꾨줈?몄뒪濡??ㅽ뻾?섍퀬,
+CAPA JSON 寃곌낵瑜?TRUST-TRIAGE??怨듯넻 Evidence ?뺤떇?쇰줈 蹂?섑븳??
 
-CAPA 분석 실패, timeout, 환경 불일치는 악성 Evidence로 변환하지 않는다.
-실패 상태는 `CapaAnalysisResult.status`로 보존한다.
+CAPA 遺꾩꽍 ?ㅽ뙣, timeout, ?섍꼍 遺덉씪移섎뒗 ?낆꽦 Evidence濡?蹂?섑븯吏 ?딅뒗??
+?ㅽ뙣 ?곹깭??`CapaAnalysisResult.status`濡?蹂댁〈?쒕떎.
 
 ## Backend
 
-`CapaBackend.DEFAULT`는 CAPA 명령에 backend 옵션을 추가하지 않는 일반 실행이다.
-`CapaBackend.GHIDRA`는 CAPA에 `-b ghidra`를 전달한다.
+`CapaBackend.DEFAULT`??CAPA 紐낅졊??backend ?듭뀡??異붽??섏? ?딅뒗 ?쇰컲 ?ㅽ뻾?대떎.
+`CapaBackend.GHIDRA`??CAPA??`-b ghidra`瑜??꾨떖?쒕떎.
 
 ```text
 DEFAULT: capa -j sample.exe
 GHIDRA:  capa -b ghidra -j sample.exe
 ```
 
-Ghidra는 이 저장소에 포함하지 않는다. GHIDRA backend를 선택한 분석 환경에만
-Ghidra와 PyGhidra를 설치하고, 필요하면 `GHIDRA_INSTALL_DIR`을 설정한다.
-Ghidra를 사용하지 않는 DEFAULT 실행에는 Ghidra가 필요하지 않다.
+Ghidra??????μ냼???ы븿?섏? ?딅뒗?? GHIDRA backend瑜??좏깮??遺꾩꽍 ?섍꼍?먮쭔
+Ghidra? PyGhidra瑜??ㅼ튂?섍퀬, ?꾩슂?섎㈃ `GHIDRA_INSTALL_DIR`???ㅼ젙?쒕떎.
+Ghidra瑜??ъ슜?섏? ?딅뒗 DEFAULT ?ㅽ뻾?먮뒗 Ghidra媛 ?꾩슂?섏? ?딅떎.
 
 ## Python API
 
@@ -41,14 +41,14 @@ result = analyzer.analyze(
 evidence = result.to_evidence()
 ```
 
-`GHIDRA`를 선택할 때만 backend를 바꾼다.
+`GHIDRA`瑜??좏깮???뚮쭔 backend瑜?諛붽씔??
 
-Python launcher를 사용해야 하는 환경에서는 실행 파일 prefix를 지정할 수
-있다. 예를 들어 `python -m capa.main`은 다음과 같이 구성한다.
+Python launcher瑜??ъ슜?댁빞 ?섎뒗 ?섍꼍?먯꽌???ㅽ뻾 ?뚯씪 prefix瑜?吏?뺥븷 ??
+?덈떎. ?덈? ?ㅼ뼱 `python -m capa.main`? ?ㅼ쓬怨?媛숈씠 援ъ꽦?쒕떎.
 
 ```python
 config = CapaConfig(
-    executable=r".venv\Scripts\python.exe",
+    executable=r"trust-triage-env\Scripts\python.exe",
     executable_args=("-m", "capa.main"),
 )
 ```
@@ -60,9 +60,9 @@ config = CapaConfig(
 )
 ```
 
-한 샘플에 DEFAULT를 실행한 뒤 GHIDRA를 자동으로 재실행하지 않는다.
-MVP의 추가 분석 단계 예산을 지키기 위해 JRR 또는 실행 정책이 한 번의
-CAPA 분석 backend를 선택해야 한다.
+???섑뵆??DEFAULT瑜??ㅽ뻾????GHIDRA瑜??먮룞?쇰줈 ?ъ떎?됲븯吏 ?딅뒗??
+MVP??異붽? 遺꾩꽍 ?④퀎 ?덉궛??吏?ㅺ린 ?꾪빐 JRR ?먮뒗 ?ㅽ뻾 ?뺤콉????踰덉쓽
+CAPA 遺꾩꽍 backend瑜??좏깮?댁빞 ?쒕떎.
 
 ## CLI
 
@@ -71,14 +71,14 @@ py -m trust_triage.static_analysis.cli .\sample.exe --summary
 py -m trust_triage.static_analysis.cli .\sample.exe --backend ghidra --summary
 ```
 
-Ghidra 결과를 사용하려면 외부 분석 환경을 먼저 준비해야 한다. CAPA의
-standalone binary를 사용하거나, Python package 방식으로 CAPA를 설치할 수 있다.
-CAPA rules와 library-identification signatures의 버전도 분석 기록에 남기는 것을
-권장한다.
+Ghidra 寃곌낵瑜??ъ슜?섎젮硫??몃? 遺꾩꽍 ?섍꼍??癒쇱? 以鍮꾪빐???쒕떎. CAPA??
+standalone binary瑜??ъ슜?섍굅?? Python package 諛⑹떇?쇰줈 CAPA瑜??ㅼ튂?????덈떎.
+CAPA rules? library-identification signatures??踰꾩쟾??遺꾩꽍 湲곕줉???④린??寃껋쓣
+沅뚯옣?쒕떎.
 
-## Evidence 규칙
+## Evidence 洹쒖튃
 
-Capability 매칭마다 다음 Evidence를 만든다.
+Capability 留ㅼ묶留덈떎 ?ㅼ쓬 Evidence瑜?留뚮뱺??
 
 ```json
 {
@@ -93,15 +93,16 @@ Capability 매칭마다 다음 Evidence를 만든다.
 }
 ```
 
-CAPA capability는 프로그램이 해당 동작을 수행할 수 있음을 시사하는 정적
-증거다. 그 자체로 `MALICIOUS` 또는 `BENIGN` 최종 라벨이 아니며, CAPA 미매칭도
-정상 증거로 해석하지 않는다.
+CAPA capability???꾨줈洹몃옩???대떦 ?숈옉???섑뻾?????덉쓬???쒖궗?섎뒗 ?뺤쟻
+利앷굅?? 洹??먯껜濡?`MALICIOUS` ?먮뒗 `BENIGN` 理쒖쥌 ?쇰꺼???꾨땲硫? CAPA 誘몃ℓ移?룄
+?뺤긽 利앷굅濡??댁꽍?섏? ?딅뒗??
 
-## 안전 원칙
+## ?덉쟾 ?먯튃
 
-- `subprocess.run(..., shell=False)`로 CAPA만 실행한다.
-- 입력 PE를 직접 실행하거나 DLL로 로드하지 않는다.
-- 모든 분석에는 timeout을 적용한다.
-- 원본 악성 PE를 fixture나 저장소에 추가하지 않는다.
-- Ghidra backend가 준비되지 않으면 `ENVIRONMENT_MISMATCH`를 반환하고
-  DEFAULT로 조용히 대체하지 않는다.
+- `subprocess.run(..., shell=False)`濡?CAPA留??ㅽ뻾?쒕떎.
+- ?낅젰 PE瑜?吏곸젒 ?ㅽ뻾?섍굅??DLL濡?濡쒕뱶?섏? ?딅뒗??
+- 紐⑤뱺 遺꾩꽍?먮뒗 timeout???곸슜?쒕떎.
+- ?먮낯 ?낆꽦 PE瑜?fixture????μ냼??異붽??섏? ?딅뒗??
+- Ghidra backend媛 以鍮꾨릺吏 ?딆쑝硫?`ENVIRONMENT_MISMATCH`瑜?諛섑솚?섍퀬
+  DEFAULT濡?議곗슜???泥댄븯吏 ?딅뒗??
+

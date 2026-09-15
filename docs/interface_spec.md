@@ -1,46 +1,46 @@
-# TRUST-Triage Interface Specification
+﻿# TRUST-Triage Interface Specification
 
-> **문서 목적**  
-> TRUST-Triage 서비스의 각 컴포넌트가 **어떤 데이터를 주고받아야 하는지**를 정의하는 공통 인터페이스 명세서입니다.  
-> Frontend, Backend, JRR, Deep Analysis, Task Queue/Worker, Database, MCP 담당자가 동일한 필드명·상태값·데이터 구조를 사용하도록 하는 것을 목표로 합니다.
+> **臾몄꽌 紐⑹쟻**  
+> TRUST-Triage ?쒕퉬?ㅼ쓽 媛?而댄룷?뚰듃媛 **?대뼡 ?곗씠?곕? 二쇨퀬諛쏆븘???섎뒗吏**瑜??뺤쓽?섎뒗 怨듯넻 ?명꽣?섏씠??紐낆꽭?쒖엯?덈떎.  
+> Frontend, Backend, JRR, Deep Analysis, Task Queue/Worker, Database, MCP ?대떦?먭? ?숈씪???꾨뱶紐끒룹긽?쒓컪쨌?곗씠??援ъ“瑜??ъ슜?섎룄濡??섎뒗 寃껋쓣 紐⑺몴濡??⑸땲??
 
 ---
 
-## 0. 문서 상태
+## 0. 臾몄꽌 ?곹깭
 
-| 항목 | 내용 |
+| ??ぉ | ?댁슜 |
 |---|---|
-| 문서명 | `TRUST-Triage Interface Specification` |
-| 권장 파일명 | `interface_spec.md` |
-| 적용 범위 | M4 서비스 통합 및 백엔드 구축 |
-| 주요 대상 | Frontend / Backend / DB / Deep Analysis / Task Queue / AWS / System Integration |
-| 상태 | Draft |
-| 변경 원칙 | 인터페이스 필드명·Enum·필수값 변경 시 팀 공유 후 문서 우선 수정 |
+| 臾몄꽌紐?| `TRUST-Triage Interface Specification` |
+| 沅뚯옣 ?뚯씪紐?| `interface_spec.md` |
+| ?곸슜 踰붿쐞 | M4 ?쒕퉬???듯빀 諛?諛깆뿏??援ъ텞 |
+| 二쇱슂 ???| Frontend / Backend / DB / Deep Analysis / Task Queue / AWS / System Integration |
+| ?곹깭 | Draft |
+| 蹂寃??먯튃 | ?명꽣?섏씠???꾨뱶紐끒텲num쨌?꾩닔媛?蹂寃???? 怨듭쑀 ??臾몄꽌 ?곗꽑 ?섏젙 |
 
 ---
 
-# 🚨 Critical 사항
+# ?슚 Critical ?ы빆
 
-아래 항목은 **모듈 간 호환성을 위해 반드시 동일하게 지켜야 하는 공통 계약**입니다.
+?꾨옒 ??ぉ? **紐⑤뱢 媛??명솚?깆쓣 ?꾪빐 諛섎뱶???숈씪?섍쾶 吏耳쒖빞 ?섎뒗 怨듯넻 怨꾩빟**?낅땲??
 
-## CRITICAL-01. 공통 식별자 이름을 통일한다
+## CRITICAL-01. 怨듯넻 ?앸퀎???대쫫???듭씪?쒕떎
 
-모든 서비스에서 아래 필드명을 동일하게 사용합니다.
+紐⑤뱺 ?쒕퉬?ㅼ뿉???꾨옒 ?꾨뱶紐낆쓣 ?숈씪?섍쾶 ?ъ슜?⑸땲??
 
-- `analysis_id`: 개별 파일 분석 1건의 고유 ID
-- `batch_id`: 다중 파일 분석 요청의 고유 ID
-- `sha256`: 분석 대상 파일의 SHA-256
-- `created_at`: 분석 요청 생성 시각
+- `analysis_id`: 媛쒕퀎 ?뚯씪 遺꾩꽍 1嫄댁쓽 怨좎쑀 ID
+- `batch_id`: ?ㅼ쨷 ?뚯씪 遺꾩꽍 ?붿껌??怨좎쑀 ID
+- `sha256`: 遺꾩꽍 ????뚯씪??SHA-256
+- `created_at`: 遺꾩꽍 ?붿껌 ?앹꽦 ?쒓컖
 
 > **Critical**  
-> `id`, `job_id`, `sample_id` 등 임의의 이름으로 바꾸지 않습니다.  
-> 개별 분석의 기준 ID는 `analysis_id`로 통일합니다.
+> `id`, `job_id`, `sample_id` ???꾩쓽???대쫫?쇰줈 諛붽씀吏 ?딆뒿?덈떎.  
+> 媛쒕퀎 遺꾩꽍??湲곗? ID??`analysis_id`濡??듭씪?⑸땲??
 
 ---
 
-## CRITICAL-02. 분석 상태 Enum을 통일한다
+## CRITICAL-02. 遺꾩꽍 ?곹깭 Enum???듭씪?쒕떎
 
-비동기 작업 및 분석 진행 상태는 아래 값을 사용합니다.
+鍮꾨룞湲??묒뾽 諛?遺꾩꽍 吏꾪뻾 ?곹깭???꾨옒 媛믪쓣 ?ъ슜?⑸땲??
 
 ```text
 QUEUED
@@ -50,22 +50,22 @@ FAILED
 NOT_REQUIRED
 ```
 
-| 상태 | 의미 |
+| ?곹깭 | ?섎? |
 |---|---|
-| `QUEUED` | 작업이 Queue에 등록되어 대기 중 |
-| `RUNNING` | Worker 또는 분석 모듈이 실행 중 |
-| `COMPLETED` | 정상적으로 분석 완료 |
-| `FAILED` | 분석 실패 |
-| `NOT_REQUIRED` | 해당 분석 단계가 필요하지 않아 실행하지 않음 |
+| `QUEUED` | ?묒뾽??Queue???깅줉?섏뼱 ?湲?以?|
+| `RUNNING` | Worker ?먮뒗 遺꾩꽍 紐⑤뱢???ㅽ뻾 以?|
+| `COMPLETED` | ?뺤긽?곸쑝濡?遺꾩꽍 ?꾨즺 |
+| `FAILED` | 遺꾩꽍 ?ㅽ뙣 |
+| `NOT_REQUIRED` | ?대떦 遺꾩꽍 ?④퀎媛 ?꾩슂?섏? ?딆븘 ?ㅽ뻾?섏? ?딆쓬 |
 
 > **Critical**  
-> Frontend, Backend, Worker, DB가 서로 다른 상태 문자열을 사용하지 않습니다.
+> Frontend, Backend, Worker, DB媛 ?쒕줈 ?ㅻⅨ ?곹깭 臾몄옄?댁쓣 ?ъ슜?섏? ?딆뒿?덈떎.
 
 ---
 
-## CRITICAL-03. JRR Verdict 값을 통일한다
+## CRITICAL-03. JRR Verdict 媛믪쓣 ?듭씪?쒕떎
 
-초기 JRR 판정은 아래 3개 값만 사용합니다.
+珥덇린 JRR ?먯젙? ?꾨옒 3媛?媛믩쭔 ?ъ슜?⑸땲??
 
 ```text
 AUTO_BENIGN
@@ -74,16 +74,16 @@ HIGH_RISK_UNCERTAIN
 ```
 
 > **Critical**  
-> `HIGH_RISK`, `UNCERTAIN`, `REVIEW` 등 유사 표현을 별도 값으로 추가하지 않습니다.  
-> UI 표시 문구가 필요하면 Frontend에서 별도 Label로 변환합니다.
+> `HIGH_RISK`, `UNCERTAIN`, `REVIEW` ???좎궗 ?쒗쁽??蹂꾨룄 媛믪쑝濡?異붽??섏? ?딆뒿?덈떎.  
+> UI ?쒖떆 臾멸뎄媛 ?꾩슂?섎㈃ Frontend?먯꽌 蹂꾨룄 Label濡?蹂?섑빀?덈떎.
 
 ---
 
-## CRITICAL-04. Raw PE 파일 자체를 Queue 메시지에 넣지 않는다
+## CRITICAL-04. Raw PE ?뚯씪 ?먯껜瑜?Queue 硫붿떆吏???ｌ? ?딅뒗??
 
-Task Queue에는 PE 바이너리 자체를 전달하지 않고 **파일 위치를 참조할 수 있는 식별자만 전달**합니다.
+Task Queue?먮뒗 PE 諛붿씠?덈━ ?먯껜瑜??꾨떖?섏? ?딄퀬 **?뚯씪 ?꾩튂瑜?李몄“?????덈뒗 ?앸퀎?먮쭔 ?꾨떖**?⑸땲??
 
-예:
+??
 
 ```json
 {
@@ -94,73 +94,73 @@ Task Queue에는 PE 바이너리 자체를 전달하지 않고 **파일 위치�
 ```
 
 > **Critical**  
-> Raw PE는 Queue 메시지, DB JSON, 로그 등에 Base64 형태로 직접 삽입하지 않습니다.
+> Raw PE??Queue 硫붿떆吏, DB JSON, 濡쒓렇 ?깆뿉 Base64 ?뺥깭濡?吏곸젒 ?쎌엯?섏? ?딆뒿?덈떎.
 
 ---
 
-## CRITICAL-05. 판정 단계는 서로 덮어쓰지 않는다
+## CRITICAL-05. ?먯젙 ?④퀎???쒕줈 ??뼱?곗? ?딅뒗??
 
-TRUST-Triage는 판정을 단계별로 분리하여 보존합니다.
+TRUST-Triage???먯젙???④퀎蹂꾨줈 遺꾨━?섏뿬 蹂댁〈?⑸땲??
 
 ```text
 initial_verdict
-    ↓
+    ??
 final_verdict
-    ↓
+    ??
 analyst_final_verdict
 ```
 
-| 필드 | 의미 |
+| ?꾨뱶 | ?섎? |
 |---|---|
-| `initial_verdict` | JRR의 초기 판정 |
-| `final_verdict` | 심층분석 및 자동화 결과를 반영한 최종 시스템 판정 |
-| `analyst_final_verdict` | 분석가가 최종 검토 후 확정한 판정 |
+| `initial_verdict` | JRR??珥덇린 ?먯젙 |
+| `final_verdict` | ?ъ링遺꾩꽍 諛??먮룞??寃곌낵瑜?諛섏쁺??理쒖쥌 ?쒖뒪???먯젙 |
+| `analyst_final_verdict` | 遺꾩꽍媛媛 理쒖쥌 寃?????뺤젙???먯젙 |
 
 > **Critical**  
-> 심층분석 결과가 나왔다고 `initial_verdict`를 덮어쓰지 않습니다.
+> ?ъ링遺꾩꽍 寃곌낵媛 ?섏솕?ㅺ퀬 `initial_verdict`瑜???뼱?곗? ?딆뒿?덈떎.
 
 ---
 
-## CRITICAL-06. SHAP과 Behavioral Evidence를 분리한다
+## CRITICAL-06. SHAP怨?Behavioral Evidence瑜?遺꾨━?쒕떎
 
-- `top_features`: **모델이 왜 그렇게 예측했는지** 설명하는 SHAP 기반 모델 근거
-- `evidence`: CAPA / FLOSS / Speakeasy 등에서 확보한 **행위·분석 근거**
+- `top_features`: **紐⑤뜽????洹몃젃寃??덉륫?덈뒗吏** ?ㅻ챸?섎뒗 SHAP 湲곕컲 紐⑤뜽 洹쇨굅
+- `evidence`: CAPA / FLOSS / Speakeasy ?깆뿉???뺣낫??**?됱쐞쨌遺꾩꽍 洹쇨굅**
 
 > **Critical**  
-> SHAP 결과와 CAPA/Speakeasy Evidence를 하나의 근거 필드에 섞어 저장하지 않습니다.
+> SHAP 寃곌낵? CAPA/Speakeasy Evidence瑜??섎굹??洹쇨굅 ?꾨뱶???욎뼱 ??ν븯吏 ?딆뒿?덈떎.
 
 ---
 
-## CRITICAL-07. 외부 LLM에는 Raw PE를 직접 전달하지 않는다
+## CRITICAL-07. ?몃? LLM?먮뒗 Raw PE瑜?吏곸젒 ?꾨떖?섏? ?딅뒗??
 
-LLM Analyst Assist에는 아래처럼 **정형화된 분석 결과와 추출된 텍스트 정보**만 전달합니다.
+LLM Analyst Assist?먮뒗 ?꾨옒泥섎읆 **?뺥삎?붾맂 遺꾩꽍 寃곌낵? 異붿텧???띿뒪???뺣낫**留??꾨떖?⑸땲??
 
-- CAPA 결과
-- FLOSS 추출 문자열
-- Speakeasy 행위 결과
+- CAPA 寃곌낵
+- FLOSS 異붿텧 臾몄옄??
+- Speakeasy ?됱쐞 寃곌낵
 - MITRE ATT&CK Evidence
-- JRR / SHAP 요약 정보
+- JRR / SHAP ?붿빟 ?뺣낫
 
 > **Critical**  
-> 외부 LLM API에 Raw PE 바이너리를 직접 전송하지 않습니다.
+> ?몃? LLM API??Raw PE 諛붿씠?덈━瑜?吏곸젒 ?꾩넚?섏? ?딆뒿?덈떎.
 
 ---
 
-## CRITICAL-08. `file_location`은 내부 서비스 전용 필드로 사용한다
+## CRITICAL-08. `file_location`? ?대? ?쒕퉬???꾩슜 ?꾨뱶濡??ъ슜?쒕떎
 
-`file_location`은 Backend, Worker, Storage 간 파일 참조를 위한 내부 값입니다.
+`file_location`? Backend, Worker, Storage 媛??뚯씪 李몄“瑜??꾪븳 ?대? 媛믪엯?덈떎.
 
 > **Critical**  
-> S3 URI 또는 내부 경로를 Frontend / 외부 REST Client / MCP 응답에 그대로 노출하지 않습니다.
+> S3 URI ?먮뒗 ?대? 寃쎈줈瑜?Frontend / ?몃? REST Client / MCP ?묐떟??洹몃?濡??몄텧?섏? ?딆뒿?덈떎.
 
 ---
 
-## CRITICAL-09. 전체 분석 상태와 도구별 상태를 구분한다
+## CRITICAL-09. ?꾩껜 遺꾩꽍 ?곹깭? ?꾧뎄蹂??곹깭瑜?援щ텇?쒕떎
 
-- `status`: 분석 1건 전체의 진행 상태
-- `deep_analysis_status`: CAPA / FLOSS / Speakeasy 등 도구별 상태
+- `status`: 遺꾩꽍 1嫄??꾩껜??吏꾪뻾 ?곹깭
+- `deep_analysis_status`: CAPA / FLOSS / Speakeasy ???꾧뎄蹂??곹깭
 
-예:
+??
 
 ```json
 {
@@ -174,67 +174,67 @@ LLM Analyst Assist에는 아래처럼 **정형화된 분석 결과와 추출된 
 ```
 
 > **Critical**  
-> Speakeasy 하나가 `QUEUED`라고 해서 전체 분석 객체의 상태를 임의로 같은 값으로 덮어쓰지 않습니다.
+> Speakeasy ?섎굹媛 `QUEUED`?쇨퀬 ?댁꽌 ?꾩껜 遺꾩꽍 媛앹껜???곹깭瑜??꾩쓽濡?媛숈? 媛믪쑝濡???뼱?곗? ?딆뒿?덈떎.
 
 ---
 
-# 1. 전체 인터페이스 흐름
+# 1. ?꾩껜 ?명꽣?섏씠???먮쫫
 
 ```text
 [Streamlit Frontend]
-        │
-        │ Raw PE / Batch Upload
-        ▼
+        ??
+        ??Raw PE / Batch Upload
+        ??
 [FastAPI Backend]
-        │
-        ├── SHA-256 / analysis_id 생성
-        ├── 파일 임시 저장
-        │
-        ▼
+        ??
+        ?쒋?? SHA-256 / analysis_id ?앹꽦
+        ?쒋?? ?뚯씪 ?꾩떆 ???
+        ??
+        ??
 [Initial Analysis Pipeline]
 Feature Extraction
-→ LightGBM / XGBoost
-→ Calibration
-→ Risk Signals
-→ JRR
-→ SHAP
-        │
-        ├── AUTO_BENIGN
-        ├── AUTO_MALICIOUS
-        │
-        └── HIGH_RISK_UNCERTAIN
-                    │
-                    ▼
+??LightGBM / XGBoost
+??Calibration
+??Risk Signals
+??JRR
+??SHAP
+        ??
+        ?쒋?? AUTO_BENIGN
+        ?쒋?? AUTO_MALICIOUS
+        ??
+        ?붴?? HIGH_RISK_UNCERTAIN
+                    ??
+                    ??
              [Deep Analysis]
              CAPA + FLOSS
-                    │
-                    ▼
+                    ??
+                    ??
               [Task Queue]
-                    │
-                    ▼
+                    ??
+                    ??
            [Speakeasy Worker]
-                    │
-                    ▼
+                    ??
+                    ??
               [LLM Summary]
-                    │
-                    ▼
+                    ??
+                    ??
             [Final Assessment]
 
-        ↕ PostgreSQL
-        ↕ Temporary File Storage / S3
+        ??PostgreSQL
+        ??Temporary File Storage / S3
 
 [Optional MCP Server]
-        │
-        └── 기존 Backend/API 기능 재사용
+        ??
+        ?붴?? 湲곗〈 Backend/API 湲곕뒫 ?ъ궗??
 ```
 
 ---
 
-# 2. 공통 데이터 규칙
+# 2. 怨듯넻 ?곗씠??洹쒖튃
 
-## 2.1 공통 필드
+## 2.1 怨듯넻 ?꾨뱶
 
-가능한 모든 분석 결과 객체는 아래 공통 필드를 포함합니다.
+媛?ν븳 紐⑤뱺 遺꾩꽍 寃곌낵 媛앹껜???꾨옒 怨듯넻 ?꾨뱶瑜??ы븿?⑸땲??
 
 ```json
 {
@@ -245,34 +245,34 @@ Feature Extraction
 }
 ```
 
-### 필드 정의
+### ?꾨뱶 ?뺤쓽
 
-| 필드 | 타입 | 필수 | 설명 |
+| ?꾨뱶 | ???| ?꾩닔 | ?ㅻ챸 |
 |---|---|---:|---|
-| `analysis_id` | string | O | 개별 분석 고유 ID |
-| `batch_id` | string / null | O | Batch 요청이 아니면 `null` |
-| `sha256` | string | O | 분석 파일 SHA-256 |
-| `created_at` | ISO 8601 datetime | O | 분석 요청 생성 시각 |
+| `analysis_id` | string | O | 媛쒕퀎 遺꾩꽍 怨좎쑀 ID |
+| `batch_id` | string / null | O | Batch ?붿껌???꾨땲硫?`null` |
+| `sha256` | string | O | 遺꾩꽍 ?뚯씪 SHA-256 |
+| `created_at` | ISO 8601 datetime | O | 遺꾩꽍 ?붿껌 ?앹꽦 ?쒓컖 |
 
 ---
 
-## 2.2 시간 형식
+## 2.2 ?쒓컙 ?뺤떇
 
-모든 시간값은 **ISO 8601** 형식 사용을 권장합니다.
+紐⑤뱺 ?쒓컙媛믪? **ISO 8601** ?뺤떇 ?ъ슜??沅뚯옣?⑸땲??
 
 ```text
 2026-09-07T14:30:00+09:00
 ```
 
-서버 내부 UTC 사용 여부는 Backend/AWS 구현 시 확정하되, API 응답 형식은 일관되게 유지합니다.
+?쒕쾭 ?대? UTC ?ъ슜 ?щ???Backend/AWS 援ы쁽 ???뺤젙?섎릺, API ?묐떟 ?뺤떇? ?쇨??섍쾶 ?좎??⑸땲??
 
 ---
 
-## 2.3 Null 처리
+## 2.3 Null 泥섎━
 
-분석하지 않은 값은 빈 문자열(`""`) 대신 `null`을 사용합니다.
+遺꾩꽍?섏? ?딆? 媛믪? 鍮?臾몄옄??`""`) ???`null`???ъ슜?⑸땲??
 
-예:
+??
 
 ```json
 {
@@ -287,27 +287,27 @@ Feature Extraction
 
 ## 3.1 Single File Upload
 
-### 입력
+### ?낅젰
 
 ```text
 POST /analyses
 Content-Type: multipart/form-data
 ```
 
-| 필드 | 타입 | 필수 | 설명 |
+| ?꾨뱶 | ???| ?꾩닔 | ?ㅻ챸 |
 |---|---|---:|---|
-| `file` | binary | O | Raw PE 파일 |
+| `file` | binary | O | Raw PE ?뚯씪 |
 
-### Backend 생성값
+### Backend ?앹꽦媛?
 
-Backend는 업로드 후 다음 값을 생성합니다.
+Backend???낅줈?????ㅼ쓬 媛믪쓣 ?앹꽦?⑸땲??
 
 - `analysis_id`
 - `sha256`
 - `file_location`
 - `created_at`
 
-### 초기 응답 예시
+### 珥덇린 ?묐떟 ?덉떆
 
 ```json
 {
@@ -323,7 +323,7 @@ Backend는 업로드 후 다음 값을 생성합니다.
 
 ## 3.2 Batch / Multiple File Upload
 
-### 입력
+### ?낅젰
 
 ```text
 POST /batches
@@ -334,7 +334,7 @@ Content-Type: multipart/form-data
 files = [sample1.exe, sample2.exe, sample3.exe]
 ```
 
-### 응답 예시
+### ?묐떟 ?덉떆
 
 ```json
 {
@@ -361,8 +361,8 @@ files = [sample1.exe, sample2.exe, sample3.exe]
 ```
 
 > **Critical**  
-> Batch 전체에 하나의 `analysis_id`를 부여하지 않습니다.  
-> **파일마다 독립적인 `analysis_id`를 생성**하고, 상위 그룹 식별자로 `batch_id`를 사용합니다.
+> Batch ?꾩껜???섎굹??`analysis_id`瑜?遺?ы븯吏 ?딆뒿?덈떎.  
+> **?뚯씪留덈떎 ?낅┰?곸씤 `analysis_id`瑜??앹꽦**?섍퀬, ?곸쐞 洹몃９ ?앸퀎?먮줈 `batch_id`瑜??ъ슜?⑸땲??
 
 ---
 
@@ -370,7 +370,7 @@ files = [sample1.exe, sample2.exe, sample3.exe]
 
 ## 4.1 Initial Triage Result
 
-Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구조입니다.
+Initial Analysis Pipeline ?꾨즺 ??Backend媛 ??Β룹젣怨듯븯???쒖? 援ъ“?낅땲??
 
 ```json
 {
@@ -395,11 +395,11 @@ Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구�
 
 ## 4.2 Prediction Fields
 
-| 필드 | 타입 | 설명 |
+| ?꾨뱶 | ???| ?ㅻ챸 |
 |---|---|---|
-| `lgbm_raw_probability` | float | LightGBM 원시 악성 확률 |
-| `xgb_raw_probability` | float | XGBoost 원시 악성 확률 |
-| `calibrated_probability` | float | Isotonic Calibration 적용 확률 |
+| `lgbm_raw_probability` | float | LightGBM ?먯떆 ?낆꽦 ?뺣쪧 |
+| `xgb_raw_probability` | float | XGBoost ?먯떆 ?낆꽦 ?뺣쪧 |
+| `calibrated_probability` | float | Isotonic Calibration ?곸슜 ?뺣쪧 |
 
 ## 4.3 Risk Signals
 
@@ -411,41 +411,41 @@ Initial Analysis Pipeline 완료 후 Backend가 저장·제공하는 표준 구�
 }
 ```
 
-| 필드 | 설명 |
+| ?꾨뱶 | ?ㅻ챸 |
 |---|---|
 | `disagreement` | `abs(LGBM - XGBoost)` |
-| `ood_score` | Isolation Forest `decision_function` 결과 |
-| `difficulty_score` | PEFormatWarnings 기반 분석 난이도 점수 |
+| `ood_score` | Isolation Forest `decision_function` 寃곌낵 |
+| `difficulty_score` | PEFormatWarnings 湲곕컲 遺꾩꽍 ?쒖씠???먯닔 |
 
-### 현재 기준값
+### ?꾩옱 湲곗?媛?
 
-| 항목 | 현재 값 |
+| ??ぉ | ?꾩옱 媛?|
 |---|---:|
 | `tau_low` | `0.65` |
 | `tau_high` | `0.983645` |
 | `tau_disagree` | `0.30` |
 | `tau_difficulty` | `6.0` |
-| OOD 조건 | `ood_score < 0` |
+| OOD 議곌굔 | `ood_score < 0` |
 
-> `tau_low`와 `tau_difficulty`는 Calibration 세트(48만 건)에서 `tau_low`×`tau_difficulty` 2차원 Grid Search로 동시 탐색해 확정한 값입니다(정의된 후보 grid와 목적함수 범위 내 최적 조합). 두 값이 JRR의 OR 조건에서 서로 상호작용하므로 한쪽을 고정한 채 순차적으로 최적화하지 않습니다. Eval 세트는 이 탐색에 사용되지 않았습니다.
+> `tau_low`? `tau_difficulty`??Calibration ?명듃(48留?嫄??먯꽌 `tau_low`횞`tau_difficulty` 2李⑥썝 Grid Search濡??숈떆 ?먯깋???뺤젙??媛믪엯?덈떎(?뺤쓽???꾨낫 grid? 紐⑹쟻?⑥닔 踰붿쐞 ??理쒖쟻 議고빀). ??媛믪씠 JRR??OR 議곌굔?먯꽌 ?쒕줈 ?곹샇?묒슜?섎?濡??쒖そ??怨좎젙??梨??쒖감?곸쑝濡?理쒖쟻?뷀븯吏 ?딆뒿?덈떎. Eval ?명듃?????먯깋???ъ슜?섏? ?딆븯?듬땲??
 >
-> Threshold 값이 변경될 경우 코드만 수정하지 말고 관련 설계/평가 문서와 본 명세서를 함께 갱신합니다.
+> Threshold 媛믪씠 蹂寃쎈맆 寃쎌슦 肄붾뱶留??섏젙?섏? 留먭퀬 愿???ㅺ퀎/?됯? 臾몄꽌? 蹂?紐낆꽭?쒕? ?④퍡 媛깆떊?⑸땲??
 
 ## 4.4 JRR Reason / Triggered Signals
 
-JRR은 **Priority-ordered Rule-based Router**입니다. 각 판정 시 아래 순서로 위험 신호를 검사합니다.
+JRR? **Priority-ordered Rule-based Router**?낅땲?? 媛??먯젙 ???꾨옒 ?쒖꽌濡??꾪뿕 ?좏샇瑜?寃?ы빀?덈떎.
 
 ```text
 OOD
-  → Disagreement
-    → Difficulty
-      → Probability Gray Zone
-        → AUTO_MALICIOUS / AUTO_BENIGN
+  ??Disagreement
+    ??Difficulty
+      ??Probability Gray Zone
+        ??AUTO_MALICIOUS / AUTO_BENIGN
 ```
 
-`reason`은 이 우선순위상 **가장 먼저 만족한 규칙 1개**를 대표 사유로 기록합니다.
+`reason`? ???곗꽑?쒖쐞??**媛??癒쇱? 留뚯”??洹쒖튃 1媛?*瑜?????ъ쑀濡?湲곕줉?⑸땲??
 
-권장 Reason Label:
+沅뚯옣 Reason Label:
 
 ```text
 OOD Detected
@@ -457,13 +457,13 @@ High Benign Confidence
 ```
 
 > **Critical**  
-> `Uncertain Probability`는 별도의 확률 필드가 아닙니다.  
-> `tau_low < calibrated_probability < tau_high`인 **Calibrated Probability Gray Zone**에 대한 설명용 Reason Label입니다.  
-> 공식 확률 필드명은 계속 `calibrated_probability`를 사용합니다.
+> `Uncertain Probability`??蹂꾨룄???뺣쪧 ?꾨뱶媛 ?꾨떃?덈떎.  
+> `tau_low < calibrated_probability < tau_high`??**Calibrated Probability Gray Zone**??????ㅻ챸??Reason Label?낅땲??  
+> 怨듭떇 ?뺣쪧 ?꾨뱶紐낆? 怨꾩냽 `calibrated_probability`瑜??ъ슜?⑸땲??
 
-`triggered_signals`는 `reason`과 역할이 다른 **별도의 공식 반환 필드**입니다(`src/jrr/jrr_router.py::route_sample()`). OOD/Disagreement/Difficulty/Probability Gray Zone 4개 신호는 각각 독립적으로 검사되며, 조건을 만족할 때마다 해당 신호가 `triggered_signals` 배열에 추가됩니다 — 즉 이 필드는 **동시에 발현된 모든 위험 신호**를 보존합니다.
+`triggered_signals`??`reason`怨???븷???ㅻⅨ **蹂꾨룄??怨듭떇 諛섑솚 ?꾨뱶**?낅땲??`src/jrr/jrr_router.py::route_sample()`). OOD/Disagreement/Difficulty/Probability Gray Zone 4媛??좏샇??媛곴컖 ?낅┰?곸쑝濡?寃?щ릺硫? 議곌굔??留뚯”???뚮쭏???대떦 ?좏샇媛 `triggered_signals` 諛곗뿴??異붽??⑸땲????利????꾨뱶??**?숈떆??諛쒗쁽??紐⑤뱺 ?꾪뿕 ?좏샇**瑜?蹂댁〈?⑸땲??
 
-가능한 값:
+媛?ν븳 媛?
 
 ```text
 OOD
@@ -472,12 +472,12 @@ DIFFICULTY
 UNCERTAIN_PROBABILITY
 ```
 
-| 필드 | 의미 |
+| ?꾨뱶 | ?섎? |
 |---|---|
-| `reason` | 우선순위상 최초로 매칭된 대표 사유 1개 (문자열) |
-| `triggered_signals` | 동시에 발현된 모든 위험 신호 (배열, 검사 순서와 동일하게 추가됨) |
+| `reason` | ?곗꽑?쒖쐞??理쒖큹濡?留ㅼ묶??????ъ쑀 1媛?(臾몄옄?? |
+| `triggered_signals` | ?숈떆??諛쒗쁽??紐⑤뱺 ?꾪뿕 ?좏샇 (諛곗뿴, 寃???쒖꽌? ?숈씪?섍쾶 異붽??? |
 
-예 — OOD·Disagreement·Difficulty가 동시에 발현된 경우, 대표 `reason`은 최초 매칭된 OOD 하나만 기록되지만 `triggered_signals`에는 셋 다 남습니다:
+????OOD쨌Disagreement쨌Difficulty媛 ?숈떆??諛쒗쁽??寃쎌슦, ???`reason`? 理쒖큹 留ㅼ묶??OOD ?섎굹留?湲곕줉?섏?留?`triggered_signals`?먮뒗 ?????⑥뒿?덈떎:
 
 ```json
 {
@@ -489,15 +489,15 @@ UNCERTAIN_PROBABILITY
 ```
 
 > **Critical**  
-> `AUTO_BENIGN` / `AUTO_MALICIOUS`처럼 위험 신호가 하나도 없는 경우 `triggered_signals`는 빈 배열 `[]`입니다.  
-> `triggered_signals` 도입은 위 Priority-ordered Routing 순서나 대표 `reason` 산출 방식을 변경하지 않습니다 — 어떤 신호가 `AUTO_MALICIOUS`/`AUTO_BENIGN`을 뒤집고 `HIGH_RISK_UNCERTAIN`으로 격상시키는지는 여전히 위 우선순위만으로 결정됩니다. `triggered_signals`는 그 결과를 보조적으로 상세히 기록하는 필드일 뿐입니다.
+> `AUTO_BENIGN` / `AUTO_MALICIOUS`泥섎읆 ?꾪뿕 ?좏샇媛 ?섎굹???녿뒗 寃쎌슦 `triggered_signals`??鍮?諛곗뿴 `[]`?낅땲??  
+> `triggered_signals` ?꾩엯? ??Priority-ordered Routing ?쒖꽌?????`reason` ?곗텧 諛⑹떇??蹂寃쏀븯吏 ?딆뒿?덈떎 ???대뼡 ?좏샇媛 `AUTO_MALICIOUS`/`AUTO_BENIGN`???ㅼ쭛怨?`HIGH_RISK_UNCERTAIN`?쇰줈 寃⑹긽?쒗궎?붿????ъ쟾?????곗꽑?쒖쐞留뚯쑝濡?寃곗젙?⑸땲?? `triggered_signals`??洹?寃곌낵瑜?蹂댁“?곸쑝濡??곸꽭??湲곕줉?섎뒗 ?꾨뱶??肉먯엯?덈떎.
 
-> **Critical — `risk_score` 미포함**  
-> JRR 공식 output에는 `risk_score` 필드가 없습니다. JRR은 여러 위험 신호를 하나의 가중합(Weighted Risk Score)으로 합산하지 않고, `reason` + `triggered_signals` + Priority-ordered Rule로 라우팅을 결정합니다. "Joint"는 여러 신호를 함께 고려한다는 뜻이며 가중 점수 산출을 의미하지 않습니다.
+> **Critical ??`risk_score` 誘명룷??*  
+> JRR 怨듭떇 output?먮뒗 `risk_score` ?꾨뱶媛 ?놁뒿?덈떎. JRR? ?щ윭 ?꾪뿕 ?좏샇瑜??섎굹??媛以묓빀(Weighted Risk Score)?쇰줈 ?⑹궛?섏? ?딄퀬, `reason` + `triggered_signals` + Priority-ordered Rule濡??쇱슦?낆쓣 寃곗젙?⑸땲?? "Joint"???щ윭 ?좏샇瑜??④퍡 怨좊젮?쒕떎???살씠硫?媛以??먯닔 ?곗텧???섎??섏? ?딆뒿?덈떎.
 
 ## 4.5 Fail-Closed Behavior
 
-`p_calib`(`calibrated_probability`) / `disagreement` / `ood_score` / `difficulty_score` 중 **하나라도 NaN이면** 무조건 아래와 같이 반환합니다.
+`p_calib`(`calibrated_probability`) / `disagreement` / `ood_score` / `difficulty_score` 以?**?섎굹?쇰룄 NaN?대㈃** 臾댁“嫄??꾨옒? 媛숈씠 諛섑솚?⑸땲??
 
 ```json
 {
@@ -513,20 +513,20 @@ UNCERTAIN_PROBABILITY
 ```
 
 > **Critical**  
-> NaN 입력에 대해 `AUTO_BENIGN`/`AUTO_MALICIOUS`로 자동 판정하지 않습니다. 항상 `HIGH_RISK_UNCERTAIN` + `route="DEEP_ANALYSIS"`로 보내 심층분석·분석가 검토를 거치도록 하는 Fail-Closed 정책입니다.
+> NaN ?낅젰?????`AUTO_BENIGN`/`AUTO_MALICIOUS`濡??먮룞 ?먯젙?섏? ?딆뒿?덈떎. ??긽 `HIGH_RISK_UNCERTAIN` + `route="DEEP_ANALYSIS"`濡?蹂대궡 ?ъ링遺꾩꽍쨌遺꾩꽍媛 寃?좊? 嫄곗튂?꾨줉 ?섎뒗 Fail-Closed ?뺤콉?낅땲??
 >
-> 이 Fail-Closed 응답도 정상 판정 경로와 동일한 JRR output schema(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)를 유지합니다. `triggered_signals`는 키 자체가 누락되는 것이 아니라 **항상 빈 배열 `[]`**을 반환합니다 — System Error는 위험 신호(risk signal)가 아니므로 `SYSTEM_ERROR` 같은 별도 값을 추가하지 않으며, 오류 원인은 `reason`으로만 표현합니다.
+> ??Fail-Closed ?묐떟???뺤긽 ?먯젙 寃쎈줈? ?숈씪??JRR output schema(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)瑜??좎??⑸땲?? `triggered_signals`?????먯껜媛 ?꾨씫?섎뒗 寃껋씠 ?꾨땲??**??긽 鍮?諛곗뿴 `[]`**??諛섑솚?⑸땲????System Error???꾪뿕 ?좏샇(risk signal)媛 ?꾨땲誘濡?`SYSTEM_ERROR` 媛숈? 蹂꾨룄 媛믪쓣 異붽??섏? ?딆쑝硫? ?ㅻ쪟 ?먯씤? `reason`?쇰줈留??쒗쁽?⑸땲??
 
 ## 4.6 Route
 
-권장 Route 값:
+沅뚯옣 Route 媛?
 
 ```text
 FINAL
 DEEP_ANALYSIS
 ```
 
-예:
+??
 
 ```json
 {
@@ -535,7 +535,7 @@ DEEP_ANALYSIS
 }
 ```
 
-또는
+?먮뒗
 
 ```json
 {
@@ -548,7 +548,7 @@ DEEP_ANALYSIS
 
 # 5. SHAP / XAI Interface
 
-SHAP은 **LightGBM 모델의 판정 근거**를 설명합니다.
+SHAP? **LightGBM 紐⑤뜽???먯젙 洹쇨굅**瑜??ㅻ챸?⑸땲??
 
 ```json
 {
@@ -571,29 +571,29 @@ SHAP은 **LightGBM 모델의 판정 근거**를 설명합니다.
 ```
 
 > **Critical**  
-> SHAP은 **Raw LightGBM 출력에 대한 모델 설명**입니다.  
-> `calibrated_probability`를 SHAP이 직접 설명하는 것처럼 표현하지 않습니다.
+> SHAP? **Raw LightGBM 異쒕젰?????紐⑤뜽 ?ㅻ챸**?낅땲??  
+> `calibrated_probability`瑜?SHAP??吏곸젒 ?ㅻ챸?섎뒗 寃껋쿂???쒗쁽?섏? ?딆뒿?덈떎.
 
 ---
 
 # 6. Deep Analysis Job Interface
 
-`HIGH_RISK_UNCERTAIN` 샘플은 먼저 **Tier 1(CAPA + FLOSS)** 분석을 수행합니다.  
-Tier 1 결과만으로 충분하지 않아 Speakeasy가 필요한 경우에만 Tier 2 비동기 Job을 Queue에 등록합니다.
+`HIGH_RISK_UNCERTAIN` ?섑뵆? 癒쇱? **Tier 1(CAPA + FLOSS)** 遺꾩꽍???섑뻾?⑸땲??  
+Tier 1 寃곌낵留뚯쑝濡?異⑸텇?섏? ?딆븘 Speakeasy媛 ?꾩슂??寃쎌슦?먮쭔 Tier 2 鍮꾨룞湲?Job??Queue???깅줉?⑸땲??
 
 ```text
 HIGH_RISK_UNCERTAIN
-        ↓
+        ??
 CAPA + FLOSS
-        ↓
-Speakeasy 필요
-        ↓
+        ??
+Speakeasy ?꾩슂
+        ??
 Task Queue
-        ↓
+        ??
 Speakeasy Worker
 ```
 
-현재 Task Queue는 **AWS SQS를 우선 적용 후보로 두며, 팀 최종 확정 후 본 문서에서 TBD를 제거합니다.**
+?꾩옱 Task Queue??**AWS SQS瑜??곗꽑 ?곸슜 ?꾨낫濡??먮ŉ, ? 理쒖쥌 ?뺤젙 ??蹂?臾몄꽌?먯꽌 TBD瑜??쒓굅?⑸땲??**
 
 ## 6.1 SQS Message Body
 
@@ -607,20 +607,20 @@ Speakeasy Worker
 }
 ```
 
-| 필드 | 필수 | 설명 |
+| ?꾨뱶 | ?꾩닔 | ?ㅻ챸 |
 |---|---:|---|
-| `analysis_id` | O | 분석 ID |
-| `sha256` | O | 파일 해시 |
-| `file_location` | O | Worker가 Raw PE를 가져올 위치 |
-| `requested_stage` | O | 실행할 심층분석 단계 (`SPEAKEASY`) |
-| `requested_at` | O | Queue 등록 시각 |
+| `analysis_id` | O | 遺꾩꽍 ID |
+| `sha256` | O | ?뚯씪 ?댁떆 |
+| `file_location` | O | Worker媛 Raw PE瑜?媛?몄삱 ?꾩튂 |
+| `requested_stage` | O | ?ㅽ뻾???ъ링遺꾩꽍 ?④퀎 (`SPEAKEASY`) |
+| `requested_at` | O | Queue ?깅줉 ?쒓컖 |
 
 > **Critical**  
-> Queue 메시지는 가능한 한 작게 유지하고, 분석 원본/대형 JSON 전체를 메시지에 포함하지 않습니다.
+> Queue 硫붿떆吏??媛?ν븳 ???묎쾶 ?좎??섍퀬, 遺꾩꽍 ?먮낯/???JSON ?꾩껜瑜?硫붿떆吏???ы븿?섏? ?딆뒿?덈떎.
 >
-> SQS Standard Queue 사용 시 중복 전달 가능성을 고려하여 Worker는 `analysis_id` 기준으로 **중복 완료 처리 방지(Idempotency)** 로직을 가져야 합니다.
+> SQS Standard Queue ?ъ슜 ??以묐났 ?꾨떖 媛?μ꽦??怨좊젮?섏뿬 Worker??`analysis_id` 湲곗??쇰줈 **以묐났 ?꾨즺 泥섎━ 諛⑹?(Idempotency)** 濡쒖쭅??媛?몄빞 ?⑸땲??
 >
-> `file_location`은 Worker용 내부 필드이며 외부 API 응답에는 노출하지 않습니다.
+> `file_location`? Worker???대? ?꾨뱶?대ŉ ?몃? API ?묐떟?먮뒗 ?몄텧?섏? ?딆뒿?덈떎.
 
 ---
 
@@ -665,8 +665,8 @@ Speakeasy Worker
 }
 ```
 
-> FLOSS 문자열 자체를 곧바로 악성 근거로 확정하지 않습니다.  
-> CAPA / Speakeasy / LLM Analyst Assist와 함께 해석합니다.
+> FLOSS 臾몄옄???먯껜瑜?怨㏓컮濡??낆꽦 洹쇨굅濡??뺤젙?섏? ?딆뒿?덈떎.  
+> CAPA / Speakeasy / LLM Analyst Assist? ?④퍡 ?댁꽍?⑸땲??
 
 ---
 
@@ -676,17 +676,17 @@ Speakeasy Worker
 
 ```text
 QUEUED
-   ↓
+   ??
 RUNNING
-   ↓
+   ??
 COMPLETED
 ```
 
-오류 발생 시:
+?ㅻ쪟 諛쒖깮 ??
 
 ```text
 RUNNING
-   ↓
+   ??
 FAILED
 ```
 
@@ -708,7 +708,7 @@ FAILED
 }
 ```
 
-실패 예시:
+?ㅽ뙣 ?덉떆:
 
 ```json
 {
@@ -738,7 +738,7 @@ FAILED
 }
 ```
 
-> CAPE는 현재 자동 파이프라인 필수 구현 대상이 아니며, 외부 Behavioral Report 활용 여부에 따라 변경될 수 있습니다.
+> CAPE???꾩옱 ?먮룞 ?뚯씠?꾨씪???꾩닔 援ы쁽 ??곸씠 ?꾨땲硫? ?몃? Behavioral Report ?쒖슜 ?щ????곕씪 蹂寃쎈맆 ???덉뒿?덈떎.
 
 ---
 
@@ -767,43 +767,42 @@ FAILED
 
 # 12. LLM Analyst Assist Interface
 
-## 12.1 LLM 입력
+## 12.1 LLM ?낅젰
 
 ```json
 {
-  "analysis_id": "a_20260907_000001",
+  "sample_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
   "initial_verdict": "HIGH_RISK_UNCERTAIN",
-  "risk_signals": {
-    "disagreement": 0.31,
-    "ood_score": -0.04,
-    "difficulty_score": 7
-  },
-  "capa": {},
-  "floss": {},
-  "speakeasy": {},
-  "evidence": []
+  "evidence": [
+    {
+      "technique_id": "T1059",
+      "technique_name": "Command and Scripting Interpreter",
+      "sources": ["CAPA"],
+      "summary": "Command execution related behavior detected."
+    }
+  ]
 }
 ```
 
-## 12.2 LLM 출력
+## 12.2 LLM 異쒕젰
 
 ```json
 {
   "analysis_id": "a_20260907_000001",
   "llm_summary": {
-    "summary": "분석 결과 요약",
+    "summary": "遺꾩꽍 寃곌낵 ?붿빟",
     "suspicious_behaviors": [
-      "의심 행위 1",
-      "의심 행위 2"
+      "?섏떖 ?됱쐞 1",
+      "?섏떖 ?됱쐞 2"
     ],
-    "analyst_notes": "추가 확인이 필요한 사항"
+    "analyst_notes": "異붽? ?뺤씤???꾩슂???ы빆"
   }
 }
 ```
 
 > **Critical**  
-> LLM Summary는 **분석가 보조 정보**입니다.  
-> CAPA/Speakeasy 등 원본 Evidence를 대체하지 않습니다.
+> LLM Summary??**遺꾩꽍媛 蹂댁“ ?뺣낫**?낅땲??  
+> CAPA/Speakeasy ???먮낯 Evidence瑜??泥댄븯吏 ?딆뒿?덈떎.
 
 ---
 
@@ -837,8 +836,8 @@ MALICIOUS
 UNCERTAIN
 ```
 
-> **TBD**  
-> `final_verdict`의 정확한 Enum은 Final Assessment 로직 확정 시 최종 결정합니다.
+> **Review-first Policy**  
+> ?쒖뒪?쒖? ?ㅽ깘/誘명깘??理쒖냼?뷀븯湲??꾪빐 湲곕낯?곸쑝濡??먮룞 ?먯젙??蹂댁닔?곸쑝濡?吏꾪뻾?섎ŉ, 遺덊솗?ㅽ븳 寃쎌슦 `UNCERTAIN`?쇰줈 遺꾨쪟?섏뿬 ?꾨Ц媛??寃??MANUAL_REVIEW)瑜??쒖븞?⑸땲??
 
 ## `analyst_final_verdict`
 
@@ -847,20 +846,35 @@ BENIGN
 MALICIOUS
 ```
 
-필요한 경우 `UNRESOLVED` 추가 여부를 별도로 결정합니다.
+?꾩슂??寃쎌슦 `UNRESOLVED` 異붽? ?щ?瑜?蹂꾨룄濡?寃곗젙?⑸땲??
 
 ---
 
 # 14. Analyst Feedback Interface
 
-```json
+PATCH /analyses/{analysis_id}/verdict
+
+**Request**
+`json
 {
-  "analysis_id": "a_20260907_000001",
   "analyst_final_verdict": "MALICIOUS",
-  "analyst_comment": "Suspicious process injection behavior confirmed.",
-  "updated_at": "2026-09-07T15:00:00+09:00"
+  "analyst_notes": "Suspicious process injection behavior confirmed.",
+  "reviewer_id": "analyst_1",
+  "expected_revision": 0
 }
-```
+`
+
+**Response**
+`json
+{
+  "analysis_id": "a_20260915_000001",
+  "revision": 1,
+  "analyst_final_verdict": "MALICIOUS",
+  "analyst_notes": "Suspicious process injection behavior confirmed.",
+  "reviewer_id": "analyst_1",
+  "reviewed_at": "2026-09-15T15:00:00Z"
+}
+`
 
 > 현재 모델 재학습 자동화 방식은 M4 이후 별도 결정합니다.
 
@@ -868,41 +882,41 @@ MALICIOUS
 
 # 15. REST API Interface
 
-아래 Endpoint는 권장 초안이며 Backend 구현 시 최종 확정합니다.
+?꾨옒 Endpoint??沅뚯옣 珥덉븞?대ŉ Backend 援ы쁽 ??理쒖쥌 ?뺤젙?⑸땲??
 
-분석 요청은 심층분석이 비동기로 이어질 수 있으므로 `POST /analyses`, `POST /batches`는 작업 접수 후 `analysis_id` 또는 `batch_id`를 반환하는 구조를 권장합니다.
+遺꾩꽍 ?붿껌? ?ъ링遺꾩꽍??鍮꾨룞湲곕줈 ?댁뼱吏????덉쑝誘濡?`POST /analyses`, `POST /batches`???묒뾽 ?묒닔 ??`analysis_id` ?먮뒗 `batch_id`瑜?諛섑솚?섎뒗 援ъ“瑜?沅뚯옣?⑸땲??
 
 ```text
 HTTP 202 Accepted
 ```
 
-를 기본 응답 후보로 사용합니다.
+瑜?湲곕낯 ?묐떟 ?꾨낫濡??ъ슜?⑸땲??
 
-| Method | Endpoint | 설명 |
+| Method | Endpoint | ?ㅻ챸 |
 |---|---|---|
-| `POST` | `/analyses` | 단일 PE 분석 요청 |
-| `GET` | `/analyses/{analysis_id}` | 전체 분석 결과 조회 |
-| `GET` | `/analyses/{analysis_id}/status` | 분석 상태 조회 |
-| `GET` | `/analyses/{analysis_id}/triage` | Initial Triage 결과 조회 |
-| `GET` | `/analyses/{analysis_id}/deep-analysis` | 심층분석 결과 조회 |
-| `GET` | `/analyses/{analysis_id}/xai` | SHAP 결과 조회 |
-| `POST` | `/batches` | 다중 파일 분석 요청 |
-| `GET` | `/batches/{batch_id}` | Batch 진행 상태 및 결과 조회 |
-| `PATCH` | `/analyses/{analysis_id}/verdict` | Analyst Verdict 저장 |
+| `POST` | `/analyses` | ?⑥씪 PE 遺꾩꽍 ?붿껌 |
+| `GET` | `/analyses/{analysis_id}` | ?꾩껜 遺꾩꽍 寃곌낵 議고쉶 |
+| `GET` | `/analyses/{analysis_id}/status` | 遺꾩꽍 ?곹깭 議고쉶 |
+| `GET` | `/analyses/{analysis_id}/triage` | Initial Triage 寃곌낵 議고쉶 |
+| `GET` | `/analyses/{analysis_id}/deep-analysis` | ?ъ링遺꾩꽍 寃곌낵 議고쉶 |
+| `GET` | `/analyses/{analysis_id}/xai` | SHAP 寃곌낵 議고쉶 |
+| `POST` | `/batches` | ?ㅼ쨷 ?뚯씪 遺꾩꽍 ?붿껌 |
+| `GET` | `/batches/{batch_id}` | Batch 吏꾪뻾 ?곹깭 諛?寃곌낵 議고쉶 |
+| `PATCH` | `/analyses/{analysis_id}/verdict` | Analyst Verdict ???|
 
-> 실제 URI 구조는 Backend 담당 구현 전에 팀 검토 후 확정합니다.
+> ?ㅼ젣 URI 援ъ“??Backend ?대떦 援ы쁽 ?꾩뿉 ? 寃?????뺤젙?⑸땲??
 
 ---
 
-# 16. Frontend ↔ Backend Polling Interface
+# 16. Frontend ??Backend Polling Interface
 
-예:
+??
 
 ```text
 GET /analyses/{analysis_id}/status
 ```
 
-응답:
+?묐떟:
 
 ```json
 {
@@ -912,7 +926,7 @@ GET /analyses/{analysis_id}/status
 }
 ```
 
-완료 시:
+?꾨즺 ??
 
 ```json
 {
@@ -924,7 +938,7 @@ GET /analyses/{analysis_id}/status
 
 ---
 
-## 16.1 권장 `current_stage`
+## 16.1 沅뚯옣 `current_stage`
 
 ```text
 UPLOAD
@@ -940,9 +954,9 @@ FINAL_ASSESSMENT
 
 # 17. MCP Interface
 
-MCP는 기존 TRUST-Triage 분석 기능을 AI Agent가 Tool 형태로 사용할 수 있도록 하는 확장 인터페이스입니다.
+MCP??湲곗〈 TRUST-Triage 遺꾩꽍 湲곕뒫??AI Agent媛 Tool ?뺥깭濡??ъ슜?????덈룄濡??섎뒗 ?뺤옣 ?명꽣?섏씠?ㅼ엯?덈떎.
 
-## 권장 MCP Tools
+## 沅뚯옣 MCP Tools
 
 ```text
 analyze_sample
@@ -952,21 +966,21 @@ get_deep_analysis_result
 get_final_assessment
 ```
 
-### 설계 원칙
+### ?ㅺ퀎 ?먯튃
 
 ```text
 AI Agent
-   ↓
+   ??
 MCP Server
-   ↓
-기존 FastAPI / Service Layer
-   ↓
+   ??
+湲곗〈 FastAPI / Service Layer
+   ??
 TRUST-Triage Pipeline
 ```
 
 > **Critical**  
-> MCP용 별도 분석 파이프라인을 만들지 않습니다.  
-> Web, REST API, MCP는 **동일한 Backend 및 분석 엔진을 재사용**해야 합니다.
+> MCP??蹂꾨룄 遺꾩꽍 ?뚯씠?꾨씪?몄쓣 留뚮뱾吏 ?딆뒿?덈떎.  
+> Web, REST API, MCP??**?숈씪??Backend 諛?遺꾩꽍 ?붿쭊???ъ궗??*?댁빞 ?⑸땲??
 
 ---
 
@@ -980,21 +994,21 @@ TRUST-Triage Pipeline
 }
 ```
 
-## 저장 원칙
+## ????먯튃
 
-1. Raw PE 업로드
-2. SHA-256 계산
-3. 임시 저장
-4. 분석 수행
-5. 필요한 분석 결과 및 Feature 저장
-6. Raw PE 삭제 또는 Lifecycle 정책 적용
+1. Raw PE ?낅줈??
+2. SHA-256 怨꾩궛
+3. ?꾩떆 ???
+4. 遺꾩꽍 ?섑뻾
+5. ?꾩슂??遺꾩꽍 寃곌낵 諛?Feature ???
+6. Raw PE ??젣 ?먮뒗 Lifecycle ?뺤콉 ?곸슜
 
 > **TBD**  
-> Raw PE 보존 기간 및 S3 Lifecycle 세부 정책은 AWS/보안 정책 확정 후 반영합니다.
+> Raw PE 蹂댁〈 湲곌컙 諛?S3 Lifecycle ?몃? ?뺤콉? AWS/蹂댁븞 ?뺤콉 ?뺤젙 ??諛섏쁺?⑸땲??
 
 ---
 
-# 19. Database 저장 최소 항목
+# 19. Database ???理쒖냼 ??ぉ
 
 ## Analysis Metadata
 
@@ -1055,7 +1069,7 @@ TRUST-Triage Pipeline
 }
 ```
 
-### 권장 Error Stage
+### 沅뚯옣 Error Stage
 
 ```text
 UPLOAD
@@ -1074,107 +1088,108 @@ FINAL_ASSESSMENT
 ```
 
 > **Critical**  
-> 한 모듈의 실패가 전체 분석의 원인을 알 수 없는 `500 error` 하나로만 남지 않도록 실패 Stage를 기록합니다.
+> ??紐⑤뱢???ㅽ뙣媛 ?꾩껜 遺꾩꽍???먯씤???????녿뒗 `500 error` ?섎굹濡쒕쭔 ?⑥? ?딅룄濡??ㅽ뙣 Stage瑜?湲곕줉?⑸땲??
 
 ---
 
-# 21. 담당 영역별 확인 항목
+# 21. ?대떦 ?곸뿭蹂??뺤씤 ??ぉ
 
 ## Frontend
 
-- API 필드명을 임의로 변경하지 않음
-- Polling 상태 Enum 준수
-- Batch 결과를 `batch_id` + 개별 `analysis_id` 기준으로 표시
-- SHAP과 Behavioral Evidence를 화면에서 분리
+- API ?꾨뱶紐낆쓣 ?꾩쓽濡?蹂寃쏀븯吏 ?딆쓬
+- Polling ?곹깭 Enum 以??
+- Batch 寃곌낵瑜?`batch_id` + 媛쒕퀎 `analysis_id` 湲곗??쇰줈 ?쒖떆
+- SHAP怨?Behavioral Evidence瑜??붾㈃?먯꽌 遺꾨━
 
 ## Backend / DB
 
-- 공통 ID 생성 및 관리
-- REST API 계약 유지
-- JRR / Deep Analysis / Final Verdict를 분리 저장
-- Worker가 조회 가능한 파일 위치 및 Job 정보 제공
+- 怨듯넻 ID ?앹꽦 諛?愿由?
+- REST API 怨꾩빟 ?좎?
+- JRR / Deep Analysis / Final Verdict瑜?遺꾨━ ???
+- Worker媛 議고쉶 媛?ν븳 ?뚯씪 ?꾩튂 諛?Job ?뺣낫 ?쒓났
 
 ## Deep Analysis / Task Queue
 
-- SQS Message Body 구조 준수
-- `analysis_id` 기준 Idempotency 처리
-- 상태값 업데이트
-- CAPA / FLOSS / Speakeasy 결과 표준 구조 반환
-- Worker 실패 시 Error Interface 준수
-- SQS 확정 시 Visibility Timeout / Retry / DLQ 정책을 Service Architecture와 함께 반영
+- SQS Message Body 援ъ“ 以??
+- `analysis_id` 湲곗? Idempotency 泥섎━
+- ?곹깭媛??낅뜲?댄듃
+- CAPA / FLOSS / Speakeasy 寃곌낵 ?쒖? 援ъ“ 諛섑솚
+- Worker ?ㅽ뙣 ??Error Interface 以??
+- SQS ?뺤젙 ??Visibility Timeout / Retry / DLQ ?뺤콉??Service Architecture? ?④퍡 諛섏쁺
 
 ## AWS / Infrastructure
 
-- Raw PE 임시 저장소 구성
-- Main Server ↔ Worker ↔ DB 간 접근 권한 관리
-- Queue 및 Storage 권한 최소화
-- Secret / API Key를 코드에 직접 저장하지 않음
+- Raw PE ?꾩떆 ??μ냼 援ъ꽦
+- Main Server ??Worker ??DB 媛??묎렐 沅뚰븳 愿由?
+- Queue 諛?Storage 沅뚰븳 理쒖냼??
+- Secret / API Key瑜?肄붾뱶??吏곸젒 ??ν븯吏 ?딆쓬
 
 ## System Integration
 
-- 모듈 간 필드명 및 상태 Enum 검증
-- End-to-End 데이터 흐름 확인
-- Web / REST API / MCP가 동일 분석 결과를 사용하는지 검증
+- 紐⑤뱢 媛??꾨뱶紐?諛??곹깭 Enum 寃利?
+- End-to-End ?곗씠???먮쫫 ?뺤씤
+- Web / REST API / MCP媛 ?숈씪 遺꾩꽍 寃곌낵瑜??ъ슜?섎뒗吏 寃利?
 
 ---
 
-# 22. 현재 TBD 항목
+# 22. ?꾩옱 TBD ??ぉ
 
-- [ ] Task Queue 최종 확정: **AWS SQS 우선안** (팀 확정 후 TBD 제거)
-- [ ] Main Server / Worker 단일·분산 배치 최종 구조
-- [ ] PostgreSQL 배포 방식: EC2 / RDS 등
-- [ ] Raw PE 저장 방식 및 보존 기간
-- [ ] Batch 최대 파일 수 / 파일 크기 제한
-- [ ] ZIP 입력 지원 여부
-- [ ] CAPA + FLOSS → Speakeasy Tier 진입 조건
-- [ ] `final_verdict` 최종 Enum
-- [ ] MCP 구현 범위 및 Tool 목록
-- [ ] LLM API 및 Prompt/Output Schema 확정
-- [ ] Final Assessment 자동 판정 로직
+- [ ] Task Queue 理쒖쥌 ?뺤젙: **AWS SQS ?곗꽑??* (? ?뺤젙 ??TBD ?쒓굅)
+- [ ] Main Server / Worker ?⑥씪쨌遺꾩궛 諛곗튂 理쒖쥌 援ъ“
+- [ ] PostgreSQL 諛고룷 諛⑹떇: EC2 / RDS ??
+- [ ] Raw PE ???諛⑹떇 諛?蹂댁〈 湲곌컙
+- [ ] Batch 理쒕? ?뚯씪 ??/ ?뚯씪 ?ш린 ?쒗븳
+- [ ] ZIP ?낅젰 吏???щ?
+- [ ] CAPA + FLOSS ??Speakeasy Tier 吏꾩엯 議곌굔
+- [ ] `final_verdict` 理쒖쥌 Enum
+- [ ] MCP 援ы쁽 踰붿쐞 諛?Tool 紐⑸줉
+- [ ] LLM API 諛?Prompt/Output Schema ?뺤젙
+- [ ] Final Assessment ?먮룞 ?먯젙 濡쒖쭅
 
 ---
 
-# 23. 변경 관리 규칙
+# 23. 蹂寃?愿由?洹쒖튃
 
 ```text
-1. interface_spec.md 수정
-        ↓
-2. 관련 담당자 검토
-        ↓
-3. Backend / Worker / Frontend 코드 반영
-        ↓
+1. interface_spec.md ?섏젙
+        ??
+2. 愿???대떦??寃??
+        ??
+3. Backend / Worker / Frontend 肄붾뱶 諛섏쁺
+        ??
 4. Integration Test
 ```
 
 > **Critical**  
-> 통합 단계에서는 **코드를 먼저 변경하고 문서를 나중에 맞추는 방식보다, 인터페이스 명세를 먼저 합의한 뒤 구현하는 방식**을 기본 원칙으로 합니다.
+> ?듯빀 ?④퀎?먯꽌??**肄붾뱶瑜?癒쇱? 蹂寃쏀븯怨?臾몄꽌瑜??섏쨷??留욎텛??諛⑹떇蹂대떎, ?명꽣?섏씠??紐낆꽭瑜?癒쇱? ?⑹쓽????援ы쁽?섎뒗 諛⑹떇**??湲곕낯 ?먯튃?쇰줈 ?⑸땲??
 
 ---
 
-# 24. 핵심 계약 요약
+# 24. ?듭떖 怨꾩빟 ?붿빟
 
 ```text
-개별 분석 ID       → analysis_id
-Batch ID           → batch_id
-파일 식별           → sha256
+媛쒕퀎 遺꾩꽍 ID       ??analysis_id
+Batch ID           ??batch_id
+?뚯씪 ?앸퀎           ??sha256
 
-분석 상태           → QUEUED / RUNNING / COMPLETED / FAILED / NOT_REQUIRED
+遺꾩꽍 ?곹깭           ??QUEUED / RUNNING / COMPLETED / FAILED / NOT_REQUIRED
 
-JRR 판정            → AUTO_BENIGN / AUTO_MALICIOUS / HIGH_RISK_UNCERTAIN
-JRR 대표 사유         → reason
-JRR 발현 신호 전체     → triggered_signals
-Uncertain Probability → Gray Zone 설명용 Label (별도 확률 필드 아님)
+JRR ?먯젙            ??AUTO_BENIGN / AUTO_MALICIOUS / HIGH_RISK_UNCERTAIN
+JRR ????ъ쑀         ??reason
+JRR 諛쒗쁽 ?좏샇 ?꾩껜     ??triggered_signals
+Uncertain Probability ??Gray Zone ?ㅻ챸??Label (蹂꾨룄 ?뺣쪧 ?꾨뱶 ?꾨떂)
 
-모델 근거           → top_features (SHAP)
-행위 근거           → evidence (CAPA/FLOSS/Speakeasy/MITRE)
+紐⑤뜽 洹쇨굅           ??top_features (SHAP)
+?됱쐞 洹쇨굅           ??evidence (CAPA/FLOSS/Speakeasy/MITRE)
 
-비동기 작업         → CAPA/FLOSS → 필요 시 SQS → Speakeasy Worker
-SQS 메시지           → analysis_id + sha256 + file_location + requested_stage
-Raw PE              → 메시지/DB에 직접 삽입 금지
+鍮꾨룞湲??묒뾽         ??CAPA/FLOSS ???꾩슂 ??SQS ??Speakeasy Worker
+SQS 硫붿떆吏           ??analysis_id + sha256 + file_location + requested_stage
+Raw PE              ??硫붿떆吏/DB??吏곸젒 ?쎌엯 湲덉?
 
-판정 이력           → initial_verdict
+?먯젙 ?대젰           ??initial_verdict
                       final_verdict
                       analyst_final_verdict
 
-Web / REST / MCP    → 동일 Backend 및 분석 파이프라인 사용
+Web / REST / MCP    ???숈씪 Backend 諛?遺꾩꽍 ?뚯씠?꾨씪???ъ슜
 ```
+

@@ -1,136 +1,136 @@
-# Joint Risk Router (JRR) — Final Design & Evaluation
+﻿# Joint Risk Router (JRR) ??Final Design & Evaluation
 
-> **재검증 안내**: 이 문서는 `docs/jrr-summary` 브랜치(= `main` 최신 상태, 병합 기준 커밋 `7e1d8de`)를 기준으로 리포지토리 전체를 처음부터 다시 조사하여 **전면 재작성**했습니다. 이전 버전은 다른 feature 브랜치 시점의 초안이었고, 그 시점에는 OOD/Analysis Difficulty가 라우터에 통합되지 않은 상태였습니다. **현재 `main`에서는 두 신호 모두 라우터에 완전히 통합되어 있습니다.** 근거는 실제 코드(`src/jrr/*.py`)와 코드와 사실상 1:1로 일치하는 최신 설계 문서(`docs/pipeline_architecture_v3.md`, `docs/interface_spec.md`, `docs/service_architecture.md`, `docs/risk_routing_simulation_test.md`)이며, 이번 조사에서 실제로 `import jrr`을 실행하고 `route_sample()` 소스를 직접 대조해 검증했습니다. 코드와 문서가 충돌하는 지점은 코드를 기준으로 삼고 본문에 명시했습니다. 확인할 수 없는 값은 추측하지 않고 "확인 필요"로 표기했습니다.
+> **?ш?利??덈궡**: ??臾몄꽌??`docs/jrr-summary` 釉뚮옖移?= `main` 理쒖떊 ?곹깭, 蹂묓빀 湲곗? 而ㅻ컠 `7e1d8de`)瑜?湲곗??쇰줈 由ы룷吏?좊━ ?꾩껜瑜?泥섏쓬遺???ㅼ떆 議곗궗?섏뿬 **?꾨㈃ ?ъ옉??*?덉뒿?덈떎. ?댁쟾 踰꾩쟾? ?ㅻⅨ feature 釉뚮옖移??쒖젏??珥덉븞?댁뿀怨? 洹??쒖젏?먮뒗 OOD/Analysis Difficulty媛 ?쇱슦?곗뿉 ?듯빀?섏? ?딆? ?곹깭??듬땲?? **?꾩옱 `main`?먯꽌?????좏샇 紐⑤몢 ?쇱슦?곗뿉 ?꾩쟾???듯빀?섏뼱 ?덉뒿?덈떎.** 洹쇨굅???ㅼ젣 肄붾뱶(`src/jrr/*.py`)? 肄붾뱶? ?ъ떎??1:1濡??쇱튂?섎뒗 理쒖떊 ?ㅺ퀎 臾몄꽌(`docs/pipeline_architecture_v3.md`, `docs/interface_spec.md`, `docs/service_architecture.md`, `docs/risk_routing_simulation_test.md`)?대ŉ, ?대쾲 議곗궗?먯꽌 ?ㅼ젣濡?`import jrr`???ㅽ뻾?섍퀬 `route_sample()` ?뚯뒪瑜?吏곸젒 ?議고빐 寃利앺뻽?듬땲?? 肄붾뱶? 臾몄꽌媛 異⑸룎?섎뒗 吏?먯? 肄붾뱶瑜?湲곗??쇰줈 ?쇨퀬 蹂몃Ц??紐낆떆?덉뒿?덈떎. ?뺤씤?????녿뒗 媛믪? 異붿륫?섏? ?딄퀬 "?뺤씤 ?꾩슂"濡??쒓린?덉뒿?덈떎.
 >
-> **2026-09-10 갱신 안내**: `main` 병합 커밋 `2eaad68`(PR #101, "JRR 라우팅 임계값 최적화 로직 전면 개편")을 기준으로 아래 항목을 다시 반영했습니다: (1) `route_sample()` 반환값에 `triggered_signals` 필드 추가, (2) `tau_low=0.60`·`tau_difficulty=5.0` 모두 **Calibration 세트(48만 건) 전체 재탐색**으로 재확정(과거 재현 불가/Eval 세트 관여 이슈는 해결됨), (3) 지금까지의 Eval 수치는 threshold freeze 이전 **Engineering Eval**로 재분류하고, threshold freeze 이후 재실행될 **Final Eval**과 명확히 구분. 이 개정에서 코드는 수정하지 않았습니다.
+> **2026-09-10 媛깆떊 ?덈궡**: `main` 蹂묓빀 而ㅻ컠 `2eaad68`(PR #101, "JRR ?쇱슦???꾧퀎媛?理쒖쟻??濡쒖쭅 ?꾨㈃ 媛쒗렪")??湲곗??쇰줈 ?꾨옒 ??ぉ???ㅼ떆 諛섏쁺?덉뒿?덈떎: (1) `route_sample()` 諛섑솚媛믪뿉 `triggered_signals` ?꾨뱶 異붽?, (2) `tau_low=0.60`쨌`tau_difficulty=5.0` 紐⑤몢 **Calibration ?명듃(48留?嫄? ?꾩껜 ?ы깘??*?쇰줈 ?ы솗??怨쇨굅 ?ы쁽 遺덇?/Eval ?명듃 愿???댁뒋???닿껐??, (3) 吏湲덇퉴吏??Eval ?섏튂??threshold freeze ?댁쟾 **Engineering Eval**濡??щ텇瑜섑븯怨? threshold freeze ?댄썑 ?ъ떎?됰맆 **Final Eval**怨?紐낇솗??援щ텇. ??媛쒖젙?먯꽌 肄붾뱶???섏젙?섏? ?딆븯?듬땲??
 >
-> **2026-09-10 추가 갱신 안내(2D Grid Search 반영)**: `feature/jrr-evaluation` 브랜치 커밋 `06c8ffc`("Refactor: Replace circular reasoning with 2D Grid Search...")·`f4ce7a1`("Update jrr_router.py default thresholds to Global Optimum")을 기준으로, 바로 위 2026-09-10 갱신에서 채택했던 `tau_low=0.60`/`tau_difficulty=5.0`(순차·단변수 최적화 결과)가 **`tau_low=0.65`/`tau_difficulty=6.0`(Calibration 세트 2차원 Grid Search 결과)로 대체**되었습니다. `tau_low`와 `tau_difficulty`는 JRR의 OR 조건에서 서로 상호작용하므로, 한쪽을 고정한 채 다른 한쪽만 순차 탐색하면 순환 논리(Circular Reasoning) 문제가 생길 수 있습니다 — 이 문제를 없애기 위해 두 변수를 **동시에** 2차원 Grid Search로 탐색했습니다. 이번 개정으로 문서 곳곳에 `0.60`/`0.65`, `5.0`/`6.0`이 섞여 있던 병합 잔재를 정리하고, `tau_low=0.65`/`tau_difficulty=6.0`을 현재 공식 값으로 통일했습니다. 과거 `0.60`/`5.0` 값은 삭제하지 않고 이전 순차 최적화 단계의 이력으로만 남겼습니다(3, 9장). 이 개정에서도 코드는 수정하지 않았습니다.
+> **2026-09-10 異붽? 媛깆떊 ?덈궡(2D Grid Search 諛섏쁺)**: `feature/jrr-evaluation` 釉뚮옖移?而ㅻ컠 `06c8ffc`("Refactor: Replace circular reasoning with 2D Grid Search...")쨌`f4ce7a1`("Update jrr_router.py default thresholds to Global Optimum")??湲곗??쇰줈, 諛붾줈 ??2026-09-10 媛깆떊?먯꽌 梨꾪깮?덈뜕 `tau_low=0.60`/`tau_difficulty=5.0`(?쒖감쨌?⑤???理쒖쟻??寃곌낵)媛 **`tau_low=0.65`/`tau_difficulty=6.0`(Calibration ?명듃 2李⑥썝 Grid Search 寃곌낵)濡??泥?*?섏뿀?듬땲?? `tau_low`? `tau_difficulty`??JRR??OR 議곌굔?먯꽌 ?쒕줈 ?곹샇?묒슜?섎?濡? ?쒖そ??怨좎젙??梨??ㅻⅨ ?쒖そ留??쒖감 ?먯깋?섎㈃ ?쒗솚 ?쇰━(Circular Reasoning) 臾몄젣媛 ?앷만 ???덉뒿?덈떎 ????臾몄젣瑜??놁븷湲??꾪빐 ??蹂?섎? **?숈떆??* 2李⑥썝 Grid Search濡??먯깋?덉뒿?덈떎. ?대쾲 媛쒖젙?쇰줈 臾몄꽌 怨녠납??`0.60`/`0.65`, `5.0`/`6.0`???욎뿬 ?덈뜕 蹂묓빀 ?붿옱瑜??뺣━?섍퀬, `tau_low=0.65`/`tau_difficulty=6.0`???꾩옱 怨듭떇 媛믪쑝濡??듭씪?덉뒿?덈떎. 怨쇨굅 `0.60`/`5.0` 媛믪? ??젣?섏? ?딄퀬 ?댁쟾 ?쒖감 理쒖쟻???④퀎???대젰?쇰줈留??④꼈?듬땲??3, 9??. ??媛쒖젙?먯꽌??肄붾뱶???섏젙?섏? ?딆븯?듬땲??
 
 ---
 
 ## 1. Overview
 
-### JRR의 목적
+### JRR??紐⑹쟻
 
-JRR(Joint Risk Router)은 "모델 확률이 얼마인가"만으로 자동 판정하지 않고, **보정된 확률 + 3개의 추가 위험 신호(Model Disagreement, OOD, Analysis Difficulty)**를 근거로 파일을 세 갈래(`AUTO_BENIGN` / `AUTO_MALICIOUS` / `HIGH_RISK_UNCERTAIN`)로 나누는 **우선순위 규칙 기반 라우터**입니다. 목적은 "이 파일이 악성인가"를 최종 판정하는 것이 아니라, **어떤 파일에 심층분석·분석가 자원을 투입할지 결정**하는 것입니다.
+JRR(Joint Risk Router)? "紐⑤뜽 ?뺣쪧???쇰쭏?멸?"留뚯쑝濡??먮룞 ?먯젙?섏? ?딄퀬, **蹂댁젙???뺣쪧 + 3媛쒖쓽 異붽? ?꾪뿕 ?좏샇(Model Disagreement, OOD, Analysis Difficulty)**瑜?洹쇨굅濡??뚯씪????媛덈옒(`AUTO_BENIGN` / `AUTO_MALICIOUS` / `HIGH_RISK_UNCERTAIN`)濡??섎늻??**?곗꽑?쒖쐞 洹쒖튃 湲곕컲 ?쇱슦??*?낅땲?? 紐⑹쟻? "???뚯씪???낆꽦?멸?"瑜?理쒖쥌 ?먯젙?섎뒗 寃껋씠 ?꾨땲?? **?대뼡 ?뚯씪???ъ링遺꾩꽍쨌遺꾩꽍媛 ?먯썝???ъ엯?좎? 寃곗젙**?섎뒗 寃껋엯?덈떎.
 
-### TRUST-Triage 파이프라인에서의 위치
+### TRUST-Triage ?뚯씠?꾨씪?몄뿉?쒖쓽 ?꾩튂
 
-`docs/pipeline_architecture_v3.md`(2026-09-07, v3) 기준 전체 흐름 중 ④~⑥ 구간을 담당합니다. (구버전 `docs/pipeline_architecture.md`는 v3로 대체된 **레거시 문서**이며, `risk_score`·구형 모델 수치 등 현재 코드와 맞지 않는 내용을 담고 있어 참고하지 않았습니다.)
+`docs/pipeline_architecture_v3.md`(2026-09-07, v3) 湲곗? ?꾩껜 ?먮쫫 以?????援ш컙???대떦?⑸땲?? (援щ쾭??`docs/pipeline_architecture.md`??v3濡??泥대맂 **?덇굅??臾몄꽌**?대ŉ, `risk_score`쨌援ы삎 紐⑤뜽 ?섏튂 ???꾩옱 肄붾뱶? 留욎? ?딅뒗 ?댁슜???닿퀬 ?덉뼱 李멸퀬?섏? ?딆븯?듬땲??)
 
 ```
 Raw PE
-  → Feature Extraction (EMBER2024 v3, 고정 Top-500 선택)
-  → LightGBM (공식 Baseline) / XGBoost (Disagreement 비교 모델)
-  → Isotonic Calibration (LightGBM raw prob → calibrated_probability)
-  → Risk Signal Computation (Disagreement / OOD / Analysis Difficulty)
-  → JRR (jrr_router.py::JointRiskRouter)
-  → AUTO_BENIGN / AUTO_MALICIOUS / HIGH_RISK_UNCERTAIN
+  ??Feature Extraction (EMBER2024 v3, 怨좎젙 Top-500 ?좏깮)
+  ??LightGBM (怨듭떇 Baseline) / XGBoost (Disagreement 鍮꾧탳 紐⑤뜽)
+  ??Isotonic Calibration (LightGBM raw prob ??calibrated_probability)
+  ??Risk Signal Computation (Disagreement / OOD / Analysis Difficulty)
+  ??JRR (jrr_router.py::JointRiskRouter)
+  ??AUTO_BENIGN / AUTO_MALICIOUS / HIGH_RISK_UNCERTAIN
 ```
 
-이 다이어그램은 이제 **설계 의도가 아니라 실제 코드 그대로**입니다. `src/jrr/jrr_router.py::JointRiskRouter.route_sample()`은 4개 인자(`p_calib, disagreement, ood_score, difficulty_score`)를 모두 받아 판정하며, `route_sample()`이 반환하는 `initial_verdict`/`route` 필드도 `docs/interface_spec.md`가 정의한 이름과 일치합니다.
+???ㅼ씠?닿렇?⑥? ?댁젣 **?ㅺ퀎 ?섎룄媛 ?꾨땲???ㅼ젣 肄붾뱶 洹몃?濡?*?낅땲?? `src/jrr/jrr_router.py::JointRiskRouter.route_sample()`? 4媛??몄옄(`p_calib, disagreement, ood_score, difficulty_score`)瑜?紐⑤몢 諛쏆븘 ?먯젙?섎ŉ, `route_sample()`??諛섑솚?섎뒗 `initial_verdict`/`route` ?꾨뱶??`docs/interface_spec.md`媛 ?뺤쓽???대쫫怨??쇱튂?⑸땲??
 
-### 단순 malware classifier와의 차이
+### ?⑥닚 malware classifier???李⑥씠
 
-단순 classifier는 확률 하나로 이분(또는 threshold 하나로 삼분) 판정을 내립니다. JRR은 (1) 확률을 그대로 쓰지 않고 Isotonic Calibration을 거친 값을 쓰고, (2) 모델 간 불일치(Disagreement)·학습 분포 이탈(OOD)·PE 구조 이상(Difficulty)처럼 "확률 자체는 안전해 보여도 실제로는 불확실한" 상황을 별도로 탐지해 자동판정에서 배제합니다.
+?⑥닚 classifier???뺣쪧 ?섎굹濡??대텇(?먮뒗 threshold ?섎굹濡??쇰텇) ?먯젙???대┰?덈떎. JRR? (1) ?뺣쪧??洹몃?濡??곗? ?딄퀬 Isotonic Calibration??嫄곗튇 媛믪쓣 ?곌퀬, (2) 紐⑤뜽 媛?遺덉씪移?Disagreement)쨌?숈뒿 遺꾪룷 ?댄깉(OOD)쨌PE 援ъ“ ?댁긽(Difficulty)泥섎읆 "?뺣쪧 ?먯껜???덉쟾??蹂댁뿬???ㅼ젣濡쒕뒗 遺덊솗?ㅽ븳" ?곹솴??蹂꾨룄濡??먯????먮룞?먯젙?먯꽌 諛곗젣?⑸땲??
 
-### 자동 판정과 심층분석 대상 분리 목적
+### ?먮룞 ?먯젙怨??ъ링遺꾩꽍 ???遺꾨━ 紐⑹쟻
 
-FPR 0.1% 같은 강한 방어선을 지키면서도(=오탐을 최소화), 확률만으로는 드러나지 않는 그레이존/불일치/이상치 샘플을 놓치지 않기 위해 "4가지 조건 중 하나라도 걸리면 심층분석"이라는 **보수적(Conservative) OR 조건** 전략을 취합니다(`docs/risk_routing_simulation_test.md` §2.5).
+FPR 0.1% 媛숈? 媛뺥븳 諛⑹뼱?좎쓣 吏?ㅻ㈃?쒕룄(=?ㅽ깘??理쒖냼??, ?뺣쪧留뚯쑝濡쒕뒗 ?쒕윭?섏? ?딅뒗 洹몃젅?댁〈/遺덉씪移??댁긽移??섑뵆???볦튂吏 ?딄린 ?꾪빐 "4媛吏 議곌굔 以??섎굹?쇰룄 嫄몃━硫??ъ링遺꾩꽍"?대씪??**蹂댁닔??Conservative) OR 議곌굔** ?꾨왂??痍⑦빀?덈떎(`docs/risk_routing_simulation_test.md` 짠2.5).
 
 ---
 
 ## 2. JRR Inputs
 
-`src/jrr/jrr_router.py::JointRiskRouter.route_sample(self, p_calib, disagreement, ood_score, difficulty_score)`의 실제 시그니처 기준입니다. **4개 신호 모두 현재 라우터 판정에 실제로 사용됩니다.**
+`src/jrr/jrr_router.py::JointRiskRouter.route_sample(self, p_calib, disagreement, ood_score, difficulty_score)`???ㅼ젣 ?쒓렇?덉쿂 湲곗??낅땲?? **4媛??좏샇 紐⑤몢 ?꾩옱 ?쇱슦???먯젙???ㅼ젣濡??ъ슜?⑸땲??**
 
 ### Calibrated Probability
 
-- **의미**: LightGBM 원시 확률(`lgbm_raw_probability`)은 과신(over-confident)되어 있어 실제 정답률과 어긋납니다. 이를 실제 신뢰도로 보정한 값입니다.
-- **산출 방식**: `src/jrr/train_calibrator.py` — `sklearn.isotonic.IsotonicRegression(out_of_bounds="clip")`을 Calibration 세트(`X_calib`/`y_calib`)에서 학습된 LightGBM(`baseline_model_lightgbm_tuned_500_4way.pkl`)의 raw 확률에 대해 fit. 결과는 `jrr_calibrator_4way.pkl`(`{'model':..., 'threshold':...}`)로 저장.
-- **JRR에서 사용 방향**: 값이 낮을수록 정상, 높을수록 악성. `tau_low`/`tau_high` 두 경계값으로 그레이존을 정의.
-- **Threshold**: `tau_low = 0.65`, `tau_high = 0.983645` (3장). `tau_low=0.65`는 `tau_difficulty`와 함께 Calibration 세트 2차원 Grid Search로 동시 선정된 값입니다(9장).
+- **?섎?**: LightGBM ?먯떆 ?뺣쪧(`lgbm_raw_probability`)? 怨쇱떊(over-confident)?섏뼱 ?덉뼱 ?ㅼ젣 ?뺣떟瑜좉낵 ?닿툔?⑸땲?? ?대? ?ㅼ젣 ?좊ː?꾨줈 蹂댁젙??媛믪엯?덈떎.
+- **?곗텧 諛⑹떇**: `src/jrr/train_calibrator.py` ??`sklearn.isotonic.IsotonicRegression(out_of_bounds="clip")`??Calibration ?명듃(`X_calib`/`y_calib`)?먯꽌 ?숈뒿??LightGBM(`baseline_model_lightgbm_tuned_500_4way.pkl`)??raw ?뺣쪧?????fit. 寃곌낵??`jrr_calibrator_4way.pkl`(`{'model':..., 'threshold':...}`)濡????
+- **JRR?먯꽌 ?ъ슜 諛⑺뼢**: 媛믪씠 ??쓣?섎줉 ?뺤긽, ?믪쓣?섎줉 ?낆꽦. `tau_low`/`tau_high` ??寃쎄퀎媛믪쑝濡?洹몃젅?댁〈???뺤쓽.
+- **Threshold**: `tau_low = 0.65`, `tau_high = 0.983645` (3??. `tau_low=0.65`??`tau_difficulty`? ?④퍡 Calibration ?명듃 2李⑥썝 Grid Search濡??숈떆 ?좎젙??媛믪엯?덈떎(9??.
 
 ### Model Disagreement
 
-- **의미**: LightGBM과 XGBoost 두 모델의 예측이 얼마나 다른지. **"분산"이 아니라 두 원시 확률의 절대 차이**입니다.
-- **산출 방식**: `JointRiskRouter.compute_disagreement()` (`src/jrr/jrr_router.py:16-18`)
+- **?섎?**: LightGBM怨?XGBoost ??紐⑤뜽???덉륫???쇰쭏???ㅻⅨ吏. **"遺꾩궛"???꾨땲?????먯떆 ?뺣쪧???덈? 李⑥씠**?낅땲??
+- **?곗텧 諛⑹떇**: `JointRiskRouter.compute_disagreement()` (`src/jrr/jrr_router.py:16-18`)
   ```python
   def compute_disagreement(self, p_lgb: float, p_xgb: float) -> float:
       return abs(p_lgb - p_xgb)
   ```
-  배치 재현용 스크립트는 `src/jrr/disagreement.py`(`np.abs(p_lgb - p_xgb)`, 동일 정의).
-- **JRR에서 사용 방향**: 값이 클수록(두 모델이 서로 동의하지 않을수록) 위험 — 확률이 아무리 확신에 차 보여도 `HIGH_RISK_UNCERTAIN`으로 격상.
-- **Threshold**: `tau_disagree = 0.3` (고정값).
+  諛곗튂 ?ы쁽???ㅽ겕由쏀듃??`src/jrr/disagreement.py`(`np.abs(p_lgb - p_xgb)`, ?숈씪 ?뺤쓽).
+- **JRR?먯꽌 ?ъ슜 諛⑺뼢**: 媛믪씠 ?댁닔濡???紐⑤뜽???쒕줈 ?숈쓽?섏? ?딆쓣?섎줉) ?꾪뿕 ???뺣쪧???꾨Т由??뺤떊??李?蹂댁뿬??`HIGH_RISK_UNCERTAIN`?쇰줈 寃⑹긽.
+- **Threshold**: `tau_disagree = 0.3` (怨좎젙媛?.
 
 ### OOD (Out-of-Distribution) Score
 
-- **의미**: 학습 데이터 분포와 얼마나 동떨어져 있는지(신종/변종 의심도).
-- **산출 방식**: `src/jrr/risk_signals.py`가 `IsolationForest(n_estimators=200, contamination="auto", random_state=42, n_jobs=-1)`을 학습합니다. 학습 데이터는 `X_tr`(272만 행)에서 `np.random.seed(42)` 후 `np.random.choice(..., 100000, replace=False)`로 **무작위 균등 샘플링한 10만 행**을 Top-500 인덱스로 슬라이싱한 것이며, Eval 등 다른 분할은 학습에 사용하지 않습니다(`risk_signals.py:55-62`). 결과 모델은 `data/jrr_risk_signals.pkl`의 `ood_model` 키로 저장됩니다.
-- **`decision_function` 사용 여부**: **사용합니다.** `jrr_router.py`의 실행 스크립트(`__main__`)에서 `ood_model.decision_function(X_eval_500)`을 직접 호출해 개별 파일의 `ood_score`를 산출하고 `data/jrr_ood_scores.npy`로 저장합니다(`jrr_router.py:103-105`).
-- **JRR에서 OOD로 판단하는 조건**: `ood_score < tau_ood`. sklearn `IsolationForest.decision_function()`의 관례상 **음수(0 미만)가 이상치**이므로, `tau_ood = 0.0`은 별도로 튜닝한 값이라기보다 이 라이브러리 컨벤션을 그대로 채택한 것입니다.
+- **?섎?**: ?숈뒿 ?곗씠??遺꾪룷? ?쇰쭏???숇뼥?댁졇 ?덈뒗吏(?좎쥌/蹂醫??섏떖??.
+- **?곗텧 諛⑹떇**: `src/jrr/risk_signals.py`媛 `IsolationForest(n_estimators=200, contamination="auto", random_state=42, n_jobs=-1)`???숈뒿?⑸땲?? ?숈뒿 ?곗씠?곕뒗 `X_tr`(272留????먯꽌 `np.random.seed(42)` ??`np.random.choice(..., 100000, replace=False)`濡?**臾댁옉??洹좊벑 ?섑뵆留곹븳 10留???*??Top-500 ?몃뜳?ㅻ줈 ?щ씪?댁떛??寃껋씠硫? Eval ???ㅻⅨ 遺꾪븷? ?숈뒿???ъ슜?섏? ?딆뒿?덈떎(`risk_signals.py:55-62`). 寃곌낵 紐⑤뜽? `data/jrr_risk_signals.pkl`??`ood_model` ?ㅻ줈 ??λ맗?덈떎.
+- **`decision_function` ?ъ슜 ?щ?**: **?ъ슜?⑸땲??** `jrr_router.py`???ㅽ뻾 ?ㅽ겕由쏀듃(`__main__`)?먯꽌 `ood_model.decision_function(X_eval_500)`??吏곸젒 ?몄텧??媛쒕퀎 ?뚯씪??`ood_score`瑜??곗텧?섍퀬 `data/jrr_ood_scores.npy`濡???ν빀?덈떎(`jrr_router.py:103-105`).
+- **JRR?먯꽌 OOD濡??먮떒?섎뒗 議곌굔**: `ood_score < tau_ood`. sklearn `IsolationForest.decision_function()`??愿濡??**?뚯닔(0 誘몃쭔)媛 ?댁긽移?*?대?濡? `tau_ood = 0.0`? 蹂꾨룄濡??쒕떇??媛믪씠?쇨린蹂대떎 ???쇱씠釉뚮윭由?而⑤깽?섏쓣 洹몃?濡?梨꾪깮??寃껋엯?덈떎.
 - **Threshold**: `tau_ood = 0.0` (`ood_score < 0.0`).
 
 ### Analysis Difficulty
 
-- **의미**: 악성도 점수가 아니라 **"이 PE 파일을 정적으로 분석/파싱하기가 얼마나 어려운가/구조가 얼마나 비정상인가"**를 나타내는 신호입니다.
-- **Top-500 안에서의 사용**: `feature_schema.md`가 정의하는 `PEFormatWarnings` 블록(원본 인덱스 2480–2568)이 Top-500 선택 이후 몇 번째 인덱스로 이동했는지를 `risk_signals.py`가 동적으로 추적합니다(`difficulty_indices_in_top500 = np.where((top_500_idx >= 2480) & (top_500_idx < 2568))[0]`, `data/jrr_risk_signals.pkl`의 `difficulty_indices` 키).
-- **스칼라 점수 산출**: `jrr_router.py`의 실행 스크립트가 이 인덱스들이 가리키는 Top-500 벡터 값을 **행 단위로 합산**합니다.
+- **?섎?**: ?낆꽦???먯닔媛 ?꾨땲??**"??PE ?뚯씪???뺤쟻?쇰줈 遺꾩꽍/?뚯떛?섍린媛 ?쇰쭏???대젮?닿?/援ъ“媛 ?쇰쭏??鍮꾩젙?곸씤媛"**瑜??섑??대뒗 ?좏샇?낅땲??
+- **Top-500 ?덉뿉?쒖쓽 ?ъ슜**: `feature_schema.md`媛 ?뺤쓽?섎뒗 `PEFormatWarnings` 釉붾줉(?먮낯 ?몃뜳??2480??568)??Top-500 ?좏깮 ?댄썑 紐?踰덉㎏ ?몃뜳?ㅻ줈 ?대룞?덈뒗吏瑜?`risk_signals.py`媛 ?숈쟻?쇰줈 異붿쟻?⑸땲??`difficulty_indices_in_top500 = np.where((top_500_idx >= 2480) & (top_500_idx < 2568))[0]`, `data/jrr_risk_signals.pkl`??`difficulty_indices` ??.
+- **?ㅼ뭡???먯닔 ?곗텧**: `jrr_router.py`???ㅽ뻾 ?ㅽ겕由쏀듃媛 ???몃뜳?ㅻ뱾??媛由ы궎??Top-500 踰≫꽣 媛믪쓣 **???⑥쐞濡??⑹궛**?⑸땲??
   ```python
   difficulty_scores = np.sum(X_eval_500[:, difficulty_indices], axis=1)
   ```
-  (`jrr_router.py:107-110`, PEFormatWarnings 경고 발생 여부/개수의 합)
-- **JRR에서 사용 방향 / Threshold**: `difficulty_score >= tau_difficulty`이면 `HIGH_RISK_UNCERTAIN`으로 격상. `tau_difficulty = 6.0`. 악성도 신호가 아니라 **구조 이상/분석 난이도 신호**라는 점은 `docs/pipeline_architecture_v3.md`(⑤ Analysis Difficulty)와 `docs/risk_routing_simulation_test.md`(§2.3) 모두 명시합니다. `tau_difficulty=6.0`은 `tau_low`와 함께 Calibration 세트 2차원 Grid Search로 동시 선정된 값입니다(9장).
+  (`jrr_router.py:107-110`, PEFormatWarnings 寃쎄퀬 諛쒖깮 ?щ?/媛쒖닔????
+- **JRR?먯꽌 ?ъ슜 諛⑺뼢 / Threshold**: `difficulty_score >= tau_difficulty`?대㈃ `HIGH_RISK_UNCERTAIN`?쇰줈 寃⑹긽. `tau_difficulty = 6.0`. ?낆꽦???좏샇媛 ?꾨땲??**援ъ“ ?댁긽/遺꾩꽍 ?쒖씠???좏샇**?쇰뒗 ?먯? `docs/pipeline_architecture_v3.md`(??Analysis Difficulty)? `docs/risk_routing_simulation_test.md`(짠2.3) 紐⑤몢 紐낆떆?⑸땲?? `tau_difficulty=6.0`? `tau_low`? ?④퍡 Calibration ?명듃 2李⑥썝 Grid Search濡??숈떆 ?좎젙??媛믪엯?덈떎(9??.
 
 ---
 
 ## 3. Final Thresholds
 
-`src/jrr/jrr_router.py::JointRiskRouter.__init__`의 기본값을 그대로 인용합니다. `docs/interface_spec.md` §4.3 "현재 기준값"과 `docs/pipeline_architecture_v3.md` CRITICAL-01의 값도 동일합니다(세 곳 모두 일치 확인).
+`src/jrr/jrr_router.py::JointRiskRouter.__init__`??湲곕낯媛믪쓣 洹몃?濡??몄슜?⑸땲?? `docs/interface_spec.md` 짠4.3 "?꾩옱 湲곗?媛?怨?`docs/pipeline_architecture_v3.md` CRITICAL-01??媛믩룄 ?숈씪?⑸땲????怨?紐⑤몢 ?쇱튂 ?뺤씤).
 
-| Signal | Threshold | Role | 선정 출처 |
+| Signal | Threshold | Role | ?좎젙 異쒖쿂 |
 |---|---|---|---|
-| `calibrated_probability` (상한) | `tau_high = 0.983645` | 이상이면 `AUTO_MALICIOUS` | **Calibration 세트**에서 목표 FPR ≤ 0.1%를 만족하는 마지막 ROC 지점 (`train_calibrator.py`, `TARGET_FPR = 0.001`). 고정 운영 상수. |
-| `calibrated_probability` (하한) | `tau_low = 0.65` | 이하면 `AUTO_BENIGN` | **Calibration 세트(48만 건) 전체**를 대상으로 `tau_difficulty`와 함께 **2차원 Grid Search**(후보 `tau_low ∈ {0.50, 0.55, ..., 0.80}` × `tau_difficulty ∈ {1.0, ..., 10.0}`)로 동시 탐색해 확정. 목적함수 `Utility = Review Yield × (1 − 악성 누출률)` 기준 정의된 후보 grid 범위 내 최적 조합(`src/jrr/optimize_threshold.py::optimize_grid_search()`, `docs/risk_routing_simulation_test.md` §4.1). 9장 참고. |
-| `disagreement` | `tau_disagree = 0.3` | 이상이면 `HIGH_RISK_UNCERTAIN` | **고정 운영 상수**. `docs/risk_routing_simulation_test.md`는 "인식론적 불확실성과의 상관관계"라는 정성적 근거만 제시하며, 이 값을 Calibration 그리드 탐색으로 산출한 코드/로그는 리포지토리에서 확인되지 않음. |
-| `ood_score` | `tau_ood = 0.0` | 미만이면 `HIGH_RISK_UNCERTAIN` | `IsolationForest.decision_function()`의 표준 이상치 경계(0 미만=이상치)를 그대로 채택. Calibration 그리드 탐색으로 별도 산출되지 않음. |
-| `difficulty_score` | `tau_difficulty = 6.0` | 이상이면 `HIGH_RISK_UNCERTAIN` | **Calibration 세트(48만 건) 전체**를 대상으로 `tau_low`와 함께 **2차원 Grid Search**로 동시 탐색해 확정(위 `tau_low` 행과 동일한 탐색). `tau_low`와 `tau_difficulty`는 JRR OR 조건에서 서로 상호작용하므로 하나씩 순차 최적화하지 않고 동시에 탐색했습니다. 9장 참고. |
+| `calibrated_probability` (?곹븳) | `tau_high = 0.983645` | ?댁긽?대㈃ `AUTO_MALICIOUS` | **Calibration ?명듃**?먯꽌 紐⑺몴 FPR ??0.1%瑜?留뚯”?섎뒗 留덉?留?ROC 吏??(`train_calibrator.py`, `TARGET_FPR = 0.001`). 怨좎젙 ?댁쁺 ?곸닔. |
+| `calibrated_probability` (?섑븳) | `tau_low = 0.65` | ?댄븯硫?`AUTO_BENIGN` | **Calibration ?명듃(48留?嫄? ?꾩껜**瑜???곸쑝濡?`tau_difficulty`? ?④퍡 **2李⑥썝 Grid Search**(?꾨낫 `tau_low ??{0.50, 0.55, ..., 0.80}` 횞 `tau_difficulty ??{1.0, ..., 10.0}`)濡??숈떆 ?먯깋???뺤젙. 紐⑹쟻?⑥닔 `Utility = Review Yield 횞 (1 ???낆꽦 ?꾩텧瑜?` 湲곗? ?뺤쓽???꾨낫 grid 踰붿쐞 ??理쒖쟻 議고빀(`src/jrr/optimize_threshold.py::optimize_grid_search()`, `docs/risk_routing_simulation_test.md` 짠4.1). 9??李멸퀬. |
+| `disagreement` | `tau_disagree = 0.3` | ?댁긽?대㈃ `HIGH_RISK_UNCERTAIN` | **怨좎젙 ?댁쁺 ?곸닔**. `docs/risk_routing_simulation_test.md`??"?몄떇濡좎쟻 遺덊솗?ㅼ꽦怨쇱쓽 ?곴?愿怨??쇰뒗 ?뺤꽦??洹쇨굅留??쒖떆?섎ŉ, ??媛믪쓣 Calibration 洹몃━???먯깋?쇰줈 ?곗텧??肄붾뱶/濡쒓렇??由ы룷吏?좊━?먯꽌 ?뺤씤?섏? ?딆쓬. |
+| `ood_score` | `tau_ood = 0.0` | 誘몃쭔?대㈃ `HIGH_RISK_UNCERTAIN` | `IsolationForest.decision_function()`???쒖? ?댁긽移?寃쎄퀎(0 誘몃쭔=?댁긽移?瑜?洹몃?濡?梨꾪깮. Calibration 洹몃━???먯깋?쇰줈 蹂꾨룄 ?곗텧?섏? ?딆쓬. |
+| `difficulty_score` | `tau_difficulty = 6.0` | ?댁긽?대㈃ `HIGH_RISK_UNCERTAIN` | **Calibration ?명듃(48留?嫄? ?꾩껜**瑜???곸쑝濡?`tau_low`? ?④퍡 **2李⑥썝 Grid Search**濡??숈떆 ?먯깋???뺤젙(??`tau_low` ?됯낵 ?숈씪???먯깋). `tau_low`? `tau_difficulty`??JRR OR 議곌굔?먯꽌 ?쒕줈 ?곹샇?묒슜?섎?濡??섎굹???쒖감 理쒖쟻?뷀븯吏 ?딄퀬 ?숈떆???먯깋?덉뒿?덈떎. 9??李멸퀬. |
 
-> `tau_low`/`tau_difficulty` 모두 **Calibration 세트에서 결정 후 고정(freeze)**되었으며, Eval 결과는 이번 2차원 탐색에도 사용되지 않았습니다. `docs/pipeline_architecture_v3.md` CRITICAL-01: "Threshold 및 라우팅 정책은 Calibration 세트에서 결정 후 고정하고, Eval에서는 고정된 정책의 성능만 측정한다." Calibration에서 threshold를 freeze한 뒤 수행하는 **Final Eval**은 아직 재실행되지 않았습니다(7, 10장 참고).
+> `tau_low`/`tau_difficulty` 紐⑤몢 **Calibration ?명듃?먯꽌 寃곗젙 ??怨좎젙(freeze)**?섏뿀?쇰ŉ, Eval 寃곌낵???대쾲 2李⑥썝 ?먯깋?먮룄 ?ъ슜?섏? ?딆븯?듬땲?? `docs/pipeline_architecture_v3.md` CRITICAL-01: "Threshold 諛??쇱슦???뺤콉? Calibration ?명듃?먯꽌 寃곗젙 ??怨좎젙?섍퀬, Eval?먯꽌??怨좎젙???뺤콉???깅뒫留?痢≪젙?쒕떎." Calibration?먯꽌 threshold瑜?freeze?????섑뻾?섎뒗 **Final Eval**? ?꾩쭅 ?ъ떎?됰릺吏 ?딆븯?듬땲??7, 10??李멸퀬).
 >
-> **이전 값(이력)**: 이전 개정에서는 `tau_low`와 `tau_difficulty`를 한쪽을 고정한 채 순차적으로 각각 최적화해 `tau_low=0.60`, `tau_difficulty=5.0`을 채택했습니다. 두 변수가 OR 조건에서 상호작용하는 것을 반영하지 못하는 방식이었기 때문에, 이후 2차원 Grid Search로 대체되어 현재는 `0.65`/`6.0`이 공식 값입니다(9장에 이력으로 보존).
+> **?댁쟾 媛??대젰)**: ?댁쟾 媛쒖젙?먯꽌??`tau_low`? `tau_difficulty`瑜??쒖そ??怨좎젙??梨??쒖감?곸쑝濡?媛곴컖 理쒖쟻?뷀빐 `tau_low=0.60`, `tau_difficulty=5.0`??梨꾪깮?덉뒿?덈떎. ??蹂?섍? OR 議곌굔?먯꽌 ?곹샇?묒슜?섎뒗 寃껋쓣 諛섏쁺?섏? 紐삵븯??諛⑹떇?댁뿀湲??뚮Ц?? ?댄썑 2李⑥썝 Grid Search濡??泥대릺???꾩옱??`0.65`/`6.0`??怨듭떇 媛믪엯?덈떎(9?μ뿉 ?대젰?쇰줈 蹂댁〈).
 
 ---
 
 ## 4. Routing Logic
 
-`JointRiskRouter`는 **가중합(Weighted Risk Score) 방식이 아니라, 우선순위가 있는 규칙 기반(Priority-ordered Rule-based) 3-Way 라우터**입니다(`docs/pipeline_architecture_v3.md` CRITICAL-03). `route_sample()`(`src/jrr/jrr_router.py:20-73`)의 실제 if/elif 순서 그대로입니다.
+`JointRiskRouter`??**媛以묓빀(Weighted Risk Score) 諛⑹떇???꾨땲?? ?곗꽑?쒖쐞媛 ?덈뒗 洹쒖튃 湲곕컲(Priority-ordered Rule-based) 3-Way ?쇱슦??*?낅땲??`docs/pipeline_architecture_v3.md` CRITICAL-03). `route_sample()`(`src/jrr/jrr_router.py:20-73`)???ㅼ젣 if/elif ?쒖꽌 洹몃?濡쒖엯?덈떎.
 
-| 순서 | 조건 | 결과 | reason 예시 |
+| ?쒖꽌 | 議곌굔 | 寃곌낵 | reason ?덉떆 |
 |---|---|---|---|
-| 0 | `p_calib`/`disagreement`/`ood_score`/`difficulty_score` 중 하나라도 NaN | `HIGH_RISK_UNCERTAIN` (`route=DEEP_ANALYSIS`) | `System Error: NaN values detected (Fail-Closed)` |
+| 0 | `p_calib`/`disagreement`/`ood_score`/`difficulty_score` 以??섎굹?쇰룄 NaN | `HIGH_RISK_UNCERTAIN` (`route=DEEP_ANALYSIS`) | `System Error: NaN values detected (Fail-Closed)` |
 | 1 | `ood_score < tau_ood` | `HIGH_RISK_UNCERTAIN` | `OOD Detected (Score: -0.0310)` |
 | 2 | `disagreement >= tau_disagree` | `HIGH_RISK_UNCERTAIN` | `High Model Disagreement (0.3100)` |
 | 3 | `difficulty_score >= tau_difficulty` | `HIGH_RISK_UNCERTAIN` | `High Analysis Difficulty (Score: 6.0)` |
 | 4 | `tau_low < p_calib < tau_high` | `HIGH_RISK_UNCERTAIN` | `Uncertain Probability (0.8871)` |
 | 5 | `p_calib >= tau_high` | `AUTO_MALICIOUS` | `High Malicious Confidence (0.9910)` |
-| 6 (else) | 그 외 (`p_calib <= tau_low`) | `AUTO_BENIGN` | `High Benign Confidence (0.0570)` |
+| 6 (else) | 洹???(`p_calib <= tau_low`) | `AUTO_BENIGN` | `High Benign Confidence (0.0570)` |
 
-경계값을 명시하면:
+寃쎄퀎媛믪쓣 紐낆떆?섎㈃:
 
-- `p_calib <= tau_low` → `AUTO_BENIGN` (단, 위 0~3번 조건에 걸리지 않았을 때)
-- `tau_low < p_calib < tau_high` → `HIGH_RISK_UNCERTAIN` (그레이존)
-- `p_calib >= tau_high` → `AUTO_MALICIOUS` (단, 위 0~3번 조건에 걸리지 않았을 때)
+- `p_calib <= tau_low` ??`AUTO_BENIGN` (?? ??0~3踰?議곌굔??嫄몃━吏 ?딆븯????
+- `tau_low < p_calib < tau_high` ??`HIGH_RISK_UNCERTAIN` (洹몃젅?댁〈)
+- `p_calib >= tau_high` ??`AUTO_MALICIOUS` (?? ??0~3踰?議곌굔??嫄몃━吏 ?딆븯????
 
-**우선순위가 실제 판정을 뒤집는 예**: `p_calib`가 0.999로 `tau_high`를 훨씬 넘더라도, `ood_score < 0.0`이면 1번 규칙이 가장 먼저 매칭되어 `AUTO_MALICIOUS`가 아니라 `HIGH_RISK_UNCERTAIN`으로 라우팅됩니다. 마찬가지로 OOD·Disagreement·Difficulty 세 조건을 동시에 만족하더라도 대표 `reason`은 **가장 먼저 매칭된 OOD 하나만** 기록됩니다(6장 참고). 다만 이 경우에도 `triggered_signals`에는 `["OOD", "DISAGREEMENT", "DIFFICULTY"]`처럼 동시에 만족한 신호가 모두 기록되므로, 대표 사유 하나만 남기는 `reason`과 달리 다중 신호 발현 여부는 `triggered_signals`로 확인할 수 있습니다(6장 참고). `triggered_signals`는 각 규칙이 매칭될 때마다 독립적으로 추가되는 부가 필드일 뿐, 위 Priority-ordered Routing 순서나 `decision`/`reason` 산출 로직 자체를 바꾸지 않습니다.
+**?곗꽑?쒖쐞媛 ?ㅼ젣 ?먯젙???ㅼ쭛????*: `p_calib`媛 0.999濡?`tau_high`瑜??⑥뵮 ?섎뜑?쇰룄, `ood_score < 0.0`?대㈃ 1踰?洹쒖튃??媛??癒쇱? 留ㅼ묶?섏뼱 `AUTO_MALICIOUS`媛 ?꾨땲??`HIGH_RISK_UNCERTAIN`?쇰줈 ?쇱슦?낅맗?덈떎. 留덉갔媛吏濡?OOD쨌Disagreement쨌Difficulty ??議곌굔???숈떆??留뚯”?섎뜑?쇰룄 ???`reason`? **媛??癒쇱? 留ㅼ묶??OOD ?섎굹留?* 湲곕줉?⑸땲??6??李멸퀬). ?ㅻ쭔 ??寃쎌슦?먮룄 `triggered_signals`?먮뒗 `["OOD", "DISAGREEMENT", "DIFFICULTY"]`泥섎읆 ?숈떆??留뚯”???좏샇媛 紐⑤몢 湲곕줉?섎?濡? ????ъ쑀 ?섎굹留??④린??`reason`怨??щ━ ?ㅼ쨷 ?좏샇 諛쒗쁽 ?щ???`triggered_signals`濡??뺤씤?????덉뒿?덈떎(6??李멸퀬). `triggered_signals`??媛?洹쒖튃??留ㅼ묶???뚮쭏???낅┰?곸쑝濡?異붽??섎뒗 遺媛 ?꾨뱶??肉? ??Priority-ordered Routing ?쒖꽌??`decision`/`reason` ?곗텧 濡쒖쭅 ?먯껜瑜?諛붽씀吏 ?딆뒿?덈떎.
 
-이전(구) 문서/구현에서는 `calibrated_probability`와 `disagreement` 2개 신호·4단계 판정만 존재했으나, 커밋 `b2d3fe3`(2026-09-03, "Joint Risk Router (OOD & Difficulty) 신호 연동 및 종합 라우팅 파이프라인 완성")로 OOD·Difficulty가 라우터에 통합되어 현재의 6단계 구조가 되었습니다. 이후 커밋 `49bc244`(2026-09-10, "JRR 라우팅 임계값 최적화 로직 전면 개편")에서 판정 로직/우선순위 변경 없이 `triggered_signals` 필드가 추가되었습니다.
+?댁쟾(援? 臾몄꽌/援ы쁽?먯꽌??`calibrated_probability`? `disagreement` 2媛??좏샇쨌4?④퀎 ?먯젙留?議댁옱?덉쑝?? 而ㅻ컠 `b2d3fe3`(2026-09-03, "Joint Risk Router (OOD & Difficulty) ?좏샇 ?곕룞 諛?醫낇빀 ?쇱슦???뚯씠?꾨씪???꾩꽦")濡?OOD쨌Difficulty媛 ?쇱슦?곗뿉 ?듯빀?섏뼱 ?꾩옱??6?④퀎 援ъ“媛 ?섏뿀?듬땲?? ?댄썑 而ㅻ컠 `49bc244`(2026-09-10, "JRR ?쇱슦???꾧퀎媛?理쒖쟻??濡쒖쭅 ?꾨㈃ 媛쒗렪")?먯꽌 ?먯젙 濡쒖쭅/?곗꽑?쒖쐞 蹂寃??놁씠 `triggered_signals` ?꾨뱶媛 異붽??섏뿀?듬땲??
 
 ---
 
 ## 5. Fail-Closed Behavior
 
-`route_sample()` 최상단에서 4개 입력값의 NaN 여부를 가장 먼저 검사합니다.
+`route_sample()` 理쒖긽?⑥뿉??4媛??낅젰媛믪쓽 NaN ?щ?瑜?媛??癒쇱? 寃?ы빀?덈떎.
 
 ```python
 if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isnan(difficulty_score):
@@ -145,17 +145,17 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
     }
 ```
 
-- 4개 입력 중 하나라도 NaN이면 무조건 `HIGH_RISK_UNCERTAIN` + `route="DEEP_ANALYSIS"`로 보냅니다(정상/악성으로 자동 판정하지 않음).
-- **오염 표시(sentinel) 값이 신호마다 다릅니다.** `calibrated_probability`/`disagreement`는 `-1.0`(정상 범위 `[0,1]` 밖의 값)으로 표시되는 반면, `ood_score`/`difficulty_score`는 `0.0`으로 채워집니다 — `0.0`은 두 신호의 정상적인 관측값 범위 안에 있는 값이라, 다운스트림이 이 반환값을 원인 분석 없이 그대로 로그/집계에 사용하면 실제 관측치와 혼동될 수 있습니다. 문서화 목적상 이 비대칭은 사실 그대로 기록합니다.
-- 커밋 이력상 이 로직은 "라우터 Fail-Open 보안 취약점 차단"(`33c51f8`, 4-way 통합 이전)이라는 명시적 보안 수정으로 도입되었고, OOD/Difficulty 통합(`b2d3fe3`) 시점에 4개 인자 전체로 확장되었습니다.
+- 4媛??낅젰 以??섎굹?쇰룄 NaN?대㈃ 臾댁“嫄?`HIGH_RISK_UNCERTAIN` + `route="DEEP_ANALYSIS"`濡?蹂대깄?덈떎(?뺤긽/?낆꽦?쇰줈 ?먮룞 ?먯젙?섏? ?딆쓬).
+- **?ㅼ뿼 ?쒖떆(sentinel) 媛믪씠 ?좏샇留덈떎 ?ㅻ쫭?덈떎.** `calibrated_probability`/`disagreement`??`-1.0`(?뺤긽 踰붿쐞 `[0,1]` 諛뽰쓽 媛??쇰줈 ?쒖떆?섎뒗 諛섎㈃, `ood_score`/`difficulty_score`??`0.0`?쇰줈 梨꾩썙吏묐땲????`0.0`? ???좏샇???뺤긽?곸씤 愿痢↔컪 踰붿쐞 ?덉뿉 ?덈뒗 媛믪씠?? ?ㅼ슫?ㅽ듃由쇱씠 ??諛섑솚媛믪쓣 ?먯씤 遺꾩꽍 ?놁씠 洹몃?濡?濡쒓렇/吏묎퀎???ъ슜?섎㈃ ?ㅼ젣 愿痢≪튂? ?쇰룞?????덉뒿?덈떎. 臾몄꽌??紐⑹쟻????鍮꾨?移?? ?ъ떎 洹몃?濡?湲곕줉?⑸땲??
+- 而ㅻ컠 ?대젰????濡쒖쭅? "?쇱슦??Fail-Open 蹂댁븞 痍⑥빟??李⑤떒"(`33c51f8`, 4-way ?듯빀 ?댁쟾)?대씪??紐낆떆??蹂댁븞 ?섏젙?쇰줈 ?꾩엯?섏뿀怨? OOD/Difficulty ?듯빀(`b2d3fe3`) ?쒖젏??4媛??몄옄 ?꾩껜濡??뺤옣?섏뿀?듬땲??
 
 ---
 
 ## 6. JRR Output Schema
 
-### 현재 코드가 실제로 반환하는 dict
+### ?꾩옱 肄붾뱶媛 ?ㅼ젣濡?諛섑솚?섎뒗 dict
 
-`route_sample()`의 반환값(`src/jrr/jrr_router.py:65-73`):
+`route_sample()`??諛섑솚媛?`src/jrr/jrr_router.py:65-73`):
 
 ```json
 {
@@ -170,38 +170,38 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 }
 ```
 
-이 필드명은 `docs/interface_spec.md` §4.1(Initial Triage Result)의 `initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`와 **정확히 일치**합니다. 이는 커밋 `a957512`("fix: align JRR output fields with interface spec", 2026-09-07)에서 의도적으로 맞춘 결과이며, `triggered_signals`는 이후 커밋 `49bc244`(2026-09-10)에서 공식 필드로 추가되었습니다. (이전 버전 코드는 `decision`/`calibrated_prob`라는 다른 필드명을 썼으나 현재는 사용되지 않습니다.)
+???꾨뱶紐낆? `docs/interface_spec.md` 짠4.1(Initial Triage Result)??`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`? **?뺥솗???쇱튂**?⑸땲?? ?대뒗 而ㅻ컠 `a957512`("fix: align JRR output fields with interface spec", 2026-09-07)?먯꽌 ?섎룄?곸쑝濡?留욎텣 寃곌낵?대ŉ, `triggered_signals`???댄썑 而ㅻ컠 `49bc244`(2026-09-10)?먯꽌 怨듭떇 ?꾨뱶濡?異붽??섏뿀?듬땲?? (?댁쟾 踰꾩쟾 肄붾뱶??`decision`/`calibrated_prob`?쇰뒗 ?ㅻⅨ ?꾨뱶紐낆쓣 ?쇱쑝???꾩옱???ъ슜?섏? ?딆뒿?덈떎.)
 
-- `route`: `initial_verdict == "HIGH_RISK_UNCERTAIN"`이면 `"DEEP_ANALYSIS"`, 그 외에는 `"FINAL"` (`jrr_router.py:59-63`).
-- `reason`: 여러 위험 신호를 전부 나열한 목록이 아니라, **4장 우선순위 규칙에서 최초로 매칭된 대표 사유 하나**입니다. `"Uncertain Probability"`는 별도의 불확실성 점수가 아니라, **확률이 `tau_low`와 `tau_high` 사이 그레이존에 걸렸을 때 붙는 reason 라벨**입니다(`docs/interface_spec.md` §4.4 CRITICAL, `docs/pipeline_architecture_v3.md` "Uncertain Probability 표현" 절에서 동일하게 재확인).
-- `triggered_signals`: `reason`과 별개로, **동시에 발현된 모든 위험 신호**를 담는 배열입니다(`src/jrr/jrr_router.py:36-60`). 각 규칙(OOD → Disagreement → Difficulty → Uncertain Probability)이 독립적으로 검사되어 조건을 만족할 때마다 `"OOD"`/`"DISAGREEMENT"`/`"DIFFICULTY"`/`"UNCERTAIN_PROBABILITY"` 중 해당 값이 추가됩니다. 위험 신호가 하나도 없는 `AUTO_BENIGN`/`AUTO_MALICIOUS`에서는 빈 배열 `[]`입니다. 4장에서 설명한 Priority-ordered Routing과 대표 `reason` 산출 방식은 `triggered_signals` 도입 이후에도 그대로입니다.
+- `route`: `initial_verdict == "HIGH_RISK_UNCERTAIN"`?대㈃ `"DEEP_ANALYSIS"`, 洹??몄뿉??`"FINAL"` (`jrr_router.py:59-63`).
+- `reason`: ?щ윭 ?꾪뿕 ?좏샇瑜??꾨? ?섏뿴??紐⑸줉???꾨땲?? **4???곗꽑?쒖쐞 洹쒖튃?먯꽌 理쒖큹濡?留ㅼ묶??????ъ쑀 ?섎굹**?낅땲?? `"Uncertain Probability"`??蹂꾨룄??遺덊솗?ㅼ꽦 ?먯닔媛 ?꾨땲?? **?뺣쪧??`tau_low`? `tau_high` ?ъ씠 洹몃젅?댁〈??嫄몃졇????遺숇뒗 reason ?쇰꺼**?낅땲??`docs/interface_spec.md` 짠4.4 CRITICAL, `docs/pipeline_architecture_v3.md` "Uncertain Probability ?쒗쁽" ?덉뿉???숈씪?섍쾶 ?ы솗??.
+- `triggered_signals`: `reason`怨?蹂꾧컻濡? **?숈떆??諛쒗쁽??紐⑤뱺 ?꾪뿕 ?좏샇**瑜??대뒗 諛곗뿴?낅땲??`src/jrr/jrr_router.py:36-60`). 媛?洹쒖튃(OOD ??Disagreement ??Difficulty ??Uncertain Probability)???낅┰?곸쑝濡?寃?щ릺??議곌굔??留뚯”???뚮쭏??`"OOD"`/`"DISAGREEMENT"`/`"DIFFICULTY"`/`"UNCERTAIN_PROBABILITY"` 以??대떦 媛믪씠 異붽??⑸땲?? ?꾪뿕 ?좏샇媛 ?섎굹???녿뒗 `AUTO_BENIGN`/`AUTO_MALICIOUS`?먯꽌??鍮?諛곗뿴 `[]`?낅땲?? 4?μ뿉???ㅻ챸??Priority-ordered Routing怨????`reason` ?곗텧 諛⑹떇? `triggered_signals` ?꾩엯 ?댄썑?먮룄 洹몃?濡쒖엯?덈떎.
 
-### 파이프라인 표준 결과 객체와의 관계 (아직 코드로 조립되지 않음)
+### ?뚯씠?꾨씪???쒖? 寃곌낵 媛앹껜???愿怨?(?꾩쭅 肄붾뱶濡?議곕┰?섏? ?딆쓬)
 
-`docs/interface_spec.md` §4.1과 `docs/pipeline_architecture_v3.md` §2가 정의하는 전체 분석 결과 객체는 `calibrated_probability`를 `prediction.calibrated_probability`로, 나머지 3개 신호를 `risk_signals.{disagreement, ood_score, difficulty_score}`로 **중첩(nest)** 시킵니다. 그러나 `JointRiskRouter.route_sample()`이 실제로 반환하는 것은 **평평한(flat) dict**입니다. 이 중첩은 FastAPI 백엔드(아직 리포지토리에 구현 없음, 14장 참고)가 라우터 출력과 모델 예측값을 하나의 분석 레코드로 조립할 때 수행하도록 설계되어 있으며, 현재는 그 조립 코드 자체가 존재하지 않습니다.
+`docs/interface_spec.md` 짠4.1怨?`docs/pipeline_architecture_v3.md` 짠2媛 ?뺤쓽?섎뒗 ?꾩껜 遺꾩꽍 寃곌낵 媛앹껜??`calibrated_probability`瑜?`prediction.calibrated_probability`濡? ?섎㉧吏 3媛??좏샇瑜?`risk_signals.{disagreement, ood_score, difficulty_score}`濡?**以묒꺽(nest)** ?쒗궢?덈떎. 洹몃윭??`JointRiskRouter.route_sample()`???ㅼ젣濡?諛섑솚?섎뒗 寃껋? **?됲룊??flat) dict**?낅땲?? ??以묒꺽? FastAPI 諛깆뿏???꾩쭅 由ы룷吏?좊━??援ы쁽 ?놁쓬, 14??李멸퀬)媛 ?쇱슦??異쒕젰怨?紐⑤뜽 ?덉륫媛믪쓣 ?섎굹??遺꾩꽍 ?덉퐫?쒕줈 議곕┰?????섑뻾?섎룄濡??ㅺ퀎?섏뼱 ?덉쑝硫? ?꾩옱??洹?議곕┰ 肄붾뱶 ?먯껜媛 議댁옱?섏? ?딆뒿?덈떎.
 
-### 레거시 데모(`tests/demo/01/demo.py`)는 현재 시그니처와 맞지 않음
+### ?덇굅???곕え(`tests/demo/01/demo.py`)???꾩옱 ?쒓렇?덉쿂? 留욎? ?딆쓬
 
-`demo.py`는 여전히 `router.route_sample(p_calib, disagreement)`를 **인자 2개**로 호출합니다(`demo.py:156-157`). 하지만 현재 `route_sample()`은 `(p_calib, disagreement, ood_score, difficulty_score)` **4개의 위치 인자**를 요구하므로, 이 데모를 그대로 실행하면 `TypeError: route_sample() missing 2 required positional arguments`가 발생합니다. 또한 `verdict` 판정부는 여전히 `"AUTO_PASS"`/`"AUTO_QUARANTINE"`이라는 구용어와 비교하는데, 라우터는 `"AUTO_BENIGN"`/`"AUTO_MALICIOUS"`를 반환하므로 이 비교도 항상 실패합니다. **`demo.py`는 현재 라우터 인터페이스와 더 이상 호환되지 않는 레거시 코드이며, 사용 예시로 참고하면 안 됩니다.**
+`demo.py`???ъ쟾??`router.route_sample(p_calib, disagreement)`瑜?**?몄옄 2媛?*濡??몄텧?⑸땲??`demo.py:156-157`). ?섏?留??꾩옱 `route_sample()`? `(p_calib, disagreement, ood_score, difficulty_score)` **4媛쒖쓽 ?꾩튂 ?몄옄**瑜??붽뎄?섎?濡? ???곕え瑜?洹몃?濡??ㅽ뻾?섎㈃ `TypeError: route_sample() missing 2 required positional arguments`媛 諛쒖깮?⑸땲?? ?먰븳 `verdict` ?먯젙遺???ъ쟾??`"AUTO_PASS"`/`"AUTO_QUARANTINE"`?대씪??援ъ슜?댁? 鍮꾧탳?섎뒗?? ?쇱슦?곕뒗 `"AUTO_BENIGN"`/`"AUTO_MALICIOUS"`瑜?諛섑솚?섎?濡???鍮꾧탳????긽 ?ㅽ뙣?⑸땲?? **`demo.py`???꾩옱 ?쇱슦???명꽣?섏씠?ㅼ? ???댁긽 ?명솚?섏? ?딅뒗 ?덇굅??肄붾뱶?대ŉ, ?ъ슜 ?덉떆濡?李멸퀬?섎㈃ ???⑸땲??**
 
 ---
 
 ## 7. Evaluation Protocol
 
-`src/preprocessing/README.md`(§ 분할 계약), `src/models/data_contract.py`, `docs/pipeline_architecture_v3.md` §7("모델 평가 Protocol") 세 곳이 동일하게 확정한 **시간 기반(week_id) 4분할**입니다.
+`src/preprocessing/README.md`(짠 遺꾪븷 怨꾩빟), `src/models/data_contract.py`, `docs/pipeline_architecture_v3.md` 짠7("紐⑤뜽 ?됯? Protocol") ??怨녹씠 ?숈씪?섍쾶 ?뺤젙??**?쒓컙 湲곕컲(week_id) 4遺꾪븷**?낅땲??
 
-| 분할 | 주차(week_id) | 행 수 | 역할 | 금지 |
+| 遺꾪븷 | 二쇱감(week_id) | ????| ??븷 | 湲덉? |
 |---|---|---:|---|---|
-| **Train** | 0–33 | 2,720,000 | 모델 fit | 성능 보고 |
-| **Validation** | 34–39 | 480,000 | 하이퍼파라미터 튜닝, early stopping, 모델 선택 | threshold 산출, 최종 성능 보고, 학습 포함 |
-| **Calibration** | 40–45 | 480,000 | Isotonic Calibration + JRR 라우팅 threshold 선택 | 모델 선택, 학습 포함 |
-| **Eval** (Final Eval 산출용) | 46–51 | 480,000 | 고정된 모델/threshold/정책의 성능 평가, 재튜닝 금지 | threshold 재조정 |
-| **Lockbox / Challenge** | — | test 960,000 / challenge 6,315 | 전체 Pipeline Freeze 후 **최종 1회** 평가 | 개발 중 열람 |
+| **Train** | 0??3 | 2,720,000 | 紐⑤뜽 fit | ?깅뒫 蹂닿퀬 |
+| **Validation** | 34??9 | 480,000 | ?섏씠?쇳뙆?쇰????쒕떇, early stopping, 紐⑤뜽 ?좏깮 | threshold ?곗텧, 理쒖쥌 ?깅뒫 蹂닿퀬, ?숈뒿 ?ы븿 |
+| **Calibration** | 40??5 | 480,000 | Isotonic Calibration + JRR ?쇱슦??threshold ?좏깮 | 紐⑤뜽 ?좏깮, ?숈뒿 ?ы븿 |
+| **Eval** (Final Eval ?곗텧?? | 46??1 | 480,000 | 怨좎젙??紐⑤뜽/threshold/?뺤콉???깅뒫 ?됯?, ?ы뒠??湲덉? | threshold ?ъ“??|
+| **Lockbox / Challenge** | ??| test 960,000 / challenge 6,315 | ?꾩껜 Pipeline Freeze ??**理쒖쥌 1??* ?됯? | 媛쒕컻 以??대엺 |
 
-- 순서: **Train → Validation(모델 확정) → Calibration(threshold freeze) → Final Eval(고정 성능 확인) → 전체 Pipeline Freeze → Lockbox / Challenge(단 1회)**.
-- **Eval은 tuning에 사용되지 않습니다.** (`docs_eval_lockbox_policy.md` §2, `pipeline_architecture_v3.md` CRITICAL-01)
-- **Engineering Eval vs Final Eval**: `tau_low`/`tau_difficulty`는 커밋 `49bc244`/`ed2ffd5`(2026-09-10)에서 Calibration 세트 단변수 순차 탐색으로 먼저 재확정됐다가, 이후 커밋 `06c8ffc`/`f4ce7a1`(2026-09-10)에서 두 변수를 동시에 탐색하는 **2차원 Grid Search**로 다시 확정되어 현재 공식 값은 `tau_low=0.65`/`tau_difficulty=6.0`입니다(9장). 이 값이 확정되기까지 Eval 세트로 반복 산출된 결과(9, 10, 11장에 인용된 수치)는 모두 개발 중 참고용 **Engineering Eval**로 구분합니다 — 이 Eval 세트는 이미 여러 차례 확인에 사용됐으므로 "미지의(unseen) 데이터"가 아닙니다. Threshold freeze 이후 별도로 실행·보고하는 결과만 공식 **Final Eval**이라고 부르며, 이 문서 작성 시점 기준 Final Eval은 아직 실행되지 않았습니다. Final Eval과 Lockbox/Challenge(전체 Pipeline Freeze 후 최종 1회 평가)는 서로 다른 단계이며 동일 개념으로 혼동하지 않습니다.
-- **Top-500 feature 선택은 이 4-Way 재학습 과정에서 새로 정한 것이 아니라, 기존 TRUST-Triage 입력 계약(`top_feature_indices_500.npy`, `docs/feature_schema.md`)으로 고정된 값**입니다. `pipeline_architecture_v3.md`: "새 4-Way 재학습 과정에서 Top-500을 재선택하지 않음." LightGBM/XGBoost 모두 동일 인덱스를 사용하며 `data_contract.py::load_top_indices`가 무결성을 검증합니다.
+- ?쒖꽌: **Train ??Validation(紐⑤뜽 ?뺤젙) ??Calibration(threshold freeze) ??Final Eval(怨좎젙 ?깅뒫 ?뺤씤) ???꾩껜 Pipeline Freeze ??Lockbox / Challenge(??1??**.
+- **Eval? tuning???ъ슜?섏? ?딆뒿?덈떎.** (`docs_eval_lockbox_policy.md` 짠2, `pipeline_architecture_v3.md` CRITICAL-01)
+- **Engineering Eval vs Final Eval**: `tau_low`/`tau_difficulty`??而ㅻ컠 `49bc244`/`ed2ffd5`(2026-09-10)?먯꽌 Calibration ?명듃 ?⑤????쒖감 ?먯깋?쇰줈 癒쇱? ?ы솗?뺣릱?ㅺ?, ?댄썑 而ㅻ컠 `06c8ffc`/`f4ce7a1`(2026-09-10)?먯꽌 ??蹂?섎? ?숈떆???먯깋?섎뒗 **2李⑥썝 Grid Search**濡??ㅼ떆 ?뺤젙?섏뼱 ?꾩옱 怨듭떇 媛믪? `tau_low=0.65`/`tau_difficulty=6.0`?낅땲??9??. ??媛믪씠 ?뺤젙?섍린源뚯? Eval ?명듃濡?諛섎났 ?곗텧??寃곌낵(9, 10, 11?μ뿉 ?몄슜???섏튂)??紐⑤몢 媛쒕컻 以?李멸퀬??**Engineering Eval**濡?援щ텇?⑸땲??????Eval ?명듃???대? ?щ윭 李⑤? ?뺤씤???ъ슜?먯쑝誘濡?"誘몄???unseen) ?곗씠??媛 ?꾨떃?덈떎. Threshold freeze ?댄썑 蹂꾨룄濡??ㅽ뻾쨌蹂닿퀬?섎뒗 寃곌낵留?怨듭떇 **Final Eval**?대씪怨?遺瑜대ŉ, ??臾몄꽌 ?묒꽦 ?쒖젏 湲곗? Final Eval? ?꾩쭅 ?ㅽ뻾?섏? ?딆븯?듬땲?? Final Eval怨?Lockbox/Challenge(?꾩껜 Pipeline Freeze ??理쒖쥌 1???됯?)???쒕줈 ?ㅻⅨ ?④퀎?대ŉ ?숈씪 媛쒕뀗?쇰줈 ?쇰룞?섏? ?딆뒿?덈떎.
+- **Top-500 feature ?좏깮? ??4-Way ?ы븰??怨쇱젙?먯꽌 ?덈줈 ?뺥븳 寃껋씠 ?꾨땲?? 湲곗〈 TRUST-Triage ?낅젰 怨꾩빟(`top_feature_indices_500.npy`, `docs/feature_schema.md`)?쇰줈 怨좎젙??媛?*?낅땲?? `pipeline_architecture_v3.md`: "??4-Way ?ы븰??怨쇱젙?먯꽌 Top-500???ъ꽑?앺븯吏 ?딆쓬." LightGBM/XGBoost 紐⑤몢 ?숈씪 ?몃뜳?ㅻ? ?ъ슜?섎ŉ `data_contract.py::load_top_indices`媛 臾닿껐?깆쓣 寃利앺빀?덈떎.
 
 ---
 
@@ -209,227 +209,227 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 
 ### LightGBM (Primary Classifier)
 
-| 항목 | 내용 |
+| ??ぉ | ?댁슜 |
 |---|---|
-| 파일명(현재) | `baseline_model_lightgbm_tuned_500_4way.pkl` |
-| 학습 스크립트 | `src/models/tune_lightgbm.py` |
-| 튜닝 방식 | Optuna (`TPESampler(seed=42)`, `N_TRIALS = 20`), Train에서 fit, Validation에서 `early_stopping(stopping_rounds=100)` + `validation_tpr_at_fpr`(목표 FPR 0.001) 기준 모델 선택 후 `best_iteration`으로 `n_estimators` 고정, Train 전체로 재학습 |
-| MLflow 실험 | `trust-triage-baseline`, 태그 `split_type=temporal_week_id_4way`, `top_n=500` |
-| **Validation 결과(모델 선택 근거)** | `TPR@FPR0.1% ≈ 92.49%`, `Best iteration = 998` (`docs/pipeline_architecture_v3.md` ③) — **Validation 세트 기준이며 Eval 최종 성능과는 구분됩니다.** |
-| MLflow Run ID / sha256 | **확인 필요** — 리포지토리에 이 4-way 모델의 run id/hash가 기록되어 있지 않음 |
+| ?뚯씪紐??꾩옱) | `baseline_model_lightgbm_tuned_500_4way.pkl` |
+| ?숈뒿 ?ㅽ겕由쏀듃 | `src/models/tune_lightgbm.py` |
+| ?쒕떇 諛⑹떇 | Optuna (`TPESampler(seed=42)`, `N_TRIALS = 20`), Train?먯꽌 fit, Validation?먯꽌 `early_stopping(stopping_rounds=100)` + `validation_tpr_at_fpr`(紐⑺몴 FPR 0.001) 湲곗? 紐⑤뜽 ?좏깮 ??`best_iteration`?쇰줈 `n_estimators` 怨좎젙, Train ?꾩껜濡??ы븰??|
+| MLflow ?ㅽ뿕 | `trust-triage-baseline`, ?쒓렇 `split_type=temporal_week_id_4way`, `top_n=500` |
+| **Validation 寃곌낵(紐⑤뜽 ?좏깮 洹쇨굅)** | `TPR@FPR0.1% ??92.49%`, `Best iteration = 998` (`docs/pipeline_architecture_v3.md` ?? ??**Validation ?명듃 湲곗??대ŉ Eval 理쒖쥌 ?깅뒫怨쇰뒗 援щ텇?⑸땲??** |
+| MLflow Run ID / sha256 | **?뺤씤 ?꾩슂** ??由ы룷吏?좊━????4-way 紐⑤뜽??run id/hash媛 湲곕줉?섏뼱 ?덉? ?딆쓬 |
 
-**레거시 구분 주의**: `baseline_model_lightgbm_tuned_500_v4_9120.pkl`은 4-way 분할 이전의 **구버전** 모델이며, 구 `docs/pipeline_architecture.md`에 적힌 "TPR@FPR 0.1% = 91.20%"는 **이 구버전 모델의 수치**입니다. `src/models/export_baseline_pkl.py`의 `run_id = "69a92b2033d346ac930fe2ec889199a2"`도 더 이전의 튜닝 전 참고용 모델(`baseline_model_500.pkl`)의 run id로, 현재 공식 4-way LightGBM과 무관합니다. 이 두 레거시 수치를 현재 4-way 모델 수치와 혼용하지 않도록 주의.
+**?덇굅??援щ텇 二쇱쓽**: `baseline_model_lightgbm_tuned_500_v4_9120.pkl`? 4-way 遺꾪븷 ?댁쟾??**援щ쾭??* 紐⑤뜽?대ŉ, 援?`docs/pipeline_architecture.md`???곹엺 "TPR@FPR 0.1% = 91.20%"??**??援щ쾭??紐⑤뜽???섏튂**?낅땲?? `src/models/export_baseline_pkl.py`??`run_id = "69a92b2033d346ac930fe2ec889199a2"`?????댁쟾???쒕떇 ??李멸퀬??紐⑤뜽(`baseline_model_500.pkl`)??run id濡? ?꾩옱 怨듭떇 4-way LightGBM怨?臾닿??⑸땲?? ?????덇굅???섏튂瑜??꾩옱 4-way 紐⑤뜽 ?섏튂? ?쇱슜?섏? ?딅룄濡?二쇱쓽.
 
 ### XGBoost (Disagreement Comparator)
 
-| 항목 | 내용 |
+| ??ぉ | ?댁슜 |
 |---|---|
-| 파일명(현재) | `baseline_model_xgb_500_4way_1000cap.pkl` |
-| 학습 스크립트 | `src/models/train_xgboost_500.py` |
-| 설정 | `XGBClassifier(n_estimators=1000, max_depth=6, learning_rate=0.05, random_state=42, tree_method="hist", eval_metric="auc", early_stopping_rounds=50)`, Train에서 fit, Validation에서 early stopping |
-| MLflow 실험 | `TRUST-Triage-XGBoost-500` |
-| **Validation 결과** | `best_iteration = 999`, `Validation AUC ≈ 0.99712` (`docs/pipeline_architecture_v3.md` ③) |
-| 수렴 여부 | **"1000 iteration ceiling에서 종료되었으며 완전 수렴 모델로 해석하지 않는다"**(`pipeline_architecture_v3.md` 원문). `best_iteration=999`는 `n_estimators=1000` 상한 직전이므로, early stopping이 실질적으로 발동했다기보다 상한에 근접해 종료됐을 가능성을 배제할 수 없음 — 파일명 `1000cap`도 상한 설정을 의미할 뿐 수렴을 의미하지 않습니다. |
-| 역할 | LightGBM과의 Disagreement 계산용 비교 모델일 뿐, 공식 판정 모델이 아님 |
+| ?뚯씪紐??꾩옱) | `baseline_model_xgb_500_4way_1000cap.pkl` |
+| ?숈뒿 ?ㅽ겕由쏀듃 | `src/models/train_xgboost_500.py` |
+| ?ㅼ젙 | `XGBClassifier(n_estimators=1000, max_depth=6, learning_rate=0.05, random_state=42, tree_method="hist", eval_metric="auc", early_stopping_rounds=50)`, Train?먯꽌 fit, Validation?먯꽌 early stopping |
+| MLflow ?ㅽ뿕 | `TRUST-Triage-XGBoost-500` |
+| **Validation 寃곌낵** | `best_iteration = 999`, `Validation AUC ??0.99712` (`docs/pipeline_architecture_v3.md` ?? |
+| ?섎졃 ?щ? | **"1000 iteration ceiling?먯꽌 醫낅즺?섏뿀?쇰ŉ ?꾩쟾 ?섎졃 紐⑤뜽濡??댁꽍?섏? ?딅뒗??**(`pipeline_architecture_v3.md` ?먮Ц). `best_iteration=999`??`n_estimators=1000` ?곹븳 吏곸쟾?대?濡? early stopping???ㅼ쭏?곸쑝濡?諛쒕룞?덈떎湲곕낫???곹븳??洹쇱젒??醫낅즺?먯쓣 媛?μ꽦??諛곗젣?????놁쓬 ???뚯씪紐?`1000cap`???곹븳 ?ㅼ젙???섎???肉??섎졃???섎??섏? ?딆뒿?덈떎. |
+| ??븷 | LightGBM怨쇱쓽 Disagreement 怨꾩궛??鍮꾧탳 紐⑤뜽??肉? 怨듭떇 ?먯젙 紐⑤뜽???꾨떂 |
 
 ---
 
 ## 9. Calibration Results
 
-### tau_high (상한, 자동 악성 커트라인)
+### tau_high (?곹븳, ?먮룞 ?낆꽦 而ㅽ듃?쇱씤)
 
-- **산출 코드**: `src/jrr/train_calibrator.py` — Calibration 세트에 대해 Isotonic 보정된 확률로 `roc_curve`를 계산하고 `fpr <= TARGET_FPR(0.001)`을 만족하는 마지막 지점의 threshold를 채택.
-- **값**: `0.983645`.
-- **선정 기준**: Calibration 세트의 FPR ≤ 0.1% 조건. Eval 결과로 재조정되지 않음.
+- **?곗텧 肄붾뱶**: `src/jrr/train_calibrator.py` ??Calibration ?명듃?????Isotonic 蹂댁젙???뺣쪧濡?`roc_curve`瑜?怨꾩궛?섍퀬 `fpr <= TARGET_FPR(0.001)`??留뚯”?섎뒗 留덉?留?吏?먯쓽 threshold瑜?梨꾪깮.
+- **媛?*: `0.983645`.
+- **?좎젙 湲곗?**: Calibration ?명듃??FPR ??0.1% 議곌굔. Eval 寃곌낵濡??ъ“?뺣릺吏 ?딆쓬.
 
-### tau_low & tau_difficulty (Calibration 2차원 Grid Search, 현재 공식 값)
+### tau_low & tau_difficulty (Calibration 2李⑥썝 Grid Search, ?꾩옱 怨듭떇 媛?
 
-- **채택된 값**: `tau_low = 0.65`, `tau_difficulty = 6.0` — `jrr_router.py::JointRiskRouter.__init__`의 기본값이자 `docs/interface_spec.md`가 명시하는 현재 운영 기준.
-- **선정 방식**: `tau_low`와 `tau_difficulty`는 JRR의 OR 조건 안에서 서로 상호작용합니다(둘 중 하나라도 걸리면 `HIGH_RISK_UNCERTAIN`). 한쪽을 고정한 채 다른 한쪽만 순차적으로 최적화하면 이 상호작용을 반영하지 못하는 순환 논리(Circular Reasoning) 문제가 생기므로, 두 변수를 **`src/jrr/optimize_threshold.py::optimize_grid_search()`로 동시에 2차원 Grid Search** 했습니다(`docs/risk_routing_simulation_test.md` §4). 탐색은 **Calibration 세트(48만 건) 전체**만 사용했으며 Eval 데이터는 이번 2차원 탐색에도 사용하지 않았습니다.
-  - 후보 grid: `tau_low ∈ {0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80}` × `tau_difficulty ∈ {1.0, 2.0, ..., 10.0}` (총 70개 조합).
-  - 목적함수: `Utility = Review Yield × (1 − 악성 누출률)` — 타율(Yield)과 악성 누출 방어를 함께 고려하는 단일 점수로, 조합마다 계산 후 내림차순 정렬.
-  - Calibration 세트 기준 상위 결과(Top 5, `docs/risk_routing_simulation_test.md` §4.1):
+- **梨꾪깮??媛?*: `tau_low = 0.65`, `tau_difficulty = 6.0` ??`jrr_router.py::JointRiskRouter.__init__`??湲곕낯媛믪씠??`docs/interface_spec.md`媛 紐낆떆?섎뒗 ?꾩옱 ?댁쁺 湲곗?.
+- **?좎젙 諛⑹떇**: `tau_low`? `tau_difficulty`??JRR??OR 議곌굔 ?덉뿉???쒕줈 ?곹샇?묒슜?⑸땲????以??섎굹?쇰룄 嫄몃━硫?`HIGH_RISK_UNCERTAIN`). ?쒖そ??怨좎젙??梨??ㅻⅨ ?쒖そ留??쒖감?곸쑝濡?理쒖쟻?뷀븯硫????곹샇?묒슜??諛섏쁺?섏? 紐삵븯???쒗솚 ?쇰━(Circular Reasoning) 臾몄젣媛 ?앷린誘濡? ??蹂?섎? **`src/jrr/optimize_threshold.py::optimize_grid_search()`濡??숈떆??2李⑥썝 Grid Search** ?덉뒿?덈떎(`docs/risk_routing_simulation_test.md` 짠4). ?먯깋? **Calibration ?명듃(48留?嫄? ?꾩껜**留??ъ슜?덉쑝硫?Eval ?곗씠?곕뒗 ?대쾲 2李⑥썝 ?먯깋?먮룄 ?ъ슜?섏? ?딆븯?듬땲??
+  - ?꾨낫 grid: `tau_low ??{0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80}` 횞 `tau_difficulty ??{1.0, 2.0, ..., 10.0}` (珥?70媛?議고빀).
+  - 紐⑹쟻?⑥닔: `Utility = Review Yield 횞 (1 ???낆꽦 ?꾩텧瑜?` ?????Yield)怨??낆꽦 ?꾩텧 諛⑹뼱瑜??④퍡 怨좊젮?섎뒗 ?⑥씪 ?먯닔濡? 議고빀留덈떎 怨꾩궛 ???대┝李⑥닚 ?뺣젹.
+  - Calibration ?명듃 湲곗? ?곸쐞 寃곌낵(Top 5, `docs/risk_routing_simulation_test.md` 짠4.1):
 
-    | Rank | tau_low | tau_diff | 심층분석 비율(건수) | Review Yield | 악성 누출 |
+    | Rank | tau_low | tau_diff | ?ъ링遺꾩꽍 鍮꾩쑉(嫄댁닔) | Review Yield | ?낆꽦 ?꾩텧 |
     |---:|---:|---:|---|---:|---:|
-    | **1 (채택)** | **0.65** | **6.0** | **9.01% (43,240건)** | **74.90%** | **5,190건** |
-    | 2 | 0.70 | 6.0 | 9.01% | 74.90% | 5,190건 |
-    | 4 | 0.75 | 6.0 | 8.64% | 75.19% | 6,384건 |
-    | 5 | 0.50 | 6.0 | 9.46% | 74.18% | 3,900건 |
+    | **1 (梨꾪깮)** | **0.65** | **6.0** | **9.01% (43,240嫄?** | **74.90%** | **5,190嫄?* |
+    | 2 | 0.70 | 6.0 | 9.01% | 74.90% | 5,190嫄?|
+    | 4 | 0.75 | 6.0 | 8.64% | 75.19% | 6,384嫄?|
+    | 5 | 0.50 | 6.0 | 9.46% | 74.18% | 3,900嫄?|
 
-    위 수치는 모두 **Calibration 세트**에서 후보 조합을 비교하기 위해 산출한 시뮬레이션 값이며, 실제 Eval 세트에 이 threshold를 고정 적용했을 때의 결과는 별도입니다(10장 Eval Results 참고).
-  - **선정 근거**: `tau_low=0.65`/`tau_difficulty=6.0` 조합이 정의된 후보 grid와 목적함수 범위 내에서 Utility 기준 최적 조합으로 나타났습니다. 순차 최적화 방식으로 찾았던 이전 부분 최적점(`tau_low=0.65`, `tau_difficulty=5.0`)과 비교하면, 심층분석 큐 트래픽을 추가로 줄이면서(9.08%→9.01%대) Review Yield도 74.79%→74.90%로 소폭 개선되는 지점입니다.
-- **이전 값(이력, 순차·단변수 최적화)**: 이전 개정에서는 `tau_low`와 `tau_difficulty`를 하나씩 고정하며 순차적으로 최적화해 `tau_low=0.60`, `tau_difficulty=5.0`(Calibration 세트 기준 Review Yield 71.83%)을 채택했습니다. 이 방식은 두 변수의 상호작용을 반영하지 못했기 때문에, 이후 2차원 Grid Search로 대체되었습니다. 과거 `optimize_threshold.py`의 탐색 범위가 `0.90~tau_high`로 한정되어 그보다 더 이전 채택값(`0.60`)을 재현하지 못하던 문제는 커밋 `49bc244`에서 먼저 해결되었고, 이후 커밋 `06c8ffc`/`f4ce7a1`에서 순차 최적화 자체가 2차원 Grid Search로 전면 교체되었습니다.
+    ???섏튂??紐⑤몢 **Calibration ?명듃**?먯꽌 ?꾨낫 議고빀??鍮꾧탳?섍린 ?꾪빐 ?곗텧???쒕??덉씠??媛믪씠硫? ?ㅼ젣 Eval ?명듃????threshold瑜?怨좎젙 ?곸슜?덉쓣 ?뚯쓽 寃곌낵??蹂꾨룄?낅땲??10??Eval Results 李멸퀬).
+  - **?좎젙 洹쇨굅**: `tau_low=0.65`/`tau_difficulty=6.0` 議고빀???뺤쓽???꾨낫 grid? 紐⑹쟻?⑥닔 踰붿쐞 ?댁뿉??Utility 湲곗? 理쒖쟻 議고빀?쇰줈 ?섑??ъ뒿?덈떎. ?쒖감 理쒖쟻??諛⑹떇?쇰줈 李얠븯???댁쟾 遺遺?理쒖쟻??`tau_low=0.65`, `tau_difficulty=5.0`)怨?鍮꾧탳?섎㈃, ?ъ링遺꾩꽍 ???몃옒?쎌쓣 異붽?濡?以꾩씠硫댁꽌(9.08%??.01%?) Review Yield??74.79%??4.90%濡??뚰룺 媛쒖꽑?섎뒗 吏?먯엯?덈떎.
+- **?댁쟾 媛??대젰, ?쒖감쨌?⑤???理쒖쟻??**: ?댁쟾 媛쒖젙?먯꽌??`tau_low`? `tau_difficulty`瑜??섎굹??怨좎젙?섎ŉ ?쒖감?곸쑝濡?理쒖쟻?뷀빐 `tau_low=0.60`, `tau_difficulty=5.0`(Calibration ?명듃 湲곗? Review Yield 71.83%)??梨꾪깮?덉뒿?덈떎. ??諛⑹떇? ??蹂?섏쓽 ?곹샇?묒슜??諛섏쁺?섏? 紐삵뻽湲??뚮Ц?? ?댄썑 2李⑥썝 Grid Search濡??泥대릺?덉뒿?덈떎. 怨쇨굅 `optimize_threshold.py`???먯깋 踰붿쐞媛 `0.90~tau_high`濡??쒖젙?섏뼱 洹몃낫?????댁쟾 梨꾪깮媛?`0.60`)???ы쁽?섏? 紐삵븯??臾몄젣??而ㅻ컠 `49bc244`?먯꽌 癒쇱? ?닿껐?섏뿀怨? ?댄썑 而ㅻ컠 `06c8ffc`/`f4ce7a1`?먯꽌 ?쒖감 理쒖쟻???먯껜媛 2李⑥썝 Grid Search濡??꾨㈃ 援먯껜?섏뿀?듬땲??
 
 ### tau_disagree
 
-- **값**: `0.3` (고정).
-- **선정 기준**: `docs/risk_routing_simulation_test.md` §2.2는 "앙상블 모델 간 의견 불일치도는 인식론적 불확실성과 매우 높은 상관관계를 갖는다"는 **정성적** 근거만 제시합니다. `tau_low`/`tau_difficulty`처럼 Calibration/Eval 세트에서 threshold 후보를 그리드 탐색한 코드·로그는 확인되지 않습니다. **선정 근거 문서(정량적 그리드 탐색)는 확인 필요.**
+- **媛?*: `0.3` (怨좎젙).
+- **?좎젙 湲곗?**: `docs/risk_routing_simulation_test.md` 짠2.2??"?숈긽釉?紐⑤뜽 媛??섍껄 遺덉씪移섎룄???몄떇濡좎쟻 遺덊솗?ㅼ꽦怨?留ㅼ슦 ?믪? ?곴?愿怨꾨? 媛뽯뒗????**?뺤꽦??* 洹쇨굅留??쒖떆?⑸땲?? `tau_low`/`tau_difficulty`泥섎읆 Calibration/Eval ?명듃?먯꽌 threshold ?꾨낫瑜?洹몃━???먯깋??肄붾뱶쨌濡쒓렇???뺤씤?섏? ?딆뒿?덈떎. **?좎젙 洹쇨굅 臾몄꽌(?뺣웾??洹몃━???먯깋)???뺤씤 ?꾩슂.**
 
 ### tau_ood
 
-- **값**: `0.0`.
-- **선정 기준**: 별도 그리드 탐색이 아니라 `sklearn.ensemble.IsolationForest.decision_function()`의 표준 관례(0 미만 = 이상치)를 그대로 채택.
+- **媛?*: `0.0`.
+- **?좎젙 湲곗?**: 蹂꾨룄 洹몃━???먯깋???꾨땲??`sklearn.ensemble.IsolationForest.decision_function()`???쒖? 愿濡(0 誘몃쭔 = ?댁긽移?瑜?洹몃?濡?梨꾪깮.
 
-### tau_difficulty — 과거 순차 탐색 이력 (상세)
+### tau_difficulty ??怨쇨굅 ?쒖감 ?먯깋 ?대젰 (?곸꽭)
 
-`tau_difficulty`는 위 "tau_low & tau_difficulty" 절의 2차원 Grid Search로 `tau_low`와 함께 동시에 재확정되었습니다(현재 공식 값 `6.0`). 아래는 2차원 Grid Search 이전, `tau_difficulty`만 단독으로 순차 탐색하던 시기의 이력입니다.
+`tau_difficulty`????"tau_low & tau_difficulty" ?덉쓽 2李⑥썝 Grid Search濡?`tau_low`? ?④퍡 ?숈떆???ы솗?뺣릺?덉뒿?덈떎(?꾩옱 怨듭떇 媛?`6.0`). ?꾨옒??2李⑥썝 Grid Search ?댁쟾, `tau_difficulty`留??⑤룆?쇰줈 ?쒖감 ?먯깋?섎뜕 ?쒓린???대젰?낅땲??
 
-- **최초(Engineering Eval, 해결됨)**: Eval 세트(48만 건) 기준 1.0~10.0 그리드 탐색으로 `5.0`이 선택되었으나, threshold 선정에 Eval을 사용한 것으로 판단되어 재작업되었습니다(10장 Engineering Eval Results 참고).
-- **1차 재작업(Calibration, 단변수 순차 탐색)**: `tau_low=0.60`으로 고정한 채 `tau_difficulty`만 Calibration 세트(48만 건)에서 `1.0~10.0` 후보로 재탐색해 다시 `5.0`(Review Yield 71.83%)이 선정되었습니다.
+- **理쒖큹(Engineering Eval, ?닿껐??**: Eval ?명듃(48留?嫄? 湲곗? 1.0~10.0 洹몃━???먯깋?쇰줈 `5.0`???좏깮?섏뿀?쇰굹, threshold ?좎젙??Eval???ъ슜??寃껋쑝濡??먮떒?섏뼱 ?ъ옉?낅릺?덉뒿?덈떎(10??Engineering Eval Results 李멸퀬).
+- **1李??ъ옉??Calibration, ?⑤????쒖감 ?먯깋)**: `tau_low=0.60`?쇰줈 怨좎젙??梨?`tau_difficulty`留?Calibration ?명듃(48留?嫄??먯꽌 `1.0~10.0` ?꾨낫濡??ы깘?됲빐 ?ㅼ떆 `5.0`(Review Yield 71.83%)???좎젙?섏뿀?듬땲??
 
-  | 임계값(tau_diff) | 심층분석 비율 | 심층분석 건수 | Review Yield | 정상 중 악성 누출 건수 |
+  | ?꾧퀎媛?tau_diff) | ?ъ링遺꾩꽍 鍮꾩쑉 | ?ъ링遺꾩꽍 嫄댁닔 | Review Yield | ?뺤긽 以??낆꽦 ?꾩텧 嫄댁닔 |
   |---:|---:|---:|---:|---:|
-  | 1.0 | 55.81% | 267,894건 | 69.85% | 4,138건 |
-  | 4.0 | 22.78% | 109,366건 | 61.80% | 4,860건 |
-  | **5.0 (당시 확정)** | **14.15%** | **67,910건** | **71.83%** | **4,954건** |
-  | 6.0 | 9.08% | 43,596건 | 74.79% | 4,970건 |
-  | 10.0 | 6.00% | 28,802건 | 68.35% | 5,030건 |
+  | 1.0 | 55.81% | 267,894嫄?| 69.85% | 4,138嫄?|
+  | 4.0 | 22.78% | 109,366嫄?| 61.80% | 4,860嫄?|
+  | **5.0 (?뱀떆 ?뺤젙)** | **14.15%** | **67,910嫄?* | **71.83%** | **4,954嫄?* |
+  | 6.0 | 9.08% | 43,596嫄?| 74.79% | 4,970嫄?|
+  | 10.0 | 6.00% | 28,802嫄?| 68.35% | 5,030嫄?|
 
-- **2차 재작업(현재, Calibration 2차원 Grid Search)**: `tau_low=0.60`으로 고정한 채 탐색한 위 1차 재작업은 `tau_low` 자체도 변경 가능하다는 점을 반영하지 못하는 순환 논리 문제가 있었습니다. 이를 해소하기 위해 `tau_low`와 `tau_difficulty`를 동시에 2차원 Grid Search하여 `tau_low=0.65`, `tau_difficulty=6.0`으로 다시 확정했습니다(위 "tau_low & tau_difficulty" 절 참고). 최종 `tau_difficulty=6.0`은 **Calibration 세트에서 확정(freeze)**되었으며, Eval 세트는 이번 2차원 탐색에도 사용되지 않았습니다.
+- **2李??ъ옉???꾩옱, Calibration 2李⑥썝 Grid Search)**: `tau_low=0.60`?쇰줈 怨좎젙??梨??먯깋????1李??ъ옉?낆? `tau_low` ?먯껜??蹂寃?媛?ν븯?ㅻ뒗 ?먯쓣 諛섏쁺?섏? 紐삵븯???쒗솚 ?쇰━ 臾몄젣媛 ?덉뿀?듬땲?? ?대? ?댁냼?섍린 ?꾪빐 `tau_low`? `tau_difficulty`瑜??숈떆??2李⑥썝 Grid Search?섏뿬 `tau_low=0.65`, `tau_difficulty=6.0`?쇰줈 ?ㅼ떆 ?뺤젙?덉뒿?덈떎(??"tau_low & tau_difficulty" ??李멸퀬). 理쒖쥌 `tau_difficulty=6.0`? **Calibration ?명듃?먯꽌 ?뺤젙(freeze)**?섏뿀?쇰ŉ, Eval ?명듃???대쾲 2李⑥썝 ?먯깋?먮룄 ?ъ슜?섏? ?딆븯?듬땲??
 
 ---
 
-## 10. Engineering Eval Results (Threshold Freeze 이전 기록)
+## 10. Engineering Eval Results (Threshold Freeze ?댁쟾 湲곕줉)
 
-> **Final Eval 아님**: 아래 수치는 Eval 세트(48만 건)로 산출된 **Engineering Eval** 결과입니다. Eval 세트는 개발 중 여러 차례(순차 최적화 단계, 2차원 Grid Search 단계) 반복해서 성능을 확인하는 용도로 이미 사용되었으므로 "미지의(unseen) Eval 데이터"가 아닙니다. threshold freeze 이후 정책에 따라 별도로 실행·보고하는 공식 **Final Eval**은 이 문서 작성 시점 기준 아직 수행되지 않았으며, 아래 Engineering Eval 수치를 Final Eval로 표기하지 않습니다(7장 참고). Final Eval과 Lockbox/Challenge(최종 1회 평가)는 서로 다른 단계이며 동일 개념으로 합치지 않습니다.
+> **Final Eval ?꾨떂**: ?꾨옒 ?섏튂??Eval ?명듃(48留?嫄?濡??곗텧??**Engineering Eval** 寃곌낵?낅땲?? Eval ?명듃??媛쒕컻 以??щ윭 李⑤?(?쒖감 理쒖쟻???④퀎, 2李⑥썝 Grid Search ?④퀎) 諛섎났?댁꽌 ?깅뒫???뺤씤?섎뒗 ?⑸룄濡??대? ?ъ슜?섏뿀?쇰?濡?"誘몄???unseen) Eval ?곗씠??媛 ?꾨떃?덈떎. threshold freeze ?댄썑 ?뺤콉???곕씪 蹂꾨룄濡??ㅽ뻾쨌蹂닿퀬?섎뒗 怨듭떇 **Final Eval**? ??臾몄꽌 ?묒꽦 ?쒖젏 湲곗? ?꾩쭅 ?섑뻾?섏? ?딆븯?쇰ŉ, ?꾨옒 Engineering Eval ?섏튂瑜?Final Eval濡??쒓린?섏? ?딆뒿?덈떎(7??李멸퀬). Final Eval怨?Lockbox/Challenge(理쒖쥌 1???됯?)???쒕줈 ?ㅻⅨ ?④퀎?대ŉ ?숈씪 媛쒕뀗?쇰줈 ?⑹튂吏 ?딆뒿?덈떎.
 
-`evaluate_jrr.py`(+ `_jrr_eval_core.py`)가 산출한 Engineering Eval 결과입니다. ROC-AUC/TPR/FPR/ECE/Brier Score/Confusion Matrix는 `tau_high=0.983645`(변경 없음)와 확률 Calibration에만 의존하므로 `tau_low`/`tau_difficulty` 값과 무관하게 동일합니다. Review Yield와 HIGH_RISK_UNCERTAIN(Deep Analysis) 유입량은 `tau_low`/`tau_difficulty`에 의존하므로 threshold가 바뀌면 함께 바뀝니다 — 아래는 **현재 공식 값(`tau_low=0.65`, `tau_difficulty=6.0`)을 Eval 세트에 적용한 최신 결과**입니다.
+`evaluate_jrr.py`(+ `_jrr_eval_core.py`)媛 ?곗텧??Engineering Eval 寃곌낵?낅땲?? ROC-AUC/TPR/FPR/ECE/Brier Score/Confusion Matrix??`tau_high=0.983645`(蹂寃??놁쓬)? ?뺣쪧 Calibration?먮쭔 ?섏〈?섎?濡?`tau_low`/`tau_difficulty` 媛믨낵 臾닿??섍쾶 ?숈씪?⑸땲?? Review Yield? HIGH_RISK_UNCERTAIN(Deep Analysis) ?좎엯?됱? `tau_low`/`tau_difficulty`???섏〈?섎?濡?threshold媛 諛붾뚮㈃ ?④퍡 諛붾앸땲?????꾨옒??**?꾩옱 怨듭떇 媛?`tau_low=0.65`, `tau_difficulty=6.0`)??Eval ?명듃???곸슜??理쒖떊 寃곌낵**?낅땲??
 
-| 지표 | 값 | 비고 |
+| 吏??| 媛?| 鍮꾧퀬 |
 |---|---|---|
-| ROC-AUC (Eval) | 0.997783 | `tau_low`/`tau_difficulty`와 무관 |
-| 실측 TPR @ `tau_high=0.983645` (Eval) | 0.8911 (89.11%) | 동일 |
-| 실측 FPR @ `tau_high=0.983645` (Eval) | 0.0012 (0.12%) | 동일 |
-| ECE | 0.0031 | 동일 |
-| Brier Score | 0.0163 | 동일 |
-| Confusion Matrix (Eval, n=480,000) | TP=213,866 / FP=296 / TN=239,704 / FN=26,134 | 동일 |
-| **Review Yield** (심층분석 큐 전체 기준, 일일 예산 제한 없음) | **79.19%** | `tau_low=0.65`/`tau_difficulty=6.0` 적용 결과 |
-| **HIGH_RISK_UNCERTAIN / Deep Analysis 유입** (Eval, n=480,000) | **55,114건 (11.48%)** | 동일 |
-| Kill Test FPR | 0.0000 (0%) | `tau_low`/`tau_difficulty`와 무관 |
-| OOD 방어 성공률(OOD Score < 0.0 샘플 중 `HIGH_RISK_UNCERTAIN` 라우팅 비율) | 100.00% | OOD로 판별된 샘플이 JRR 정책에 따라 모두 `HIGH_RISK_UNCERTAIN`으로 라우팅되었다는 **라우팅 동작 검증**이며, OOD 탐지 정확도가 100%라는 의미는 아님(11장 참고) |
-| AUTO_BENIGN / AUTO_MALICIOUS 개별 건수 (Eval, n=480,000) | **미제공 — 확인 필요** | `HIGH_RISK_UNCERTAIN`을 제외한 나머지 424,886건(88.52%)의 두 판정 간 분할은 아직 문서화되지 않음(15장 TBD) |
+| ROC-AUC (Eval) | 0.997783 | `tau_low`/`tau_difficulty`? 臾닿? |
+| ?ㅼ륫 TPR @ `tau_high=0.983645` (Eval) | 0.8911 (89.11%) | ?숈씪 |
+| ?ㅼ륫 FPR @ `tau_high=0.983645` (Eval) | 0.0012 (0.12%) | ?숈씪 |
+| ECE | 0.0031 | ?숈씪 |
+| Brier Score | 0.0163 | ?숈씪 |
+| Confusion Matrix (Eval, n=480,000) | TP=213,866 / FP=296 / TN=239,704 / FN=26,134 | ?숈씪 |
+| **Review Yield** (?ъ링遺꾩꽍 ???꾩껜 湲곗?, ?쇱씪 ?덉궛 ?쒗븳 ?놁쓬) | **79.19%** | `tau_low=0.65`/`tau_difficulty=6.0` ?곸슜 寃곌낵 |
+| **HIGH_RISK_UNCERTAIN / Deep Analysis ?좎엯** (Eval, n=480,000) | **55,114嫄?(11.48%)** | ?숈씪 |
+| Kill Test FPR | 0.0000 (0%) | `tau_low`/`tau_difficulty`? 臾닿? |
+| OOD 諛⑹뼱 ?깃났瑜?OOD Score < 0.0 ?섑뵆 以?`HIGH_RISK_UNCERTAIN` ?쇱슦??鍮꾩쑉) | 100.00% | OOD濡??먮퀎???섑뵆??JRR ?뺤콉???곕씪 紐⑤몢 `HIGH_RISK_UNCERTAIN`?쇰줈 ?쇱슦?낅릺?덈떎??**?쇱슦???숈옉 寃利?*?대ŉ, OOD ?먯? ?뺥솗?꾧? 100%?쇰뒗 ?섎????꾨떂(11??李멸퀬) |
+| AUTO_BENIGN / AUTO_MALICIOUS 媛쒕퀎 嫄댁닔 (Eval, n=480,000) | **誘몄젣怨????뺤씤 ?꾩슂** | `HIGH_RISK_UNCERTAIN`???쒖쇅???섎㉧吏 424,886嫄?88.52%)?????먯젙 媛?遺꾪븷? ?꾩쭅 臾몄꽌?붾릺吏 ?딆쓬(15??TBD) |
 
-**정확한 표현**: Calibration에서 목표 FPR ≤ 0.1% 조건으로 `tau_high=0.983645`를 선정했고, 이를 고정 적용한 Eval 실측 결과 TPR **89.11%**, 실측 FPR **0.12%**를 기록했습니다. Calibration 시점의 목표 FPR(0.1%)과 Eval에서 실측된 FPR(0.12%)은 서로 다른 값이며 "TPR 89.11% @ FPR 0.1%"처럼 하나의 조건으로 뭉뚱그려 표현하지 않습니다.
+**?뺥솗???쒗쁽**: Calibration?먯꽌 紐⑺몴 FPR ??0.1% 議곌굔?쇰줈 `tau_high=0.983645`瑜??좎젙?덇퀬, ?대? 怨좎젙 ?곸슜??Eval ?ㅼ륫 寃곌낵 TPR **89.11%**, ?ㅼ륫 FPR **0.12%**瑜?湲곕줉?덉뒿?덈떎. Calibration ?쒖젏??紐⑺몴 FPR(0.1%)怨?Eval?먯꽌 ?ㅼ륫??FPR(0.12%)? ?쒕줈 ?ㅻⅨ 媛믪씠硫?"TPR 89.11% @ FPR 0.1%"泥섎읆 ?섎굹??議곌굔?쇰줈 萸됰슧洹몃젮 ?쒗쁽?섏? ?딆뒿?덈떎.
 
-> **레거시 수치와 혼동 금지**: 구 `docs/pipeline_architecture.md`의 "TPR@FPR 0.1% = 91.20%"는 4-way 분할 이전 구버전 LightGBM의 수치이며 위 Eval 결과와 다른 모델·다른 데이터 분할 기준입니다.
+> **?덇굅???섏튂? ?쇰룞 湲덉?**: 援?`docs/pipeline_architecture.md`??"TPR@FPR 0.1% = 91.20%"??4-way 遺꾪븷 ?댁쟾 援щ쾭??LightGBM???섏튂?대ŉ ??Eval 寃곌낵? ?ㅻⅨ 紐⑤뜽쨌?ㅻⅨ ?곗씠??遺꾪븷 湲곗??낅땲??
 
-**이전 threshold 적용 결과(이력)**: `tau_low=0.60`/`tau_difficulty=5.0`(순차 최적화 결과)을 Eval 세트에 적용했던 이전 기록은 Review Yield 74.90%, HIGH_RISK_UNCERTAIN 77,784건(16.20%)이었습니다(`docs/risk_routing_simulation_test.md` 구버전 §5). 현재 공식 threshold(`0.65`/`6.0`)로 대체되며 위 79.19%/55,114건(11.48%)이 최신 값입니다.
+**?댁쟾 threshold ?곸슜 寃곌낵(?대젰)**: `tau_low=0.60`/`tau_difficulty=5.0`(?쒖감 理쒖쟻??寃곌낵)??Eval ?명듃???곸슜?덈뜕 ?댁쟾 湲곕줉? Review Yield 74.90%, HIGH_RISK_UNCERTAIN 77,784嫄?16.20%)?댁뿀?듬땲??`docs/risk_routing_simulation_test.md` 援щ쾭??짠5). ?꾩옱 怨듭떇 threshold(`0.65`/`6.0`)濡??泥대릺硫???79.19%/55,114嫄?11.48%)??理쒖떊 媛믪엯?덈떎.
 
-**Review Yield 계산 방식 변경 참고**: `docs_eval_lockbox_policy.md` §7은 원래 "검토예산 1/5/10/20%"별 정책 비교를 요구하지만, 현재 `_jrr_eval_core.py::calculate_review_yield()`는 예산 제한 없이 `HIGH_RISK_UNCERTAIN` 큐 전체를 대상으로 Yield를 계산합니다(함수 docstring: "현재 예산 제한 정책 유보에 따라, 예산 제약 없이 큐 전체를 대상으로 계산"). 즉 예산 기반 비교 정책은 아직 구현되지 않고 **보류(deferred)** 상태이며, 위 79.19%는 예산 제약이 없는 전량 기준 수치입니다.
+**Review Yield 怨꾩궛 諛⑹떇 蹂寃?李멸퀬**: `docs_eval_lockbox_policy.md` 짠7? ?먮옒 "寃?좎삁??1/5/10/20%"蹂??뺤콉 鍮꾧탳瑜??붽뎄?섏?留? ?꾩옱 `_jrr_eval_core.py::calculate_review_yield()`???덉궛 ?쒗븳 ?놁씠 `HIGH_RISK_UNCERTAIN` ???꾩껜瑜???곸쑝濡?Yield瑜?怨꾩궛?⑸땲???⑥닔 docstring: "?꾩옱 ?덉궛 ?쒗븳 ?뺤콉 ?좊낫???곕씪, ?덉궛 ?쒖빟 ?놁씠 ???꾩껜瑜???곸쑝濡?怨꾩궛"). 利??덉궛 湲곕컲 鍮꾧탳 ?뺤콉? ?꾩쭅 援ы쁽?섏? ?딄퀬 **蹂대쪟(deferred)** ?곹깭?대ŉ, ??79.19%???덉궛 ?쒖빟???녿뒗 ?꾨웾 湲곗? ?섏튂?낅땲??
 
 ---
 
 ## 11. Risk Signal Analysis
 
-> **주의 — 아래 세부 수치는 이전 threshold(`tau_low=0.60`, `tau_difficulty=5.0`) 기준입니다.** `docs/risk_routing_simulation_test.md`(48만 건 Eval 세트 기준)에 남아 있는 신호별 세부 breakdown은 2차원 Grid Search로 `tau_low=0.65`/`tau_difficulty=6.0`이 확정되기 이전 시점의 Engineering Eval 기록입니다. `ood_score`/`disagreement`의 원시 판정 기준(`tau_ood=0.0`, `tau_disagree=0.3`)은 이번 threshold 재확정과 무관하게 그대로이므로 OOD/Disagreement 건수(아래)는 현재도 유효하지만, `difficulty`·그레이존·Signal Overlap·전체 큐 총량처럼 `tau_low`/`tau_difficulty`에 의존하는 수치는 새 threshold(`0.65`/`6.0`) 기준으로 아직 재산출되지 않았습니다 — 현재 공식 총량은 10장의 **55,114건(11.48%)**, Review Yield **79.19%**를 참고하십시오. 신호별 breakdown 재산출은 15장 TBD로 남겨둡니다.
+> **二쇱쓽 ???꾨옒 ?몃? ?섏튂???댁쟾 threshold(`tau_low=0.60`, `tau_difficulty=5.0`) 湲곗??낅땲??** `docs/risk_routing_simulation_test.md`(48留?嫄?Eval ?명듃 湲곗?)???⑥븘 ?덈뒗 ?좏샇蹂??몃? breakdown? 2李⑥썝 Grid Search濡?`tau_low=0.65`/`tau_difficulty=6.0`???뺤젙?섍린 ?댁쟾 ?쒖젏??Engineering Eval 湲곕줉?낅땲?? `ood_score`/`disagreement`???먯떆 ?먯젙 湲곗?(`tau_ood=0.0`, `tau_disagree=0.3`)? ?대쾲 threshold ?ы솗?뺢낵 臾닿??섍쾶 洹몃?濡쒖씠誘濡?OOD/Disagreement 嫄댁닔(?꾨옒)???꾩옱???좏슚?섏?留? `difficulty`쨌洹몃젅?댁〈쨌Signal Overlap쨌?꾩껜 ??珥앸웾泥섎읆 `tau_low`/`tau_difficulty`???섏〈?섎뒗 ?섏튂????threshold(`0.65`/`6.0`) 湲곗??쇰줈 ?꾩쭅 ?ъ궛異쒕릺吏 ?딆븯?듬땲?????꾩옱 怨듭떇 珥앸웾? 10?μ쓽 **55,114嫄?11.48%)**, Review Yield **79.19%**瑜?李멸퀬?섏떗?쒖삤. ?좏샇蹂?breakdown ?ъ궛異쒖? 15??TBD濡??④꺼?〓땲??
 
-- **OOD 유입**: `ood_score < 0.0`인 샘플 **3,384건**(전체의 0.71%)이 식별되었고, 이 중 100%가 `HIGH_RISK_UNCERTAIN`으로 라우팅되었습니다(OOD 방어 성공률 100%, 10장). 이 3,384건 중 "실제로는 정상 파일인데 모델이 0.98 이상으로 확신했던" 사례가 2건 있었고, 이 2건이 OOD 조건으로 격리되어 Kill Test FPR 0%에 기여했습니다. (`tau_ood` 불변이므로 현재도 유효)
-- **Disagreement 유입**: `disagreement >= 0.3`인 샘플 **약 11,728건**(전체의 2.44%)이 100% `HIGH_RISK_UNCERTAIN`으로 라우팅되었습니다. (`tau_disagree` 불변이므로 현재도 유효)
-- **Difficulty 유입 (이전 threshold `5.0` 기준 — 이력)**: 이전 threshold 조합(`tau_low=0.60`, `tau_difficulty=5.0`)에서, 9장 표의 `difficulty_score >= 5.0`(다른 3개 신호와 OR 결합된 전체 시스템 기준)일 때 최종 심층분석 큐가 77,784건(16.2%)이었습니다. 이와 별개로 `difficulty >= 5` **단독** 조건만으로는 정상 파일 9,068건(3.78%)·악성 파일 37,146건(15.48%)이 식별되었습니다(`risk_routing_simulation_test.md` §6.2, 4개 조건 결합 이전의 difficulty 단독 통계, 구버전). 현재 공식 threshold(`tau_difficulty=6.0`) 기준의 동등한 breakdown은 아직 산출되지 않았습니다 — 확인 필요.
-- **Probability Gray-zone 유입**: 문서는 "OOD·Disagreement·Difficulty가 없는 파일 중에서도 그레이존(현재 기준 `0.65~0.9836`)에 해당하면 100% 안전하게 심층분석으로 분기되었다"고 정성적으로만 서술하며, **정확한 건수는 원문에 명시되어 있지 않습니다 — 확인 필요.**
-- **Signal Overlap (이전 threshold `0.60`/`5.0` 기준 — 이력)**: 48만 건 전체 기준 (이전 threshold 조합으로 산출됨, 현재 threshold 기준 재산출 필요)
-  | 매칭된 조건 수 | 건수 | 비율 |
+- **OOD ?좎엯**: `ood_score < 0.0`???섑뵆 **3,384嫄?*(?꾩껜??0.71%)???앸퀎?섏뿀怨? ??以?100%媛 `HIGH_RISK_UNCERTAIN`?쇰줈 ?쇱슦?낅릺?덉뒿?덈떎(OOD 諛⑹뼱 ?깃났瑜?100%, 10??. ??3,384嫄?以?"?ㅼ젣濡쒕뒗 ?뺤긽 ?뚯씪?몃뜲 紐⑤뜽??0.98 ?댁긽?쇰줈 ?뺤떊?덈뜕" ?щ?媛 2嫄??덉뿀怨? ??2嫄댁씠 OOD 議곌굔?쇰줈 寃⑸━?섏뼱 Kill Test FPR 0%??湲곗뿬?덉뒿?덈떎. (`tau_ood` 遺덈??대?濡??꾩옱???좏슚)
+- **Disagreement ?좎엯**: `disagreement >= 0.3`???섑뵆 **??11,728嫄?*(?꾩껜??2.44%)??100% `HIGH_RISK_UNCERTAIN`?쇰줈 ?쇱슦?낅릺?덉뒿?덈떎. (`tau_disagree` 遺덈??대?濡??꾩옱???좏슚)
+- **Difficulty ?좎엯 (?댁쟾 threshold `5.0` 湲곗? ???대젰)**: ?댁쟾 threshold 議고빀(`tau_low=0.60`, `tau_difficulty=5.0`)?먯꽌, 9???쒖쓽 `difficulty_score >= 5.0`(?ㅻⅨ 3媛??좏샇? OR 寃고빀???꾩껜 ?쒖뒪??湲곗?)????理쒖쥌 ?ъ링遺꾩꽍 ?먭? 77,784嫄?16.2%)?댁뿀?듬땲?? ?댁? 蹂꾧컻濡?`difficulty >= 5` **?⑤룆** 議곌굔留뚯쑝濡쒕뒗 ?뺤긽 ?뚯씪 9,068嫄?3.78%)쨌?낆꽦 ?뚯씪 37,146嫄?15.48%)???앸퀎?섏뿀?듬땲??`risk_routing_simulation_test.md` 짠6.2, 4媛?議곌굔 寃고빀 ?댁쟾??difficulty ?⑤룆 ?듦퀎, 援щ쾭??. ?꾩옱 怨듭떇 threshold(`tau_difficulty=6.0`) 湲곗????숇벑??breakdown? ?꾩쭅 ?곗텧?섏? ?딆븯?듬땲?????뺤씤 ?꾩슂.
+- **Probability Gray-zone ?좎엯**: 臾몄꽌??"OOD쨌Disagreement쨌Difficulty媛 ?녿뒗 ?뚯씪 以묒뿉?쒕룄 洹몃젅?댁〈(?꾩옱 湲곗? `0.65~0.9836`)???대떦?섎㈃ 100% ?덉쟾?섍쾶 ?ъ링遺꾩꽍?쇰줈 遺꾧린?섏뿀??怨??뺤꽦?곸쑝濡쒕쭔 ?쒖닠?섎ŉ, **?뺥솗??嫄댁닔???먮Ц??紐낆떆?섏뼱 ?덉? ?딆뒿?덈떎 ???뺤씤 ?꾩슂.**
+- **Signal Overlap (?댁쟾 threshold `0.60`/`5.0` 湲곗? ???대젰)**: 48留?嫄??꾩껜 湲곗? (?댁쟾 threshold 議고빀?쇰줈 ?곗텧?? ?꾩옱 threshold 湲곗? ?ъ궛異??꾩슂)
+  | 留ㅼ묶??議곌굔 ??| 嫄댁닔 | 鍮꾩쑉 |
   |---|---:|---:|
-  | 0개(자동 정상/악성 직행) | 402,216 | 83.80% |
-  | 1개 | 69,924 | 14.57% |
-  | 2개 | 7,658 | 1.60% |
-  | 3개 | 202 | 0.04% |
-  | 4개 | 0 | 0.00% |
+  | 0媛??먮룞 ?뺤긽/?낆꽦 吏곹뻾) | 402,216 | 83.80% |
+  | 1媛?| 69,924 | 14.57% |
+  | 2媛?| 7,658 | 1.60% |
+  | 3媛?| 202 | 0.04% |
+  | 4媛?| 0 | 0.00% |
 
-  2개 이상 겹치는 샘플은 전체의 1.64%입니다.
+  2媛??댁긽 寃뱀튂???섑뵆? ?꾩껜??1.64%?낅땲??
 
-**해석상 주의(원문 스스로도 명시)**:
-- 신호 간 overlap이 낮다는 관측(1.64%)은 **"이 신호들이 통계적으로 독립"임을 증명하지 않습니다.** 표본과 신호 정의에 따라 우연히 낮게 관측될 수 있습니다.
-- "OOD로 표시된 샘플이 100% `HIGH_RISK_UNCERTAIN`으로 갔다"는 결과는 **OOD 탐지 정확도가 100%라는 의미가 아니라**, `ood_score < tau_ood`이면 무조건 `HIGH_RISK_UNCERTAIN`으로 보내도록 짜여진 **JRR 라우팅 규칙이 설계대로 정상 동작했다는 검증**일 뿐입니다. `docs/pipeline_architecture_v3.md` CRITICAL-02 원문: "OOD로 판별된 샘플이 HIGH_RISK로 라우팅되는 것은 라우팅 동작 검증이며, 그 자체가 OOD 탐지 정확도 100%를 의미하지 않는다."
+**?댁꽍??二쇱쓽(?먮Ц ?ㅼ뒪濡쒕룄 紐낆떆)**:
+- ?좏샇 媛?overlap????떎??愿痢?1.64%)? **"???좏샇?ㅼ씠 ?듦퀎?곸쑝濡??낅┰"?꾩쓣 利앸챸?섏? ?딆뒿?덈떎.** ?쒕낯怨??좏샇 ?뺤쓽???곕씪 ?곗뿰????쾶 愿痢〓맆 ???덉뒿?덈떎.
+- "OOD濡??쒖떆???섑뵆??100% `HIGH_RISK_UNCERTAIN`?쇰줈 媛붾떎"??寃곌낵??**OOD ?먯? ?뺥솗?꾧? 100%?쇰뒗 ?섎?媛 ?꾨땲??*, `ood_score < tau_ood`?대㈃ 臾댁“嫄?`HIGH_RISK_UNCERTAIN`?쇰줈 蹂대궡?꾨줉 吏쒖뿬吏?**JRR ?쇱슦??洹쒖튃???ㅺ퀎?濡??뺤긽 ?숈옉?덈떎??寃利?*??肉먯엯?덈떎. `docs/pipeline_architecture_v3.md` CRITICAL-02 ?먮Ц: "OOD濡??먮퀎???섑뵆??HIGH_RISK濡??쇱슦?낅릺??寃껋? ?쇱슦???숈옉 寃利앹씠硫? 洹??먯껜媛 OOD ?먯? ?뺥솗??100%瑜??섎??섏? ?딅뒗??"
 
 ---
 
 ## 12. Deep Analysis Integration
 
-JRR 이후 흐름은 `docs/pipeline_architecture_v3.md`(설계) + `docs/static-analysis/deep_analysis.md`(실제 `DeepAnalysisOrchestrator` 코드 계약, `src/trust_triage/deep_analysis/`) 기준입니다.
+JRR ?댄썑 ?먮쫫? `docs/pipeline_architecture_v3.md`(?ㅺ퀎) + `docs/static-analysis/deep_analysis.md`(?ㅼ젣 `DeepAnalysisOrchestrator` 肄붾뱶 怨꾩빟, `src/trust_triage/deep_analysis/`) 湲곗??낅땲??
 
 ```
 HIGH_RISK_UNCERTAIN
-  → Tier 1: CAPA + FLOSS (정적 분석, 같은 단계에서 함께 실행)
-      ├─ ATT&CK 근거 충분(EvidenceSufficiencyPolicy 점수 ≥ 0.55) → LLM 해석 → COMPLETE
-      └─ 근거 부족/상충 또는 CAPA 실패
-  → Tier 2: Speakeasy (비동기 Task Queue + Worker)
-      ├─ 근거 충분 → LLM 해석 → COMPLETE
-      └─ 근거 부족 또는 실패
-  → (선택, 기본 비활성화) Ghidra backend CAPA — `enable_ghidra_capa=True`일 때만 1회 실행
-      ├─ 활성화 후 정상 종료 → LLM 해석 → COMPLETE
-      ├─ 비활성화 상태 → UNKNOWN + MANUAL_REVIEW
-      └─ 활성화 후 오류 → FAILED
-  → MonoGPT(Claude) 기반 LLM 해석(`MonoGPTClaudeInterpreter`, 환경변수로 활성화) — 정규화된 Evidence만 전달, Raw PE/원본 리포트는 전송하지 않음
-  → Final Assessment (BENIGN / MALICIOUS / UNCERTAIN)
-       └─ UNCERTAIN → Analyst Review → 필요 시 Ghidra 수동 분석
+  ??Tier 1: CAPA + FLOSS (?뺤쟻 遺꾩꽍, 媛숈? ?④퀎?먯꽌 ?④퍡 ?ㅽ뻾)
+      ?쒋? ATT&CK 洹쇨굅 異⑸텇(EvidenceSufficiencyPolicy ?먯닔 ??0.55) ??LLM ?댁꽍 ??COMPLETE
+      ?붴? 洹쇨굅 遺議??곸땐 ?먮뒗 CAPA ?ㅽ뙣
+  ??Tier 2: Speakeasy (鍮꾨룞湲?Task Queue + Worker)
+      ?쒋? 洹쇨굅 異⑸텇 ??LLM ?댁꽍 ??COMPLETE
+      ?붴? 洹쇨굅 遺議??먮뒗 ?ㅽ뙣
+  ??(?좏깮, 湲곕낯 鍮꾪솢?깊솕) Ghidra backend CAPA ??`enable_ghidra_capa=True`???뚮쭔 1???ㅽ뻾
+      ?쒋? ?쒖꽦?????뺤긽 醫낅즺 ??LLM ?댁꽍 ??COMPLETE
+      ?쒋? 鍮꾪솢?깊솕 ?곹깭 ??UNKNOWN + MANUAL_REVIEW
+      ?붴? ?쒖꽦?????ㅻ쪟 ??FAILED
+  ??MonoGPT(Claude) 湲곕컲 LLM ?댁꽍(`MonoGPTClaudeInterpreter`, ?섍꼍蹂?섎줈 ?쒖꽦?? ???뺢퇋?붾맂 Evidence留??꾨떖, Raw PE/?먮낯 由ы룷?몃뒗 ?꾩넚?섏? ?딆쓬
+  ??Final Assessment (BENIGN / MALICIOUS / UNCERTAIN)
+       ?붴? UNCERTAIN ??Analyst Review ???꾩슂 ??Ghidra ?섎룞 遺꾩꽍
 
 AUTO_BENIGN / AUTO_MALICIOUS
-  → route = FINAL (자동화 종료, 심층분석 미수행)
+  ??route = FINAL (?먮룞??醫낅즺, ?ъ링遺꾩꽍 誘몄닔??
 ```
 
-- **Tier 3 명칭 주의**: 실제 코드 계약(`docs/static-analysis/deep_analysis.md`, `DeepAnalysisOrchestrator`)은 3번째 Tier를 **"Ghidra backend CAPA"(기본값 비활성화)**로 구현합니다. 반면 상위 설계 문서 `docs/pipeline_architecture_v3.md`의 다이어그램은 이 확장 지점을 **"CAPE / External Behavioral Report"**로 표기합니다. 두 문서가 가리키는 "선택적 3차 확장 Tier"라는 개념은 같지만 **실제로 구현된 코드는 Ghidra CAPA**이므로, "현재 코드와 문서가 충돌하면 코드를 기준으로 삼는다"는 원칙에 따라 이 문서는 Ghidra CAPA를 실제 Tier 3로 기술합니다.
-- **EvidenceSufficiencyPolicy**(`deep_analysis.md`)의 0.55 임계값은 Tier 진입 여부만 결정하는 **심층분석 내부 점수**이며, JRR의 `calibrated_probability`/`risk_score`와는 다른 별개의 지표입니다 — 혼동 금지.
-- JRR은 심층분석 로직 자체(CAPA/FLOSS/Speakeasy/Ghidra 실행, ATT&CK 매핑, LLM 해석)를 수행하지 않고, **"어떤 샘플에 추가 분석 자원을 쓸지"만 결정하는 라우터**입니다.
+- **Tier 3 紐낆묶 二쇱쓽**: ?ㅼ젣 肄붾뱶 怨꾩빟(`docs/static-analysis/deep_analysis.md`, `DeepAnalysisOrchestrator`)? 3踰덉㎏ Tier瑜?**"Ghidra backend CAPA"(湲곕낯媛?鍮꾪솢?깊솕)**濡?援ы쁽?⑸땲?? 諛섎㈃ ?곸쐞 ?ㅺ퀎 臾몄꽌 `docs/pipeline_architecture_v3.md`???ㅼ씠?닿렇?⑥? ???뺤옣 吏?먯쓣 **"CAPE / External Behavioral Report"**濡??쒓린?⑸땲?? ??臾몄꽌媛 媛由ы궎??"?좏깮??3李??뺤옣 Tier"?쇰뒗 媛쒕뀗? 媛숈?留?**?ㅼ젣濡?援ы쁽??肄붾뱶??Ghidra CAPA**?대?濡? "?꾩옱 肄붾뱶? 臾몄꽌媛 異⑸룎?섎㈃ 肄붾뱶瑜?湲곗??쇰줈 ?쇰뒗?????먯튃???곕씪 ??臾몄꽌??Ghidra CAPA瑜??ㅼ젣 Tier 3濡?湲곗닠?⑸땲??
+- **EvidenceSufficiencyPolicy**(`deep_analysis.md`)??0.55 ?꾧퀎媛믪? Tier 吏꾩엯 ?щ?留?寃곗젙?섎뒗 **?ъ링遺꾩꽍 ?대? ?먯닔**?대ŉ, JRR??`calibrated_probability`/`risk_score`????ㅻⅨ 蹂꾧컻??吏?쒖엯?덈떎 ???쇰룞 湲덉?.
+- JRR? ?ъ링遺꾩꽍 濡쒖쭅 ?먯껜(CAPA/FLOSS/Speakeasy/Ghidra ?ㅽ뻾, ATT&CK 留ㅽ븨, LLM ?댁꽍)瑜??섑뻾?섏? ?딄퀬, **"?대뼡 ?섑뵆??異붽? 遺꾩꽍 ?먯썝???몄?"留?寃곗젙?섎뒗 ?쇱슦??*?낅땲??
 
 ---
 
 ## 13. XAI Relationship
 
-- **SHAP은 LightGBM raw model output(원시 점수)의 설명입니다.** `shap.TreeExplainer(model, model_output="raw")`로 raw score를 설명하며, `docs/shap-explanation-module.md`: **"calibration 이후의 `calibrated_probability`는 설명하지 않는다"**고 명시. `docs/interface_spec.md` §5 CRITICAL도 동일하게 재확인합니다.
-- **SHAP 대상 모델, 현재 4-way 공식 모델과 정렬 완료(해결됨)**: SHAP 모듈의 공식 대상은 이제 8장의 현재 4-way JRR 파이프라인이 쓰는 `baseline_model_lightgbm_tuned_500_4way.pkl`과 **동일한 아티팩트**입니다(`src/trust_triage/explanation/shap_lightgbm.py:9`, `docs/shap-explanation-module.md` §2). 이전 버전에서 공식 대상이었던 구버전 `baseline_model_lightgbm_tuned_500_v4_9120.pkl`은 더 이상 SHAP 설명 대상이 아닙니다.
-- **Top-500 feature contract/order 검증 완료**: `LightGBMShapExplainer` 초기화 시 selection manifest(`docs/feature-extraction/feature-selection-ember-v3-top500.json`)와 `data/top_feature_indices_500.npy`의 feature 수·순서·SHA-256·schema version을 모두 대조하며, 하나라도 어긋나면 `FeatureOrderingError`로 fail-fast합니다(`shap-explanation-module.md` §5). 관련 계약 테스트(`test_documented_ember_schema_matches_runtime_schema`, `test_top500_selection_manifest_matches_runtime_schema`) 2건이 모두 통과합니다.
-- **출력 필드명 정렬 완료**: `explain()`의 공개 출력(`to_dict()`)은 `docs/interface_spec.md` §5와 동일하게 `feature_name`/`feature_value`/`shap_value`/`direction`을 반환합니다(`group`/`model_input_index`/`source_index`는 내부 추적용 추가 필드). 기존 Python 속성 `name`/`contribution`은 내부 호환성 목적으로만 유지되며, 대외 공개 스키마는 `interface_spec.md`와 일치합니다.
-- **검증 상태**: `pytest tests/test_shap_lightgbm.py` 28건 통과. 합성 500차원 입력 3건에 대해 실제 TreeExplainer로 `base_value + sum(contributions) == LightGBM raw score` raw-score additivity를 재검증했고, 실제 PE 파일 1건을 `Feature Extraction → Top-500 선택 → 공식 4-way LightGBM → SHAP` 전 구간으로 수동 E2E 실행해 성공을 확인했습니다(자동화된 PE E2E 회귀 테스트는 아직 없음, 15장 참고).
-- **역할 구분**:
-  - `SHAP` = **Model Evidence** — ML 모델이 왜 그런 raw score를 냈는지에 대한 기여도 설명(Top-500 중 Top-5).
-  - `CAPA / FLOSS / Speakeasy / MITRE ATT&CK Evidence` = **Behavioral Evidence** — 심층분석 도구가 실제로 관찰한 행위 기반 근거.
-  - 둘은 서로 다른 목적으로 별도 필드(`top_features` vs `evidence`)에 저장·표시하며, `calibrated_probability`나 `initial_verdict`를 SHAP이 설명한다고 서술하면 안 됩니다.
+- **SHAP? LightGBM raw model output(?먯떆 ?먯닔)???ㅻ챸?낅땲??** `shap.TreeExplainer(model, model_output="raw")`濡?raw score瑜??ㅻ챸?섎ŉ, `docs/shap-explanation-module.md`: **"calibration ?댄썑??`calibrated_probability`???ㅻ챸?섏? ?딅뒗??**怨?紐낆떆. `docs/interface_spec.md` 짠5 CRITICAL???숈씪?섍쾶 ?ы솗?명빀?덈떎.
+- **SHAP ???紐⑤뜽, ?꾩옱 4-way 怨듭떇 紐⑤뜽怨??뺣젹 ?꾨즺(?닿껐??**: SHAP 紐⑤뱢??怨듭떇 ??곸? ?댁젣 8?μ쓽 ?꾩옱 4-way JRR ?뚯씠?꾨씪?몄씠 ?곕뒗 `baseline_model_lightgbm_tuned_500_4way.pkl`怨?**?숈씪???꾪떚?⑺듃**?낅땲??`src/trust_triage/explanation/shap_lightgbm.py:9`, `docs/shap-explanation-module.md` 짠2). ?댁쟾 踰꾩쟾?먯꽌 怨듭떇 ??곸씠?덈뜕 援щ쾭??`baseline_model_lightgbm_tuned_500_v4_9120.pkl`? ???댁긽 SHAP ?ㅻ챸 ??곸씠 ?꾨떃?덈떎.
+- **Top-500 feature contract/order 寃利??꾨즺**: `LightGBMShapExplainer` 珥덇린????selection manifest(`docs/feature-extraction/feature-selection-ember-v3-top500.json`)? `data/top_feature_indices_500.npy`??feature ?샕룹닚?쑣톁HA-256쨌schema version??紐⑤몢 ?議고븯硫? ?섎굹?쇰룄 ?닿툔?섎㈃ `FeatureOrderingError`濡?fail-fast?⑸땲??`shap-explanation-module.md` 짠5). 愿??怨꾩빟 ?뚯뒪??`test_documented_ember_schema_matches_runtime_schema`, `test_top500_selection_manifest_matches_runtime_schema`) 2嫄댁씠 紐⑤몢 ?듦낵?⑸땲??
+- **異쒕젰 ?꾨뱶紐??뺣젹 ?꾨즺**: `explain()`??怨듦컻 異쒕젰(`to_dict()`)? `docs/interface_spec.md` 짠5? ?숈씪?섍쾶 `feature_name`/`feature_value`/`shap_value`/`direction`??諛섑솚?⑸땲??`group`/`model_input_index`/`source_index`???대? 異붿쟻??異붽? ?꾨뱶). 湲곗〈 Python ?띿꽦 `name`/`contribution`? ?대? ?명솚??紐⑹쟻?쇰줈留??좎??섎ŉ, ???怨듦컻 ?ㅽ궎留덈뒗 `interface_spec.md`? ?쇱튂?⑸땲??
+- **寃利??곹깭**: `pytest tests/test_shap_lightgbm.py` 28嫄??듦낵. ?⑹꽦 500李⑥썝 ?낅젰 3嫄댁뿉 ????ㅼ젣 TreeExplainer濡?`base_value + sum(contributions) == LightGBM raw score` raw-score additivity瑜??ш?利앺뻽怨? ?ㅼ젣 PE ?뚯씪 1嫄댁쓣 `Feature Extraction ??Top-500 ?좏깮 ??怨듭떇 4-way LightGBM ??SHAP` ??援ш컙?쇰줈 ?섎룞 E2E ?ㅽ뻾???깃났???뺤씤?덉뒿?덈떎(?먮룞?붾맂 PE E2E ?뚭? ?뚯뒪?몃뒗 ?꾩쭅 ?놁쓬, 15??李멸퀬).
+- **??븷 援щ텇**:
+  - `SHAP` = **Model Evidence** ??ML 紐⑤뜽????洹몃윴 raw score瑜??덈뒗吏?????湲곗뿬???ㅻ챸(Top-500 以?Top-5).
+  - `CAPA / FLOSS / Speakeasy / MITRE ATT&CK Evidence` = **Behavioral Evidence** ???ъ링遺꾩꽍 ?꾧뎄媛 ?ㅼ젣濡?愿李고븳 ?됱쐞 湲곕컲 洹쇨굅.
+  - ?섏? ?쒕줈 ?ㅻⅨ 紐⑹쟻?쇰줈 蹂꾨룄 ?꾨뱶(`top_features` vs `evidence`)????Β룻몴?쒗븯硫? `calibrated_probability`??`initial_verdict`瑜?SHAP???ㅻ챸?쒕떎怨??쒖닠?섎㈃ ???⑸땲??
 
 ---
 
 ## 14. Service Integration
 
-`docs/interface_spec.md`, `docs/service_architecture.md`(둘 다 2026-09-07, 상태: Draft) 기준 설계입니다. **FastAPI 백엔드는 이 세션 시점 리포지토리(`src/` 하위)에 구현되어 있지 않습니다** — `src/` 아래에는 `jrr`, `models`, `preprocessing`, `trust_triage`(feature_extraction/explanation/static_analysis/dynamic_analysis/deep_analysis)만 있고 API/서비스 계층 코드는 없습니다.
+`docs/interface_spec.md`, `docs/service_architecture.md`(????2026-09-07, ?곹깭: Draft) 湲곗? ?ㅺ퀎?낅땲?? **FastAPI 諛깆뿏?쒕뒗 ???몄뀡 ?쒖젏 由ы룷吏?좊━(`src/` ?섏쐞)??援ы쁽?섏뼱 ?덉? ?딆뒿?덈떎** ??`src/` ?꾨옒?먮뒗 `jrr`, `models`, `preprocessing`, `trust_triage`(feature_extraction/explanation/static_analysis/dynamic_analysis/deep_analysis)留??덇퀬 API/?쒕퉬??怨꾩링 肄붾뱶???놁뒿?덈떎.
 
-설계상 의도된 흐름:
+?ㅺ퀎???섎룄???먮쫫:
 
 ```
-AUTO_BENIGN      → route = FINAL
-AUTO_MALICIOUS   → route = FINAL
-HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Task Queue → Speakeasy Worker → LLM Analyst Assist → Final Assessment
+AUTO_BENIGN      ??route = FINAL
+AUTO_MALICIOUS   ??route = FINAL
+HIGH_RISK_UNCERTAIN ??route = DEEP_ANALYSIS ??CAPA+FLOSS ??(?꾩슂 ?? Task Queue ??Speakeasy Worker ??LLM Analyst Assist ??Final Assessment
 ```
 
-- `docs/interface_spec.md`는 상태 조회(`current_stage`), Batch(`batch_id`+개별 `analysis_id`), Task Queue 메시지(SQS 후보) 등을 정의하지만 다수가 **TBD**입니다(§22): Task Queue 최종 확정, PostgreSQL 배포 방식, Batch 파일 수/크기 제한, `final_verdict` Enum, Final Assessment 자동 판정 로직 등.
-- **`dashboard/app.py`(현재 `main`)는 위 인터페이스 계약과 다른 필드명을 쓰는 단순 단일 목업**입니다(`build_mock_result()`): `route: "Deep Analysis"`(문자열 표기가 `"DEEP_ANALYSIS"`가 아님), `initial_verdict: "High-Risk Uncertain"`(`"HIGH_RISK_UNCERTAIN"`이 아님), `ood: True`(불리언, `ood_score`가 아님), `risk_score: 82`(현재 JRR 공식 출력에 없는 필드, 15장 참고). 즉 현재 대시보드는 `interface_spec.md`의 CRITICAL 규칙이 확정되기 이전에 작성된 것으로 보이는 **자체 목업 스키마**를 쓰고 있어, 실제 JRR 출력이나 `interface_spec.md`와 아직 정렬되어 있지 않습니다.
-- (참고) 다중 파일/ZIP 배치 업로드 UI가 담긴 `dashboard/app.py` 버전은 이번 조사에서 확인한 `main`에는 없었습니다. 그런 코드가 존재한다면 이는 아직 `main`에 병합되지 않은 별도 feature 브랜치의 구현이며, 이 문서에는 포함하지 않았습니다(사용자 지시: unmerged 브랜치 구현을 현재 공식 설계로 섞지 말 것).
+- `docs/interface_spec.md`???곹깭 議고쉶(`current_stage`), Batch(`batch_id`+媛쒕퀎 `analysis_id`), Task Queue 硫붿떆吏(SQS ?꾨낫) ?깆쓣 ?뺤쓽?섏?留??ㅼ닔媛 **TBD**?낅땲??짠22): Task Queue 理쒖쥌 ?뺤젙, PostgreSQL 諛고룷 諛⑹떇, Batch ?뚯씪 ???ш린 ?쒗븳, `final_verdict` Enum, Final Assessment ?먮룞 ?먯젙 濡쒖쭅 ??
+- **`dashboard/app.py`(?꾩옱 `main`)?????명꽣?섏씠??怨꾩빟怨??ㅻⅨ ?꾨뱶紐낆쓣 ?곕뒗 ?⑥닚 ?⑥씪 紐⑹뾽**?낅땲??`build_mock_result()`): `route: "Deep Analysis"`(臾몄옄???쒓린媛 `"DEEP_ANALYSIS"`媛 ?꾨떂), `initial_verdict: "High-Risk Uncertain"`(`"HIGH_RISK_UNCERTAIN"`???꾨떂), `ood: True`(遺덈━?? `ood_score`媛 ?꾨떂), `risk_score: 82`(?꾩옱 JRR 怨듭떇 異쒕젰???녿뒗 ?꾨뱶, 15??李멸퀬). 利??꾩옱 ??쒕낫?쒕뒗 `interface_spec.md`??CRITICAL 洹쒖튃???뺤젙?섍린 ?댁쟾???묒꽦??寃껋쑝濡?蹂댁씠??**?먯껜 紐⑹뾽 ?ㅽ궎留?*瑜??곌퀬 ?덉뼱, ?ㅼ젣 JRR 異쒕젰?대굹 `interface_spec.md`? ?꾩쭅 ?뺣젹?섏뼱 ?덉? ?딆뒿?덈떎.
+- (李멸퀬) ?ㅼ쨷 ?뚯씪/ZIP 諛곗튂 ?낅줈??UI媛 ?닿릿 `dashboard/app.py` 踰꾩쟾? ?대쾲 議곗궗?먯꽌 ?뺤씤??`main`?먮뒗 ?놁뿀?듬땲?? 洹몃윴 肄붾뱶媛 議댁옱?쒕떎硫??대뒗 ?꾩쭅 `main`??蹂묓빀?섏? ?딆? 蹂꾨룄 feature 釉뚮옖移섏쓽 援ы쁽?대ŉ, ??臾몄꽌?먮뒗 ?ы븿?섏? ?딆븯?듬땲???ъ슜??吏?? unmerged 釉뚮옖移?援ы쁽???꾩옱 怨듭떇 ?ㅺ퀎濡??욎? 留?寃?.
 
 ---
 
 ## 15. Known Limitations
 
-- **`tau_disagree`/`tau_ood`의 정량적 선정 근거 부재**: `tau_low`/`tau_difficulty`는 Calibration 데이터 그리드 탐색 기록이 문서화되어 있지만, `tau_disagree=0.3`과 `tau_ood=0.0`은 정성적 근거(상관관계 서술, 라이브러리 컨벤션)만 있고 그리드 탐색 로그는 확인되지 않습니다(9장).
-- **Kill Test/OOD 검증이 내부 시뮬레이션 방식**: 별도의 외부 미지 OOD 데이터셋을 주입하는 대신, Eval 세트 자체에서 `ood_score < 0`인 샘플을 "가상의 OOD 테스트셋"으로 재활용합니다(`risk_routing_simulation_test.md` §2 "새로운 외부 데이터셋을 수집하는 대신"). 이는 팀이 의도적으로 선택한 방법론이지만, 완전히 독립적인 held-out OOD 벤치마크는 아닙니다.
-- **Review Yield 예산 정책 보류**: `docs_eval_lockbox_policy.md` §7이 요구하는 "검토예산 1/5/10/20%별 비교"는 현재 구현되지 않았고, `calculate_review_yield()`는 예산 제약 없이 큐 전체를 기준으로 계산합니다(10장).
-- **Deep Analysis Tier 3 명칭 불일치**: 코드 계약(`deep_analysis.md`: Ghidra CAPA, 기본 비활성화)과 상위 설계 문서(`pipeline_architecture_v3.md`: CAPE)가 다른 이름을 사용합니다(12장).
-- **SHAP — Backend inference와 모델 인스턴스 공유 wiring 미구현**: SHAP 대상 모델은 현재 4-way 공식 LightGBM(`baseline_model_lightgbm_tuned_500_4way.pkl`)과 정렬됐지만(13장), FastAPI/Streamlit 등 서비스 계층이 아직 없어 inference가 로드한 것과 **동일한 `LGBMClassifier` 인스턴스를 SHAP explainer에 전달하는 배선**은 구현되어 있지 않습니다(`shap-explanation-module.md` §8).
-- **SHAP — `models/`/`data/` artifact 경로 미통일**: 공식 artifact 위치는 `models/baseline_model_lightgbm_tuned_500_4way.pkl`이지만 현재 JRR inference 스크립트는 같은 파일명을 `data/` 아래에서 별도로 staging해 로드합니다(`shap-explanation-module.md` §2). 서비스 통합 전 두 경로를 하나로 통일해야 합니다.
-- **SHAP — `top_feature_indices_500.npy` 배포 경로 미정**: 모델 artifact 자체에는 feature metadata가 없어, 배포 시 모델과 `data/top_feature_indices_500.npy`, selection manifest를 하나의 검증 가능한 bundle로 함께 배치하는 방식이 아직 정해지지 않았습니다(`shap-explanation-module.md` §8). 자동화된 PE E2E 회귀 테스트 추가도 마찬가지로 남은 작업입니다.
-- **레거시 데모(`tests/demo/01/demo.py`)가 현재 라우터 시그니처와 불일치해 실행 시 오류 발생**(6장) — 사용 예시로 삼지 말 것.
-- **서비스 계층(FastAPI/PostgreSQL/Task Queue/대시보드 연동) 대부분 미구현/TBD**: JRR 자체는 구현·평가가 끝났지만, 이를 감싸는 API/DB/큐/프론트엔드 통합은 아직 설계 초안(Draft) 단계입니다(14장).
-- **`risk_score`는 현재 공식 JRR 설계/코드에 존재하지 않습니다.** `docs/pipeline_architecture_v3.md` CRITICAL-03: "risk_score는 필수 런타임 출력으로 간주하지 않는다." `dashboard/app.py`의 목업 데이터에만 레거시로 남아 있습니다(14장). Weighted Risk Score 방식 자체도 현재 공식 설계에 없습니다(4장).
-- **Final Eval 미실행**: `tau_low=0.65`/`tau_difficulty=6.0`이 Calibration 세트 2차원 Grid Search로 freeze된 이후의 공식 Final Eval이 아직 별도로 실행·보고되지 않았습니다. 10, 11장에 인용된 수치는 개발 중 반복 확인해 온 Engineering Eval 기록입니다(7장 참고).
-- **§11 Risk Signal Analysis의 신호별 breakdown이 현재 threshold(`0.65`/`6.0`) 기준으로 재산출되지 않음**: Difficulty 단독/결합 건수, Probability Gray-zone 건수, Signal Overlap 표는 모두 이전 threshold(`tau_low=0.60`, `tau_difficulty=5.0`) 기준 수치입니다. 현재 공식 총량(HIGH_RISK_UNCERTAIN 55,114건/11.48%, 10장)은 확인되었으나, 신호별 세부 breakdown 재산출은 아직 없습니다(11장 참고).
-- **AUTO_BENIGN/AUTO_MALICIOUS 개별 건수(현재 threshold 기준) 미제공**: 10장의 최신 Eval 결과는 HIGH_RISK_UNCERTAIN 총량(55,114건/11.48%)만 확인되었고, 나머지 424,886건이 AUTO_BENIGN/AUTO_MALICIOUS로 어떻게 나뉘는지는 아직 문서화되지 않았습니다 — 확인 필요.
+- **`tau_disagree`/`tau_ood`???뺣웾???좎젙 洹쇨굅 遺??*: `tau_low`/`tau_difficulty`??Calibration ?곗씠??洹몃━???먯깋 湲곕줉??臾몄꽌?붾릺???덉?留? `tau_disagree=0.3`怨?`tau_ood=0.0`? ?뺤꽦??洹쇨굅(?곴?愿怨??쒖닠, ?쇱씠釉뚮윭由?而⑤깽??留??덇퀬 洹몃━???먯깋 濡쒓렇???뺤씤?섏? ?딆뒿?덈떎(9??.
+- **Kill Test/OOD 寃利앹씠 ?대? ?쒕??덉씠??諛⑹떇**: 蹂꾨룄???몃? 誘몄? OOD ?곗씠?곗뀑??二쇱엯?섎뒗 ??? Eval ?명듃 ?먯껜?먯꽌 `ood_score < 0`???섑뵆??"媛?곸쓽 OOD ?뚯뒪?몄뀑"?쇰줈 ?ы솢?⑺빀?덈떎(`risk_routing_simulation_test.md` 짠2 "?덈줈???몃? ?곗씠?곗뀑???섏쭛?섎뒗 ???). ?대뒗 ????섎룄?곸쑝濡??좏깮??諛⑸쾿濡좎씠吏留? ?꾩쟾???낅┰?곸씤 held-out OOD 踰ㅼ튂留덊겕???꾨떃?덈떎.
+- **Review Yield ?덉궛 ?뺤콉 蹂대쪟**: `docs_eval_lockbox_policy.md` 짠7???붽뎄?섎뒗 "寃?좎삁??1/5/10/20%蹂?鍮꾧탳"???꾩옱 援ы쁽?섏? ?딆븯怨? `calculate_review_yield()`???덉궛 ?쒖빟 ?놁씠 ???꾩껜瑜?湲곗??쇰줈 怨꾩궛?⑸땲??10??.
+- **Deep Analysis Tier 3 紐낆묶 遺덉씪移?*: 肄붾뱶 怨꾩빟(`deep_analysis.md`: Ghidra CAPA, 湲곕낯 鍮꾪솢?깊솕)怨??곸쐞 ?ㅺ퀎 臾몄꽌(`pipeline_architecture_v3.md`: CAPE)媛 ?ㅻⅨ ?대쫫???ъ슜?⑸땲??12??.
+- **SHAP ??Backend inference? 紐⑤뜽 ?몄뒪?댁뒪 怨듭쑀 wiring 誘멸뎄??*: SHAP ???紐⑤뜽? ?꾩옱 4-way 怨듭떇 LightGBM(`baseline_model_lightgbm_tuned_500_4way.pkl`)怨??뺣젹?먯?留?13??, FastAPI/Streamlit ???쒕퉬??怨꾩링???꾩쭅 ?놁뼱 inference媛 濡쒕뱶??寃껉낵 **?숈씪??`LGBMClassifier` ?몄뒪?댁뒪瑜?SHAP explainer???꾨떖?섎뒗 諛곗꽑**? 援ы쁽?섏뼱 ?덉? ?딆뒿?덈떎(`shap-explanation-module.md` 짠8).
+- **SHAP ??`models/`/`data/` artifact 寃쎈줈 誘명넻??*: 怨듭떇 artifact ?꾩튂??`models/baseline_model_lightgbm_tuned_500_4way.pkl`?댁?留??꾩옱 JRR inference ?ㅽ겕由쏀듃??媛숈? ?뚯씪紐낆쓣 `data/` ?꾨옒?먯꽌 蹂꾨룄濡?staging??濡쒕뱶?⑸땲??`shap-explanation-module.md` 짠2). ?쒕퉬???듯빀 ????寃쎈줈瑜??섎굹濡??듭씪?댁빞 ?⑸땲??
+- **SHAP ??`top_feature_indices_500.npy` 諛고룷 寃쎈줈 誘몄젙**: 紐⑤뜽 artifact ?먯껜?먮뒗 feature metadata媛 ?놁뼱, 諛고룷 ??紐⑤뜽怨?`data/top_feature_indices_500.npy`, selection manifest瑜??섎굹??寃利?媛?ν븳 bundle濡??④퍡 諛곗튂?섎뒗 諛⑹떇???꾩쭅 ?뺥빐吏吏 ?딆븯?듬땲??`shap-explanation-module.md` 짠8). ?먮룞?붾맂 PE E2E ?뚭? ?뚯뒪??異붽???留덉갔媛吏濡??⑥? ?묒뾽?낅땲??
+- **?덇굅???곕え(`tests/demo/01/demo.py`)媛 ?꾩옱 ?쇱슦???쒓렇?덉쿂? 遺덉씪移섑빐 ?ㅽ뻾 ???ㅻ쪟 諛쒖깮**(6?? ???ъ슜 ?덉떆濡??쇱? 留?寃?
+- **?쒕퉬??怨꾩링(FastAPI/PostgreSQL/Task Queue/??쒕낫???곕룞) ?遺遺?誘멸뎄??TBD**: JRR ?먯껜??援ы쁽쨌?됯?媛 ?앸궗吏留? ?대? 媛먯떥??API/DB/???꾨줎?몄뿏???듯빀? ?꾩쭅 ?ㅺ퀎 珥덉븞(Draft) ?④퀎?낅땲??14??.
+- **`risk_score`???꾩옱 怨듭떇 JRR ?ㅺ퀎/肄붾뱶??議댁옱?섏? ?딆뒿?덈떎.** `docs/pipeline_architecture_v3.md` CRITICAL-03: "risk_score???꾩닔 ?고???異쒕젰?쇰줈 媛꾩＜?섏? ?딅뒗??" `dashboard/app.py`??紐⑹뾽 ?곗씠?곗뿉留??덇굅?쒕줈 ?⑥븘 ?덉뒿?덈떎(14??. Weighted Risk Score 諛⑹떇 ?먯껜???꾩옱 怨듭떇 ?ㅺ퀎???놁뒿?덈떎(4??.
+- **Final Eval 誘몄떎??*: `tau_low=0.65`/`tau_difficulty=6.0`??Calibration ?명듃 2李⑥썝 Grid Search濡?freeze???댄썑??怨듭떇 Final Eval???꾩쭅 蹂꾨룄濡??ㅽ뻾쨌蹂닿퀬?섏? ?딆븯?듬땲?? 10, 11?μ뿉 ?몄슜???섏튂??媛쒕컻 以?諛섎났 ?뺤씤????Engineering Eval 湲곕줉?낅땲??7??李멸퀬).
+- **짠11 Risk Signal Analysis???좏샇蹂?breakdown???꾩옱 threshold(`0.65`/`6.0`) 湲곗??쇰줈 ?ъ궛異쒕릺吏 ?딆쓬**: Difficulty ?⑤룆/寃고빀 嫄댁닔, Probability Gray-zone 嫄댁닔, Signal Overlap ?쒕뒗 紐⑤몢 ?댁쟾 threshold(`tau_low=0.60`, `tau_difficulty=5.0`) 湲곗? ?섏튂?낅땲?? ?꾩옱 怨듭떇 珥앸웾(HIGH_RISK_UNCERTAIN 55,114嫄?11.48%, 10??? ?뺤씤?섏뿀?쇰굹, ?좏샇蹂??몃? breakdown ?ъ궛異쒖? ?꾩쭅 ?놁뒿?덈떎(11??李멸퀬).
+- **AUTO_BENIGN/AUTO_MALICIOUS 媛쒕퀎 嫄댁닔(?꾩옱 threshold 湲곗?) 誘몄젣怨?*: 10?μ쓽 理쒖떊 Eval 寃곌낵??HIGH_RISK_UNCERTAIN 珥앸웾(55,114嫄?11.48%)留??뺤씤?섏뿀怨? ?섎㉧吏 424,886嫄댁씠 AUTO_BENIGN/AUTO_MALICIOUS濡??대뼸寃??섎돇?붿????꾩쭅 臾몄꽌?붾릺吏 ?딆븯?듬땲?????뺤씤 ?꾩슂.
 
-**해결된 항목(이전 버전에서 제거)**:
-- ~~대표 reason 하나만 반환~~ — `triggered_signals` 필드 도입(커밋 `49bc244`)으로 해결. 동시에 발현된 모든 위험 신호는 `triggered_signals`에, 대표 사유는 `reason`에 함께 반환됩니다(4, 6장).
-- ~~`optimize_threshold.py`가 채택된 `tau_low=0.60`을 재현하지 못함~~ — 탐색 범위가 `0.50~0.98` 전체로 개편되어 `0.60`을 실제로 재현합니다(9장, 이후 2차원 Grid Search로 추가 대체됨).
-- ~~`tau_difficulty` 선정에 Eval 세트가 관여했을 가능성~~ — Calibration 세트 전체 재탐색으로 `5.0`이 다시 확정되어 해소되었습니다(9장, 이후 2차원 Grid Search로 `6.0`으로 추가 대체됨).
-- ~~`tau_low`/`tau_difficulty`를 한쪽씩 고정해 순차 최적화하는 순환 논리(Circular Reasoning)~~ — 두 변수를 동시에 탐색하는 2차원 Grid Search(`optimize_grid_search()`, 커밋 `06c8ffc`/`f4ce7a1`)로 대체되어 해결. 현재 공식 값은 `tau_low=0.65`, `tau_difficulty=6.0`입니다(9장).
-- ~~SHAP 대상 모델이 구버전(`_v4_9120`)이며 현재 4-way 파이프라인과 분리되어 있음~~ — SHAP 공식 대상이 `baseline_model_lightgbm_tuned_500_4way.pkl`로 전환되어 해결(13장).
-- ~~SHAP 출력 필드명이 `interface_spec.md`와 불일치~~ — 공개 `to_dict()` 스키마가 `feature_name`/`feature_value`/`shap_value`/`direction`으로 정렬되어 해결(13장).
+**?닿껐????ぉ(?댁쟾 踰꾩쟾?먯꽌 ?쒓굅)**:
+- ~~???reason ?섎굹留?諛섑솚~~ ??`triggered_signals` ?꾨뱶 ?꾩엯(而ㅻ컠 `49bc244`)?쇰줈 ?닿껐. ?숈떆??諛쒗쁽??紐⑤뱺 ?꾪뿕 ?좏샇??`triggered_signals`?? ????ъ쑀??`reason`???④퍡 諛섑솚?⑸땲??4, 6??.
+- ~~`optimize_threshold.py`媛 梨꾪깮??`tau_low=0.60`???ы쁽?섏? 紐삵븿~~ ???먯깋 踰붿쐞媛 `0.50~0.98` ?꾩껜濡?媛쒗렪?섏뼱 `0.60`???ㅼ젣濡??ы쁽?⑸땲??9?? ?댄썑 2李⑥썝 Grid Search濡?異붽? ?泥대맖).
+- ~~`tau_difficulty` ?좎젙??Eval ?명듃媛 愿?ы뻽??媛?μ꽦~~ ??Calibration ?명듃 ?꾩껜 ?ы깘?됱쑝濡?`5.0`???ㅼ떆 ?뺤젙?섏뼱 ?댁냼?섏뿀?듬땲??9?? ?댄썑 2李⑥썝 Grid Search濡?`6.0`?쇰줈 異붽? ?泥대맖).
+- ~~`tau_low`/`tau_difficulty`瑜??쒖そ??怨좎젙???쒖감 理쒖쟻?뷀븯???쒗솚 ?쇰━(Circular Reasoning)~~ ????蹂?섎? ?숈떆???먯깋?섎뒗 2李⑥썝 Grid Search(`optimize_grid_search()`, 而ㅻ컠 `06c8ffc`/`f4ce7a1`)濡??泥대릺???닿껐. ?꾩옱 怨듭떇 媛믪? `tau_low=0.65`, `tau_difficulty=6.0`?낅땲??9??.
+- ~~SHAP ???紐⑤뜽??援щ쾭??`_v4_9120`)?대ŉ ?꾩옱 4-way ?뚯씠?꾨씪?멸낵 遺꾨━?섏뼱 ?덉쓬~~ ??SHAP 怨듭떇 ??곸씠 `baseline_model_lightgbm_tuned_500_4way.pkl`濡??꾪솚?섏뼱 ?닿껐(13??.
+- ~~SHAP 異쒕젰 ?꾨뱶紐낆씠 `interface_spec.md`? 遺덉씪移?~ ??怨듦컻 `to_dict()` ?ㅽ궎留덇? `feature_name`/`feature_value`/`shap_value`/`direction`?쇰줈 ?뺣젹?섏뼱 ?닿껐(13??.
 
 ---
 
@@ -437,39 +437,40 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 
 | File | Role |
 |---|---|
-| `src/jrr/jrr_router.py` | `JointRiskRouter` — 실제 라우팅 엔진 (4신호, 6단계 Priority-ordered Rule) |
-| `src/jrr/__init__.py` | `from .jrr_router import JointRiskRouter` — 패키지 진입점(현재 정상 동작 확인) |
-| `src/jrr/train_calibrator.py` | Isotonic Calibration 학습, `tau_high` 산출, `jrr_calibrator_4way.pkl` 생성 |
-| `src/jrr/optimize_threshold.py` | Calibration 세트(48만 건) 전체 기반 `tau_low`×`tau_difficulty` **2차원 Grid Search**(`optimize_grid_search()`) — 커밋 `06c8ffc`/`f4ce7a1`에서 기존 단변수 순차 탐색을 대체, 현재 채택값 `0.65`/`6.0` 산출(9장) |
-| `src/jrr/disagreement.py` | LightGBM/XGBoost 원시 확률로부터 배치 Disagreement 계산·저장 |
-| `src/jrr/risk_signals.py` | OOD(IsolationForest, seed 42 무작위 10만 샘플) 모델 학습 + Analysis Difficulty 인덱스 동적 매핑 |
-| `src/jrr/generate_raw_probas.py` | Eval 세트에 대한 LightGBM/XGBoost 원시 확률 생성 |
-| `src/jrr/_jrr_eval_core.py` | 평가 지표 공용 함수: `calculate_ece`, `calculate_review_yield`, `calculate_true_tpr`, `run_ood_and_kill_test` |
-| `src/jrr/evaluate_jrr.py` | 최종 Eval 실행 스크립트 (ECE/Brier/Review Yield/ROC-AUC/Confusion Matrix/OOD 방어율/Kill Test → MLflow) |
-| `src/models/tune_lightgbm.py` | LightGBM 4-way 학습/튜닝 (Optuna) |
-| `src/models/train_xgboost_500.py` | XGBoost 4-way 학습 (disagreement 비교 모델) |
-| `src/models/data_contract.py` | 4분할(tr/val/calib/eval) row-count·스키마 계약 검증 |
-| `docs/pipeline_architecture_v3.md` | **현재 최신** 전체 파이프라인 설계 (2026-09-07, 코드와 실질적으로 1:1 일치) |
-| `docs/interface_spec.md` | 서비스 컴포넌트 간 데이터 계약 (JRR 출력 필드명의 근거) |
-| `docs/service_architecture.md` | 서버 배치/AWS/Queue/Worker 구조 |
-| `docs/risk_routing_simulation_test.md` | 4신호 라우팅 시뮬레이션 방법론 + Calibration 기반 `tau_low`×`tau_difficulty` 2차원 Grid Search 결과(§4, 현재 공식값 `0.65`/`6.0`) + Engineering Eval 실측 결과 원본(§5-§7, 신호별 breakdown은 구 threshold `0.60`/`5.0` 기준 — 11장 참고) |
-| `docs/docs_eval_lockbox_policy.md` | 지표/threshold/lockbox/kill-test 공식 정책 |
-| `docs/feature_schema.md` | PEFormatWarnings(2480–2568) 등 전체 feature 스키마 |
-| `docs/static-analysis/deep_analysis.md` | Tiered 심층분석 계약 (`DeepAnalysisOrchestrator`, 실제 Tier 3 = Ghidra CAPA) |
-| `docs/shap-explanation-module.md` | SHAP 설명 모듈 — 대상 모델 `baseline_model_lightgbm_tuned_500_4way.pkl`로 정렬 완료, Top-500 contract/order 검증 완료, 출력 스키마 `interface_spec.md`와 정렬. 서비스 계층(Backend wiring, `models/`/`data/` 경로 통일, `.npy` 배포)은 아직 미구현 |
-| `src/trust_triage/explanation/shap_lightgbm.py` | `LightGBMShapExplainer` — TreeSHAP 계산, feature ordering 검증, Top-K 매핑 (`model_output="raw"`) |
-| `tests/test_shap_lightgbm.py` | SHAP 단위/공식 artifact 통합 테스트, 28건 통과 |
-| `docs/pipeline_architecture.md` | **레거시(v3로 대체됨)** — 91.20%, 구 필드 스키마 등 현재 코드와 불일치하는 구버전 |
-| `dashboard/app.py` | Streamlit 대시보드 (현재 `main`에는 단일 목업만 존재, `interface_spec.md`와 필드명 불일치) |
-| `tests/demo/01/demo.py`, `DEMO_SETUP.md` | **레거시, 현재 라우터와 호환 불가** — 참고용으로도 사용 금지 |
+| `src/jrr/jrr_router.py` | `JointRiskRouter` ???ㅼ젣 ?쇱슦???붿쭊 (4?좏샇, 6?④퀎 Priority-ordered Rule) |
+| `src/jrr/__init__.py` | `from .jrr_router import JointRiskRouter` ???⑦궎吏 吏꾩엯???꾩옱 ?뺤긽 ?숈옉 ?뺤씤) |
+| `src/jrr/train_calibrator.py` | Isotonic Calibration ?숈뒿, `tau_high` ?곗텧, `jrr_calibrator_4way.pkl` ?앹꽦 |
+| `src/jrr/optimize_threshold.py` | Calibration ?명듃(48留?嫄? ?꾩껜 湲곕컲 `tau_low`횞`tau_difficulty` **2李⑥썝 Grid Search**(`optimize_grid_search()`) ??而ㅻ컠 `06c8ffc`/`f4ce7a1`?먯꽌 湲곗〈 ?⑤????쒖감 ?먯깋???泥? ?꾩옱 梨꾪깮媛?`0.65`/`6.0` ?곗텧(9?? |
+| `src/jrr/disagreement.py` | LightGBM/XGBoost ?먯떆 ?뺣쪧濡쒕???諛곗튂 Disagreement 怨꾩궛쨌???|
+| `src/jrr/risk_signals.py` | OOD(IsolationForest, seed 42 臾댁옉??10留??섑뵆) 紐⑤뜽 ?숈뒿 + Analysis Difficulty ?몃뜳???숈쟻 留ㅽ븨 |
+| `src/jrr/generate_raw_probas.py` | Eval ?명듃?????LightGBM/XGBoost ?먯떆 ?뺣쪧 ?앹꽦 |
+| `src/jrr/_jrr_eval_core.py` | ?됯? 吏??怨듭슜 ?⑥닔: `calculate_ece`, `calculate_review_yield`, `calculate_true_tpr`, `run_ood_and_kill_test` |
+| `src/jrr/evaluate_jrr.py` | 理쒖쥌 Eval ?ㅽ뻾 ?ㅽ겕由쏀듃 (ECE/Brier/Review Yield/ROC-AUC/Confusion Matrix/OOD 諛⑹뼱??Kill Test ??MLflow) |
+| `src/models/tune_lightgbm.py` | LightGBM 4-way ?숈뒿/?쒕떇 (Optuna) |
+| `src/models/train_xgboost_500.py` | XGBoost 4-way ?숈뒿 (disagreement 鍮꾧탳 紐⑤뜽) |
+| `src/models/data_contract.py` | 4遺꾪븷(tr/val/calib/eval) row-count쨌?ㅽ궎留?怨꾩빟 寃利?|
+| `docs/pipeline_architecture_v3.md` | **?꾩옱 理쒖떊** ?꾩껜 ?뚯씠?꾨씪???ㅺ퀎 (2026-09-07, 肄붾뱶? ?ㅼ쭏?곸쑝濡?1:1 ?쇱튂) |
+| `docs/interface_spec.md` | ?쒕퉬??而댄룷?뚰듃 媛??곗씠??怨꾩빟 (JRR 異쒕젰 ?꾨뱶紐낆쓽 洹쇨굅) |
+| `docs/service_architecture.md` | ?쒕쾭 諛곗튂/AWS/Queue/Worker 援ъ“ |
+| `docs/risk_routing_simulation_test.md` | 4?좏샇 ?쇱슦???쒕??덉씠??諛⑸쾿濡?+ Calibration 湲곕컲 `tau_low`횞`tau_difficulty` 2李⑥썝 Grid Search 寃곌낵(짠4, ?꾩옱 怨듭떇媛?`0.65`/`6.0`) + Engineering Eval ?ㅼ륫 寃곌낵 ?먮낯(짠5-짠7, ?좏샇蹂?breakdown? 援?threshold `0.60`/`5.0` 湲곗? ??11??李멸퀬) |
+| `docs/docs_eval_lockbox_policy.md` | 吏??threshold/lockbox/kill-test 怨듭떇 ?뺤콉 |
+| `docs/feature_schema.md` | PEFormatWarnings(2480??568) ???꾩껜 feature ?ㅽ궎留?|
+| `docs/static-analysis/deep_analysis.md` | Tiered ?ъ링遺꾩꽍 怨꾩빟 (`DeepAnalysisOrchestrator`, ?ㅼ젣 Tier 3 = Ghidra CAPA) |
+| `docs/shap-explanation-module.md` | SHAP ?ㅻ챸 紐⑤뱢 ?????紐⑤뜽 `baseline_model_lightgbm_tuned_500_4way.pkl`濡??뺣젹 ?꾨즺, Top-500 contract/order 寃利??꾨즺, 異쒕젰 ?ㅽ궎留?`interface_spec.md`? ?뺣젹. ?쒕퉬??怨꾩링(Backend wiring, `models/`/`data/` 寃쎈줈 ?듭씪, `.npy` 諛고룷)? ?꾩쭅 誘멸뎄??|
+| `src/trust_triage/explanation/shap_lightgbm.py` | `LightGBMShapExplainer` ??TreeSHAP 怨꾩궛, feature ordering 寃利? Top-K 留ㅽ븨 (`model_output="raw"`) |
+| `tests/test_shap_lightgbm.py` | SHAP ?⑥쐞/怨듭떇 artifact ?듯빀 ?뚯뒪?? 28嫄??듦낵 |
+| `docs/pipeline_architecture.md` | **?덇굅??v3濡??泥대맖)** ??91.20%, 援??꾨뱶 ?ㅽ궎留????꾩옱 肄붾뱶? 遺덉씪移섑븯??援щ쾭??|
+| `dashboard/app.py` | Streamlit ??쒕낫??(?꾩옱 `main`?먮뒗 ?⑥씪 紐⑹뾽留?議댁옱, `interface_spec.md`? ?꾨뱶紐?遺덉씪移? |
+| `tests/demo/01/demo.py`, `DEMO_SETUP.md` | **?덇굅?? ?꾩옱 ?쇱슦?곗? ?명솚 遺덇?** ??李멸퀬?⑹쑝濡쒕룄 ?ъ슜 湲덉? |
 
 ---
 
 ## 17. Final Summary
 
-JRR은 EMBER2024 기반 LightGBM Baseline의 원시 확률을 Isotonic Calibration으로 보정한 뒤, **Calibration 세트(48만 건) 전체를 대상으로 `tau_low`×`tau_difficulty`를 2차원 Grid Search로 동시 확정·freeze한** 확률 임계값(`tau_high=0.983645`: FPR≤0.1% 기준, `tau_low=0.65`)에 더해 LightGBM–XGBoost 간 Disagreement(`tau_disagree=0.3`), Isolation Forest 기반 OOD Score(`tau_ood=0.0`), PEFormatWarnings 기반 Analysis Difficulty(`tau_difficulty=6.0`, `tau_low`와 함께 동일한 2차원 Grid Search로 확정) 세 위험 신호를 **모두 실제로 라우팅에 사용**해, 우선순위가 정해진 규칙(Fail-Closed NaN 처리 → OOD → Disagreement → Difficulty → 확률 그레이존 → 악성 확신 → 정상 확신 순)으로 세 갈래 판정을 내리는 라우터입니다. `tau_low`와 `tau_difficulty`는 JRR의 OR 조건에서 상호작용하므로 하나씩 순차 최적화하지 않고 동시에 탐색했으며, 이 과정에 Eval 데이터는 사용하지 않았습니다. 이전 순차 최적화 결과였던 `tau_low=0.60`/`tau_difficulty=5.0`은 이력으로만 남아 있습니다(9장). 동시에 발현된 모든 위험 신호는 `triggered_signals` 배열에, 최초 매칭된 대표 사유는 `reason`에 각각 보존됩니다.
+JRR? EMBER2024 湲곕컲 LightGBM Baseline???먯떆 ?뺣쪧??Isotonic Calibration?쇰줈 蹂댁젙???? **Calibration ?명듃(48留?嫄? ?꾩껜瑜???곸쑝濡?`tau_low`횞`tau_difficulty`瑜?2李⑥썝 Grid Search濡??숈떆 ?뺤젙쨌freeze??* ?뺣쪧 ?꾧퀎媛?`tau_high=0.983645`: FPR??.1% 湲곗?, `tau_low=0.65`)???뷀빐 LightGBM?밲GBoost 媛?Disagreement(`tau_disagree=0.3`), Isolation Forest 湲곕컲 OOD Score(`tau_ood=0.0`), PEFormatWarnings 湲곕컲 Analysis Difficulty(`tau_difficulty=6.0`, `tau_low`? ?④퍡 ?숈씪??2李⑥썝 Grid Search濡??뺤젙) ???꾪뿕 ?좏샇瑜?**紐⑤몢 ?ㅼ젣濡??쇱슦?낆뿉 ?ъ슜**?? ?곗꽑?쒖쐞媛 ?뺥빐吏?洹쒖튃(Fail-Closed NaN 泥섎━ ??OOD ??Disagreement ??Difficulty ???뺣쪧 洹몃젅?댁〈 ???낆꽦 ?뺤떊 ???뺤긽 ?뺤떊 ???쇰줈 ??媛덈옒 ?먯젙???대━???쇱슦?곗엯?덈떎. `tau_low`? `tau_difficulty`??JRR??OR 議곌굔?먯꽌 ?곹샇?묒슜?섎?濡??섎굹???쒖감 理쒖쟻?뷀븯吏 ?딄퀬 ?숈떆???먯깋?덉쑝硫? ??怨쇱젙??Eval ?곗씠?곕뒗 ?ъ슜?섏? ?딆븯?듬땲?? ?댁쟾 ?쒖감 理쒖쟻??寃곌낵???`tau_low=0.60`/`tau_difficulty=5.0`? ?대젰?쇰줈留??⑥븘 ?덉뒿?덈떎(9??. ?숈떆??諛쒗쁽??紐⑤뱺 ?꾪뿕 ?좏샇??`triggered_signals` 諛곗뿴?? 理쒖큹 留ㅼ묶??????ъ쑀??`reason`??媛곴컖 蹂댁〈?⑸땲??
 
-현재 공식 threshold(`0.65`/`6.0`)를 Eval 세트(48만 건)에 적용한 **Engineering Eval** 결과는 ROC-AUC 0.997783, 실측 TPR 89.11% / 실측 FPR 0.12%(Calibration에서 목표한 FPR 0.1%와는 별개의 실측값), ECE 0.0031, Brier Score 0.0163, Kill Test FPR 0%이며, 전체 트래픽 중 **11.48%(55,114건)**만 심층분석 큐(`HIGH_RISK_UNCERTAIN`)로 라우팅되고 Review Yield는 **79.19%**입니다. OOD 방어 성공률 100%는 OOD 탐지 자체의 정확도가 아니라 OOD로 판별된 샘플이 정책대로 모두 `HIGH_RISK_UNCERTAIN`으로 라우팅되었다는 동작 검증입니다. Eval 세트는 개발 중 이미 여러 차례 확인에 사용된 데이터이므로 "미지의 Eval 데이터"가 아니며, threshold freeze 이후 공식적으로 별도 실행·보고하는 **Final Eval**은 아직 이루어지지 않았습니다 — Final Eval과 Lockbox/Challenge(전체 Pipeline Freeze 후 최종 1회 평가)는 서로 다른 단계입니다. `risk_score`나 가중합 방식은 현재 공식 구현에 존재하지 않으며, 반환 필드명(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)은 `docs/interface_spec.md`와 완전히 일치합니다. 다만 `tau_disagree`/`tau_ood`의 정량적 재현성, Tier 3 명칭, 서비스 계층 구현, §11 신호별 breakdown의 신규 threshold 재산출, AUTO_BENIGN/AUTO_MALICIOUS 개별 건수, Final Eval 재실행은 아직 정리되지 않은 부분으로 남아 있습니다.
+?꾩옱 怨듭떇 threshold(`0.65`/`6.0`)瑜?Eval ?명듃(48留?嫄????곸슜??**Engineering Eval** 寃곌낵??ROC-AUC 0.997783, ?ㅼ륫 TPR 89.11% / ?ㅼ륫 FPR 0.12%(Calibration?먯꽌 紐⑺몴??FPR 0.1%???蹂꾧컻???ㅼ륫媛?, ECE 0.0031, Brier Score 0.0163, Kill Test FPR 0%?대ŉ, ?꾩껜 ?몃옒??以?**11.48%(55,114嫄?**留??ъ링遺꾩꽍 ??`HIGH_RISK_UNCERTAIN`)濡??쇱슦?낅릺怨?Review Yield??**79.19%**?낅땲?? OOD 諛⑹뼱 ?깃났瑜?100%??OOD ?먯? ?먯껜???뺥솗?꾧? ?꾨땲??OOD濡??먮퀎???섑뵆???뺤콉?濡?紐⑤몢 `HIGH_RISK_UNCERTAIN`?쇰줈 ?쇱슦?낅릺?덈떎???숈옉 寃利앹엯?덈떎. Eval ?명듃??媛쒕컻 以??대? ?щ윭 李⑤? ?뺤씤???ъ슜???곗씠?곗씠誘濡?"誘몄???Eval ?곗씠??媛 ?꾨땲硫? threshold freeze ?댄썑 怨듭떇?곸쑝濡?蹂꾨룄 ?ㅽ뻾쨌蹂닿퀬?섎뒗 **Final Eval**? ?꾩쭅 ?대（?댁?吏 ?딆븯?듬땲????Final Eval怨?Lockbox/Challenge(?꾩껜 Pipeline Freeze ??理쒖쥌 1???됯?)???쒕줈 ?ㅻⅨ ?④퀎?낅땲?? `risk_score`??媛以묓빀 諛⑹떇? ?꾩옱 怨듭떇 援ы쁽??議댁옱?섏? ?딆쑝硫? 諛섑솚 ?꾨뱶紐?`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)? `docs/interface_spec.md`? ?꾩쟾???쇱튂?⑸땲?? ?ㅻ쭔 `tau_disagree`/`tau_ood`???뺣웾???ы쁽?? Tier 3 紐낆묶, ?쒕퉬??怨꾩링 援ы쁽, 짠11 ?좏샇蹂?breakdown???좉퇋 threshold ?ъ궛異? AUTO_BENIGN/AUTO_MALICIOUS 媛쒕퀎 嫄댁닔, Final Eval ?ъ떎?됱? ?꾩쭅 ?뺣━?섏? ?딆? 遺遺꾩쑝濡??⑥븘 ?덉뒿?덈떎.
 
-> **JRR은 모델의 확률만으로 자동 판정하지 않고, Calibration된 확률과 다중 위험 신호(Disagreement·OOD·Analysis Difficulty)를 이용해 자동 판정과 심층분석 대상을 보수적으로 분리하는 Priority-ordered Rule-based Triage Router이다.**
-> (2026-09-09 재조사 기준 4개 신호가 모두 라우터에 실제로 통합되어 있음을 코드 레벨에서 확인했고, 2026-09-10 `tau_low`×`tau_difficulty` 2차원 Grid Search 반영으로 threshold를 `0.65`/`6.0`으로 갱신했습니다.)
+> **JRR? 紐⑤뜽???뺣쪧留뚯쑝濡??먮룞 ?먯젙?섏? ?딄퀬, Calibration???뺣쪧怨??ㅼ쨷 ?꾪뿕 ?좏샇(Disagreement쨌OOD쨌Analysis Difficulty)瑜??댁슜???먮룞 ?먯젙怨??ъ링遺꾩꽍 ??곸쓣 蹂댁닔?곸쑝濡?遺꾨━?섎뒗 Priority-ordered Rule-based Triage Router?대떎.**
+> (2026-09-09 ?ъ“??湲곗? 4媛??좏샇媛 紐⑤몢 ?쇱슦?곗뿉 ?ㅼ젣濡??듯빀?섏뼱 ?덉쓬??肄붾뱶 ?덈꺼?먯꽌 ?뺤씤?덇퀬, 2026-09-10 `tau_low`횞`tau_difficulty` 2李⑥썝 Grid Search 諛섏쁺?쇰줈 threshold瑜?`0.65`/`6.0`?쇰줈 媛깆떊?덉뒿?덈떎.)
+

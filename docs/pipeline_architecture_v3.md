@@ -1,34 +1,34 @@
-# TRUST-Triage 파이프라인 아키텍처 문서 v3
+﻿# TRUST-Triage ?뚯씠?꾨씪???꾪궎?띿쿂 臾몄꽌 v3
 
-> TRUST-Triage의 **분석 파이프라인 흐름과 모듈 간 책임 경계**를 정의합니다.
+> TRUST-Triage??**遺꾩꽍 ?뚯씠?꾨씪???먮쫫怨?紐⑤뱢 媛?梨낆엫 寃쎄퀎**瑜??뺤쓽?⑸땲??
 >
-> 서비스 배치 구조는 `service_architecture.md`, 세부 데이터 계약은 `interface_spec.md`를 기준으로 합니다.
+> ?쒕퉬??諛곗튂 援ъ“??`service_architecture.md`, ?몃? ?곗씠??怨꾩빟? `interface_spec.md`瑜?湲곗??쇰줈 ?⑸땲??
 >
-> **담당자는 본인 파트의 실제 구현이 변경될 경우 관련 문서를 함께 업데이트합니다.**
+> **?대떦?먮뒗 蹂몄씤 ?뚰듃???ㅼ젣 援ы쁽??蹂寃쎈맆 寃쎌슦 愿??臾몄꽌瑜??④퍡 ?낅뜲?댄듃?⑸땲??**
 >
-> 초기 ML 판정, 심층분석 기반 시스템 판정, 분석가 최종 판정은 서로 덮어쓰지 않고 별도 단계로 보존합니다.
+> 珥덇린 ML ?먯젙, ?ъ링遺꾩꽍 湲곕컲 ?쒖뒪???먯젙, 遺꾩꽍媛 理쒖쥌 ?먯젙? ?쒕줈 ??뼱?곗? ?딄퀬 蹂꾨룄 ?④퀎濡?蹂댁〈?⑸땲??
 
 ---
 
-# 🚨 Critical
+# ?슚 Critical
 
-## CRITICAL-01. Eval 결과를 이용해 Threshold를 다시 조정하지 않는다
+## CRITICAL-01. Eval 寃곌낵瑜??댁슜??Threshold瑜??ㅼ떆 議곗젙?섏? ?딅뒗??
 
-Threshold 및 라우팅 정책은 **Calibration 세트에서 결정 후 고정**하고, Eval에서는 고정된 정책의 성능만 측정합니다.
+Threshold 諛??쇱슦???뺤콉? **Calibration ?명듃?먯꽌 寃곗젙 ??怨좎젙**?섍퀬, Eval?먯꽌??怨좎젙???뺤콉???깅뒫留?痢≪젙?⑸땲??
 
-현재 주요 운영 기준:
+?꾩옱 二쇱슂 ?댁쁺 湲곗?:
 
 ```text
 tau_low        = 0.65
 tau_high       = 0.983645
 tau_disagree   = 0.30
-tau_difficulty = 5
+tau_difficulty = 6.0
 OOD condition  = ood_score < 0
 ```
 
 ---
 
-## CRITICAL-02. OOD와 Model Disagreement를 동일한 개념으로 취급하지 않는다
+## CRITICAL-02. OOD? Model Disagreement瑜??숈씪??媛쒕뀗?쇰줈 痍④툒?섏? ?딅뒗??
 
 ```text
 Model Disagreement
@@ -38,19 +38,19 @@ OOD Score
 = Isolation Forest decision_function
 ```
 
-- Disagreement: 두 모델의 예측 차이
-- OOD: 학습 분포와의 이탈 신호
+- Disagreement: ??紐⑤뜽???덉륫 李⑥씠
+- OOD: ?숈뒿 遺꾪룷????댄깉 ?좏샇
 
-두 신호는 서로 다른 위험 신호이며 각각 독립된 필드로 관리합니다.
+???좏샇???쒕줈 ?ㅻⅨ ?꾪뿕 ?좏샇?대ŉ 媛곴컖 ?낅┰???꾨뱶濡?愿由ы빀?덈떎.
 
 ---
 
-## CRITICAL-03. JRR은 Priority-ordered Rule-based Router로 정의한다
+## CRITICAL-03. JRR? Priority-ordered Rule-based Router濡??뺤쓽?쒕떎
 
-현재 JRR은 임의의 가중합 `risk_score`를 계산하는 방식이 아니라,  
-고정된 Threshold 조건을 **정해진 우선순위대로 순차 평가하는 Priority-ordered Rule-based 3-Way Router**입니다.
+?꾩옱 JRR? ?꾩쓽??媛以묓빀 `risk_score`瑜?怨꾩궛?섎뒗 諛⑹떇???꾨땲??  
+怨좎젙??Threshold 議곌굔??**?뺥빐吏??곗꽑?쒖쐞?濡??쒖감 ?됯??섎뒗 Priority-ordered Rule-based 3-Way Router**?낅땲??
 
-현재 우선순위:
+?꾩옱 ?곗꽑?쒖쐞:
 
 ```text
 1. OOD
@@ -61,130 +61,130 @@ OOD Score
 6. High Benign Confidence
 ```
 
-따라서 `risk_score`는 필수 런타임 출력으로 간주하지 않습니다.
+?곕씪??`risk_score`???꾩닔 ?고???異쒕젰?쇰줈 媛꾩＜?섏? ?딆뒿?덈떎.
 
 ---
 
-## CRITICAL-04. SHAP과 Behavioral Evidence를 분리한다
+## CRITICAL-04. SHAP怨?Behavioral Evidence瑜?遺꾨━?쒕떎
 
-- SHAP → LightGBM 모델 판정 근거
-- CAPA / FLOSS / Speakeasy / MITRE ATT&CK → 분석·행위 근거
+- SHAP ??LightGBM 紐⑤뜽 ?먯젙 洹쇨굅
+- CAPA / FLOSS / Speakeasy / MITRE ATT&CK ??遺꾩꽍쨌?됱쐞 洹쇨굅
 
-두 근거는 저장 및 UI 표현에서 구분합니다.
-
----
-
-## CRITICAL-05. Raw PE는 자동 분석 대상이지만 장기 저장을 기본 전제로 하지 않는다
-
-Raw PE는 분석 과정에서 임시 저장하며, 장기 보관 여부는 별도 보안·스토리지 정책에 따릅니다.
-
-Queue에는 Raw PE 자체가 아니라 `analysis_id`, `sha256`, `file_location` 등 참조 정보만 전달합니다.
+??洹쇨굅?????諛?UI ?쒗쁽?먯꽌 援щ텇?⑸땲??
 
 ---
 
-# 0. 전체 분석 흐름
+## CRITICAL-05. Raw PE???먮룞 遺꾩꽍 ??곸씠吏留??κ린 ??μ쓣 湲곕낯 ?꾩젣濡??섏? ?딅뒗??
+
+Raw PE??遺꾩꽍 怨쇱젙?먯꽌 ?꾩떆 ??ν븯硫? ?κ린 蹂닿? ?щ???蹂꾨룄 蹂댁븞쨌?ㅽ넗由ъ? ?뺤콉???곕쫭?덈떎.
+
+Queue?먮뒗 Raw PE ?먯껜媛 ?꾨땲??`analysis_id`, `sha256`, `file_location` ??李몄“ ?뺣낫留??꾨떖?⑸땲??
+
+---
+
+# 0. ?꾩껜 遺꾩꽍 ?먮쫫
 
 ```text
-[Raw PE 입력]
-      │
-      ▼
-[① 입력 처리 / 식별]
-      │
-      ├─ analysis_id 생성
-      ├─ SHA-256 계산
-      └─ Raw PE 임시 저장
-      │
-      ▼
-[② EMBER2024 v3 특징 추출]
-      │
-      ├─ 2568차원 원본 특징
-      ├─ 고정 Top-500 특징 선택
-      ├─ 파일 메타데이터
-      └─ PEFormatWarnings
-      │
-      ▼
-[③ Baseline Inference]
-      │
-      ├─ LightGBM
-      │    └─ lgbm_raw_probability
-      │
-      └─ XGBoost
-           └─ xgb_raw_probability
-      │
-      ├───────────────────────────────┐
-      ▼                               │
-[④ Isotonic Calibration]             │
-      │                               │
-      └─ calibrated_probability       │
-      │                               │
-      ▼                               │
-[⑤ Risk Signal Computation]           │
-      │                               │
-      ├─ calibrated_probability       │
-      ├─ disagreement ◀───────────────┘
-      ├─ ood_score
-      └─ difficulty_score
-      │
-      ▼
-[⑥ JRR / Initial Triage]
-      │
-      ├─ AUTO_BENIGN ──────────────┐
-      │                            │
-      ├─ AUTO_MALICIOUS ───────────┤
-      │                            │
-      └─ HIGH_RISK_UNCERTAIN       │
-               │                   │
-               ▼                   │
-      [⑧ Deep Analysis]            │
-               │                   │
-               ├─ Tier 1           │
-               │   ├─ CAPA         │
-               │   └─ FLOSS        │
-               │                   │
-               └─ 필요 시 Tier 2   │
-                   └─ Speakeasy    │
-               │                   │
-               ▼                   │
-      [⑨ Evidence Normalization]   │
-               │                   │
-               └─ MITRE ATT&CK     │
-               │                   │
-               ▼                   │
-      [⑩ LLM Analyst Assist]       │
-               │                   │
-               ▼                   │
-      [⑪ Final Assessment]         │
-               │                   │
-               ├─ BENIGN           │
-               ├─ MALICIOUS        │
-               └─ UNCERTAIN        │
-                      │             │
-                      ▼             │
-              [Analyst Review]     │
-                      │             │
-                      └─ 필요 시    │
-                         Ghidra     │
-                                    │
-[⑦ SHAP / XAI]                      │
-      ▲                             │
-      └─ LightGBM + Top-500         │
-                                    ▼
-                         [결과 저장 / API / UI]
+[Raw PE ?낅젰]
+      ??
+      ??
+[???낅젰 泥섎━ / ?앸퀎]
+      ??
+      ?쒋? analysis_id ?앹꽦
+      ?쒋? SHA-256 怨꾩궛
+      ?붴? Raw PE ?꾩떆 ???
+      ??
+      ??
+[??EMBER2024 v3 ?뱀쭠 異붿텧]
+      ??
+      ?쒋? 2568李⑥썝 ?먮낯 ?뱀쭠
+      ?쒋? 怨좎젙 Top-500 ?뱀쭠 ?좏깮
+      ?쒋? ?뚯씪 硫뷀??곗씠??
+      ?붴? PEFormatWarnings
+      ??
+      ??
+[??Baseline Inference]
+      ??
+      ?쒋? LightGBM
+      ??   ?붴? lgbm_raw_probability
+      ??
+      ?붴? XGBoost
+           ?붴? xgb_raw_probability
+      ??
+      ?쒋?????????????????????????????????
+      ??                              ??
+[??Isotonic Calibration]             ??
+      ??                              ??
+      ?붴? calibrated_probability       ??
+      ??                              ??
+      ??                              ??
+[??Risk Signal Computation]           ??
+      ??                              ??
+      ?쒋? calibrated_probability       ??
+      ?쒋? disagreement ??????????????????
+      ?쒋? ood_score
+      ?붴? difficulty_score
+      ??
+      ??
+[??JRR / Initial Triage]
+      ??
+      ?쒋? AUTO_BENIGN ????????????????
+      ??                           ??
+      ?쒋? AUTO_MALICIOUS ?????????????
+      ??                           ??
+      ?붴? HIGH_RISK_UNCERTAIN       ??
+               ??                  ??
+               ??                  ??
+      [??Deep Analysis]            ??
+               ??                  ??
+               ?쒋? Tier 1           ??
+               ??  ?쒋? CAPA         ??
+               ??  ?붴? FLOSS        ??
+               ??                  ??
+               ?붴? ?꾩슂 ??Tier 2   ??
+                   ?붴? Speakeasy    ??
+               ??                  ??
+               ??                  ??
+      [??Evidence Normalization]   ??
+               ??                  ??
+               ?붴? MITRE ATT&CK     ??
+               ??                  ??
+               ??                  ??
+      [??LLM Analyst Assist]       ??
+               ??                  ??
+               ??                  ??
+      [??Final Assessment]         ??
+               ??                  ??
+               ?쒋? BENIGN           ??
+               ?쒋? MALICIOUS        ??
+               ?붴? UNCERTAIN        ??
+                      ??            ??
+                      ??            ??
+              [Analyst Review]     ??
+                      ??            ??
+                      ?붴? ?꾩슂 ??   ??
+                         Ghidra     ??
+                                    ??
+[??SHAP / XAI]                      ??
+      ??                            ??
+      ?붴? LightGBM + Top-500         ??
+                                    ??
+                         [寃곌낵 ???/ API / UI]
 
 Optional Extension:
-- CAPE 직접 구축 또는 외부 Behavioral Report 연동
-- MCP 기반 AI Agent Interface
+- CAPE 吏곸젒 援ъ텞 ?먮뒗 ?몃? Behavioral Report ?곕룞
+- MCP 湲곕컲 AI Agent Interface
 ```
 
 ---
 
-# 1. 판정 단계
+# 1. ?먯젙 ?④퀎
 
-TRUST-Triage의 판정은 아래 3단계로 분리합니다.
+TRUST-Triage???먯젙? ?꾨옒 3?④퀎濡?遺꾨━?⑸땲??
 
 ## 1.1 Initial Verdict
 
-JRR의 초기 판정:
+JRR??珥덇린 ?먯젙:
 
 ```text
 AUTO_BENIGN
@@ -192,15 +192,15 @@ AUTO_MALICIOUS
 HIGH_RISK_UNCERTAIN
 ```
 
-- `AUTO_BENIGN` → 자동 초기 판정 완료
-- `AUTO_MALICIOUS` → 자동 초기 판정 완료
-- `HIGH_RISK_UNCERTAIN` → Deep Analysis 진입
+- `AUTO_BENIGN` ???먮룞 珥덇린 ?먯젙 ?꾨즺
+- `AUTO_MALICIOUS` ???먮룞 珥덇린 ?먯젙 ?꾨즺
+- `HIGH_RISK_UNCERTAIN` ??Deep Analysis 吏꾩엯
 
 ---
 
 ## 1.2 Final Verdict
 
-심층분석이 수행된 경우 자동화 시스템이 산출하는 최종 판정:
+?ъ링遺꾩꽍???섑뻾??寃쎌슦 ?먮룞???쒖뒪?쒖씠 ?곗텧?섎뒗 理쒖쥌 ?먯젙:
 
 ```text
 BENIGN
@@ -208,26 +208,26 @@ MALICIOUS
 UNCERTAIN
 ```
 
-> `final_verdict`의 정확한 자동 판정 로직은 Final Assessment 구현 시 확정합니다.
+> `final_verdict`???뺥솗???먮룞 ?먯젙 濡쒖쭅? Final Assessment 援ы쁽 ???뺤젙?⑸땲??
 
 ---
 
 ## 1.3 Analyst Final Verdict
 
-자동 파이프라인에서도 결론이 충분하지 않을 경우 분석가가 최종 검토합니다.
+?먮룞 ?뚯씠?꾨씪?몄뿉?쒕룄 寃곕줎??異⑸텇?섏? ?딆쓣 寃쎌슦 遺꾩꽍媛媛 理쒖쥌 寃?좏빀?덈떎.
 
 ```text
 BENIGN
 MALICIOUS
 ```
 
-필요 시 향후 `UNRESOLVED` 상태 추가를 검토할 수 있습니다.
+?꾩슂 ???ν썑 `UNRESOLVED` ?곹깭 異붽?瑜?寃?좏븷 ???덉뒿?덈떎.
 
 ---
 
-# 2. 표준 결과 객체
+# 2. ?쒖? 寃곌낵 媛앹껜
 
-세부 필드 정의는 `interface_spec.md`를 기준으로 하며, 파이프라인 수준에서는 아래 구조를 사용합니다.
+?몃? ?꾨뱶 ?뺤쓽??`interface_spec.md`瑜?湲곗??쇰줈 ?섎ŉ, ?뚯씠?꾨씪???섏??먯꽌???꾨옒 援ъ“瑜??ъ슜?⑸땲??
 
 ```json
 {
@@ -250,6 +250,7 @@ MALICIOUS
   "initial_verdict": "AUTO_BENIGN | AUTO_MALICIOUS | HIGH_RISK_UNCERTAIN",
   "route": "FINAL | DEEP_ANALYSIS",
   "reason": "string",
+  "triggered_signals": ["string"],
 
   "top_features": [],
 
@@ -272,136 +273,136 @@ MALICIOUS
 ```
 
 > **Critical**  
-> `initial_verdict`, `final_verdict`, `analyst_final_verdict`는 서로 다른 판정 단계이며 기존 값을 덮어쓰지 않습니다.
+> `initial_verdict`, `final_verdict`, `analyst_final_verdict`???쒕줈 ?ㅻⅨ ?먯젙 ?④퀎?대ŉ 湲곗〈 媛믪쓣 ??뼱?곗? ?딆뒿?덈떎.
 
 ---
 
-# 3. 모듈별 상세 명세
+# 3. 紐⑤뱢蹂??곸꽭 紐낆꽭
 
-## ① 입력 처리 / 파일 식별
+## ???낅젰 泥섎━ / ?뚯씪 ?앸퀎
 
-| 항목 | 내용 |
+| ??ぉ | ?댁슜 |
 |---|---|
-| 기본 입력 | Raw PE |
-| 다중 입력 | Batch / Multiple File 지원 범위 구현 |
-| 생성값 | `analysis_id`, `batch_id`, `sha256` |
-| 파일 저장 | Local Temporary Storage 또는 S3 |
-| 중복 식별 | SHA-256 기반 |
+| 湲곕낯 ?낅젰 | Raw PE |
+| ?ㅼ쨷 ?낅젰 | Batch / Multiple File 吏??踰붿쐞 援ы쁽 |
+| ?앹꽦媛?| `analysis_id`, `batch_id`, `sha256` |
+| ?뚯씪 ???| Local Temporary Storage ?먮뒗 S3 |
+| 以묐났 ?앸퀎 | SHA-256 湲곕컲 |
 
-### 처리 흐름
+### 泥섎━ ?먮쫫
 
 ```text
 Raw PE Upload
-    ↓
-analysis_id 생성
-    ↓
-SHA-256 계산
-    ↓
-임시 저장
-    ↓
-특징 추출
+    ??
+analysis_id ?앹꽦
+    ??
+SHA-256 怨꾩궛
+    ??
+?꾩떆 ???
+    ??
+?뱀쭠 異붿텧
 ```
 
-Batch 요청의 경우 **파일마다 개별 `analysis_id`**를 생성하고 상위 그룹에 `batch_id`를 부여합니다.
+Batch ?붿껌??寃쎌슦 **?뚯씪留덈떎 媛쒕퀎 `analysis_id`**瑜??앹꽦?섍퀬 ?곸쐞 洹몃９??`batch_id`瑜?遺?ы빀?덈떎.
 
 ---
 
-# ② 특징 추출 모듈
+# ???뱀쭠 異붿텧 紐⑤뱢
 
-| 항목 | 내용 |
+| ??ぉ | ?댁슜 |
 |---|---|
-| 입력 | Raw PE |
-| 내부 특징 | EMBER2024 v3 2568차원 |
-| 공식 모델 입력 | 고정 Top-500 특징 벡터 |
-| 추가 출력 | 파일 메타데이터, PEFormatWarnings |
-| 기준 | `feature_schema.md`, `top_feature_indices_500.npy` |
+| ?낅젰 | Raw PE |
+| ?대? ?뱀쭠 | EMBER2024 v3 2568李⑥썝 |
+| 怨듭떇 紐⑤뜽 ?낅젰 | 怨좎젙 Top-500 ?뱀쭠 踰≫꽣 |
+| 異붽? 異쒕젰 | ?뚯씪 硫뷀??곗씠?? PEFormatWarnings |
+| 湲곗? | `feature_schema.md`, `top_feature_indices_500.npy` |
 
-### 구현 원칙
+### 援ы쁽 ?먯튃
 
-- EMBER2024 v3 기준 특징 추출
-- Top-500 Feature Set은 기존 TRUST-Triage 입력 계약으로 고정
-- 새 4-Way 재학습 과정에서 Top-500을 재선택하지 않음
-- PEFormatWarnings는 Analysis Difficulty 계산에 사용
+- EMBER2024 v3 湲곗? ?뱀쭠 異붿텧
+- Top-500 Feature Set? 湲곗〈 TRUST-Triage ?낅젰 怨꾩빟?쇰줈 怨좎젙
+- ??4-Way ?ы븰??怨쇱젙?먯꽌 Top-500???ъ꽑?앺븯吏 ?딆쓬
+- PEFormatWarnings??Analysis Difficulty 怨꾩궛???ъ슜
 
 ---
 
-# ③ Baseline 모델
+# ??Baseline 紐⑤뜽
 
 ## LightGBM
 
-역할:
+??븷:
 
-- 공식 Baseline
-- Calibration 입력 생성
-- SHAP 설명 대상
+- 怨듭떇 Baseline
+- Calibration ?낅젰 ?앹꽦
+- SHAP ?ㅻ챸 ???
 
-현재 4-Way 모델:
+?꾩옱 4-Way 紐⑤뜽:
 
 ```text
 models/baseline_model_lightgbm_tuned_500_4way.pkl
 ```
 
-Validation 기준:
+Validation 湲곗?:
 
 ```text
-TPR@FPR0.1% ≈ 92.49%
+TPR@FPR0.1% ??92.49%
 Best iteration = 998
 ```
 
-> 위 수치는 Validation 기반 모델 선택 결과이며 Eval 최종 성능과 구분합니다.
+> ???섏튂??Validation 湲곕컲 紐⑤뜽 ?좏깮 寃곌낵?대ŉ Eval 理쒖쥌 ?깅뒫怨?援щ텇?⑸땲??
 
 ---
 
 ## XGBoost
 
-역할:
+??븷:
 
-- LightGBM과의 Model Disagreement 계산용 비교 모델
+- LightGBM怨쇱쓽 Model Disagreement 怨꾩궛??鍮꾧탳 紐⑤뜽
 
-현재 모델:
+?꾩옱 紐⑤뜽:
 
 ```text
 baseline_model_xgb_500_4way_1000cap.pkl
 ```
 
-특징:
+?뱀쭠:
 
 ```text
 n_estimators = 1000
 best_iteration = 999
-Validation AUC ≈ 0.99712
+Validation AUC ??0.99712
 ```
 
-> 1000 iteration ceiling에서 종료되었으며 완전 수렴 모델로 해석하지 않습니다.
+> 1000 iteration ceiling?먯꽌 醫낅즺?섏뿀?쇰ŉ ?꾩쟾 ?섎졃 紐⑤뜽濡??댁꽍?섏? ?딆뒿?덈떎.
 
 ---
 
-# ④ Calibration
+# ??Calibration
 
-| 항목 | 내용 |
+| ??ぉ | ?댁슜 |
 |---|---|
-| 입력 | `lgbm_raw_probability` |
-| 방법 | Isotonic Regression |
-| 출력 | `calibrated_probability` |
-| 산출물 | `jrr_calibrator.pkl` |
+| ?낅젰 | `lgbm_raw_probability` |
+| 諛⑸쾿 | Isotonic Regression |
+| 異쒕젰 | `calibrated_probability` |
+| ?곗텧臾?| `jrr_calibrator_4way.pkl` |
 
-현재 운영 기준:
+?꾩옱 ?댁쁺 湲곗?:
 
 ```text
 tau_high = 0.983645
 ```
 
-Calibration에서 FPR ≤ 0.1% 조건으로 선택한 Threshold입니다.
+Calibration?먯꽌 FPR ??0.1% 議곌굔?쇰줈 ?좏깮??Threshold?낅땲??
 
-> Eval에서는 해당 Threshold를 재조정하지 않습니다.
+> Eval?먯꽌???대떦 Threshold瑜??ъ“?뺥븯吏 ?딆뒿?덈떎.
 
 ---
 
-# ⑤ Risk Signal Computation
+# ??Risk Signal Computation
 
 ## Calibrated Probability
 
-LightGBM 원시 확률에 Isotonic Calibration을 적용한 값.
+LightGBM ?먯떆 ?뺣쪧??Isotonic Calibration???곸슜??媛?
 
 ---
 
@@ -414,7 +415,7 @@ disagreement = abs(
 )
 ```
 
-현재 기준:
+?꾩옱 湲곗?:
 
 ```text
 tau_disagree = 0.30
@@ -424,44 +425,44 @@ tau_disagree = 0.30
 
 ## OOD Score
 
-Isolation Forest의 `decision_function` 결과를 사용합니다.
+Isolation Forest??`decision_function` 寃곌낵瑜??ъ슜?⑸땲??
 
-학습:
+?숈뒿:
 
-- `X_tr`에서만 학습
-- Top-500 Feature 사용
-- X_tr에서 seed 42로 무작위 100,000개 샘플 사용
-- Eval 데이터는 Isolation Forest 학습에 사용하지 않음
+- `X_tr`?먯꽌留??숈뒿
+- Top-500 Feature ?ъ슜
+- X_tr?먯꽌 seed 42濡?臾댁옉??100,000媛??섑뵆 ?ъ슜
+- Eval ?곗씠?곕뒗 Isolation Forest ?숈뒿???ъ슜?섏? ?딆쓬
 
-현재 기준:
+?꾩옱 湲곗?:
 
 ```text
 ood_score < 0
-→ OOD 위험 신호 Trigger
+??OOD ?꾪뿕 ?좏샇 Trigger
 ```
 
 > **Critical**  
-> OOD로 판별된 샘플이 HIGH_RISK로 라우팅되는 것은 **라우팅 동작 검증**이며, 그 자체가 OOD 탐지 정확도 100%를 의미하지 않습니다.
+> OOD濡??먮퀎???섑뵆??HIGH_RISK濡??쇱슦?낅릺??寃껋? **?쇱슦???숈옉 寃利?*?대ŉ, 洹??먯껜媛 OOD ?먯? ?뺥솗??100%瑜??섎??섏? ?딆뒿?덈떎.
 
 ---
 
 ## Analysis Difficulty
 
-PEFormatWarnings 관련 Top-500 특징을 기반으로 계산합니다.
+PEFormatWarnings 愿??Top-500 ?뱀쭠??湲곕컲?쇰줈 怨꾩궛?⑸땲??
 
-현재 기준:
+?꾩옱 湲곗?:
 
 ```text
-tau_difficulty = 5
+tau_difficulty = 6.0
 ```
 
-`tau_difficulty=5`는 Calibration에서 후보 Threshold별 심층분석 유입량과 운영 Trade-off를 비교해 선택 후 고정합니다.
+`tau_difficulty=6.0`??Calibration?먯꽌 ?꾨낫 Threshold蹂??ъ링遺꾩꽍 ?좎엯?됯낵 ?댁쁺 Trade-off瑜?鍮꾧탳???좏깮 ??怨좎젙?⑸땲??
 
 ---
 
-# ⑥ Joint Risk Router / Initial Triage
+# ??Joint Risk Router / Initial Triage
 
-## 입력
+## ?낅젰
 
 ```text
 p_calib (= calibrated_probability)
@@ -470,180 +471,191 @@ ood_score
 difficulty_score
 ```
 
-## 현재 운영 Threshold
+## ?꾩옱 ?댁쁺 Threshold
 
 ```text
 tau_low        = 0.65
 tau_high       = 0.983645
 tau_disagree   = 0.30
-tau_difficulty = 5
+tau_difficulty = 6.0
 tau_ood        = 0
 ```
 
-## JRR 구조
+## JRR 援ъ“
 
-JRR은 현재 **Priority-ordered Rule-based 3-Way Router**입니다.
+JRR? ?꾩옱 **Priority-ordered Rule-based 3-Way Router**?낅땲??
 
-각 조건을 위에서부터 `if / elif` 방식으로 순차 평가하며,  
-**가장 먼저 만족한 규칙이 해당 샘플의 `initial_verdict`와 대표 `reason`을 결정합니다.**
+媛?議곌굔???낅┰?곸씤 `if`臾몄쑝濡??쒖감 ?됯??섏뿬 諛쒖깮??紐⑤뱺 ?꾪뿕 ?좏샇瑜??섏쭛?섎ŉ,  
+**媛??癒쇱? 留뚯”??洹쒖튃???대떦 ?섑뵆??`initial_verdict`? ???`reason`??寃곗젙?⑸땲??**
 
 ```text
 1. IF ood_score < tau_ood
-      → HIGH_RISK_UNCERTAIN
-      → reason: OOD Detected
+      ??HIGH_RISK_UNCERTAIN, reason: OOD Detected (?댁쟾 ?ъ쑀媛 ?놁쓣 ?뚮쭔)
+      ??triggered_signals 異붽?: OOD
 
-2. ELIF disagreement >= tau_disagree
-      → HIGH_RISK_UNCERTAIN
-      → reason: High Model Disagreement
+2. IF disagreement >= tau_disagree
+      ??HIGH_RISK_UNCERTAIN, reason: High Model Disagreement (?댁쟾 ?ъ쑀媛 ?놁쓣 ?뚮쭔)
+      ??triggered_signals 異붽?: DISAGREEMENT
 
-3. ELIF difficulty_score >= tau_difficulty
-      → HIGH_RISK_UNCERTAIN
-      → reason: High Analysis Difficulty
+3. IF difficulty_score >= tau_difficulty
+      ??HIGH_RISK_UNCERTAIN, reason: High Analysis Difficulty (?댁쟾 ?ъ쑀媛 ?놁쓣 ?뚮쭔)
+      ??triggered_signals 異붽?: DIFFICULTY
 
-4. ELIF tau_low < p_calib < tau_high
-      → HIGH_RISK_UNCERTAIN
-      → reason: Uncertain Probability
+4. IF tau_low < p_calib < tau_high
+      ??HIGH_RISK_UNCERTAIN, reason: Uncertain Probability (?댁쟾 ?ъ쑀媛 ?놁쓣 ?뚮쭔)
+      ??triggered_signals 異붽?: UNCERTAIN_PROBABILITY
 
-5. ELIF p_calib >= tau_high
-      → AUTO_MALICIOUS
-      → reason: High Malicious Confidence
-
-6. ELSE
-      → AUTO_BENIGN
-      → reason: High Benign Confidence
+5. IF ?꾨Т???꾪뿕 ?좏샇媛 諛쒓껄?섏? ?딆븯?ㅻ㈃:
+      IF p_calib >= tau_high
+            ??AUTO_MALICIOUS, reason: High Malicious Confidence
+      ELSE
+            ??AUTO_BENIGN, reason: High Benign Confidence
 ```
 
-### 실제 구현 형태
+### ?ㅼ젣 援ы쁽 ?뺥깭
 
 ```python
+decision = None
+reason = None
+triggered_signals = []
+
+# 1. OOD Score媛 ??쑝硫??숈뒿 遺꾪룷瑜?踰쀬뼱?? ?ъ링 遺꾩꽍?쇰줈 寃⑹긽
 if ood_score < self.tau_ood:
     decision = "HIGH_RISK_UNCERTAIN"
-    reason = f"OOD Detected (Score: {ood_score:.4f})"
+    if not reason: reason = f"OOD Detected (Score: {ood_score:.4f})"
+    triggered_signals.append("OOD")
 
-elif disagreement >= self.tau_disagree:
+# 2. 遺덉씪移섎룄媛 ?щ㈃ 怨좏솗???ㅽ뙋 諛⑹?瑜??꾪빐 ?ъ링 遺꾩꽍?쇰줈 寃⑹긽
+if disagreement >= self.tau_disagree:
     decision = "HIGH_RISK_UNCERTAIN"
-    reason = f"High Model Disagreement ({disagreement:.4f})"
+    if not reason: reason = f"High Model Disagreement ({disagreement:.4f})"
+    triggered_signals.append("DISAGREEMENT")
 
-elif difficulty_score >= self.tau_difficulty:
+# 3. 遺꾩꽍 ?쒖씠?꾧? ?믪쑝硫?PE ?뚯떛 寃쎄퀬 ?? ?ъ링 遺꾩꽍?쇰줈 寃⑹긽
+if difficulty_score >= self.tau_difficulty:
     decision = "HIGH_RISK_UNCERTAIN"
-    reason = f"High Analysis Difficulty (Score: {difficulty_score:.1f})"
+    if not reason: reason = f"High Analysis Difficulty (Score: {difficulty_score:.1f})"
+    triggered_signals.append("DIFFICULTY")
 
-elif self.tau_low < p_calib < self.tau_high:
+# 4. ?뺣쪧???좊ℓ??洹몃젅?댁〈??寃쎌슦
+if self.tau_low < p_calib < self.tau_high:
     decision = "HIGH_RISK_UNCERTAIN"
-    reason = f"Uncertain Probability ({p_calib:.4f})"
+    if not reason: reason = f"Uncertain Probability ({p_calib:.4f})"
+    triggered_signals.append("UNCERTAIN_PROBABILITY")
 
-elif p_calib >= self.tau_high:
-    decision = "AUTO_MALICIOUS"
-    reason = f"High Malicious Confidence ({p_calib:.4f})"
-
-else:
-    decision = "AUTO_BENIGN"
-    reason = f"High Benign Confidence ({p_calib:.4f})"
+# 5, 6. ?꾪뿕 ?좏샇媛 ?녿뒗 寃쎌슦 (?뺤떊?꾩뿉 ?곕씪 ?뺤긽/?낆꽦 遺꾧린)
+if decision is None:
+    if p_calib >= self.tau_high:
+        decision = "AUTO_MALICIOUS"
+        reason = f"High Malicious Confidence ({p_calib:.4f})"
+    else:
+        decision = "AUTO_BENIGN"
+        reason = f"High Benign Confidence ({p_calib:.4f})"
 ```
 
-## `Uncertain Probability` 표현
+> **UI ?쒖떆 ?뺤콉 蹂寃?(Risk Score ?쒓굅)**
+> ??濡쒖쭅?먯꽌 蹂????덈벏, 4媛吏 ?꾪뿕 ?좏샇(OOD, 遺덉씪移섎룄, ?쒖씠?? 蹂댁젙 ?뺣쪧)??紐⑤몢 ?낅┰?곸쑝濡??쒖감 ?됯??⑸땲??
+> ?됯? 怨쇱젙?먯꽌 **諛쒗쁽??紐⑤뱺 ?꾪뿕 ?좏샇??`triggered_signals` 諛곗뿴??鍮좎쭚?놁씠 ?섏쭛**?⑸땲?? (李멸퀬濡?`reason` ?꾨뱶???⑥닚??紐⑸줉(Queue) ?붾㈃ ?깆뿉??1以꾨줈 蹂댁뿬二쇨린 ?꾪븳 泥?踰덉㎏ ?ъ쑀???붿빟 ?띿뒪?몄씪 肉먯엯?덈떎.)
+> 怨쇨굅?먮뒗 ?대윭???꾪뿕?꾨? ?섎굹??萸됰슧洹몃젮吏?`risk_score` ?먯닔濡??곗텧?섏뿬 ?꾨줎?몄뿏????쒕낫?쒖뿉 ?쒖떆?덉?留? ?꾩옱??**`risk_score`瑜??꾩쟾???먭린**?섍퀬 諛깆뿏?쒖뿉???섍꺼二쇰뒗 **`triggered_signals` 諛곗뿴???쒖슜??諛쒓껄???ㅼ쨷 ?ъ쑀 ?꾩껜瑜??꾨줎?몄뿏???곸꽭 ?붾㈃??紐⑤몢 ?쒖떆**?⑥쑝濡쒖뜥 "?????뚯씪???ъ링 遺꾩꽍?쇰줈 ?쇱슦?낅릺?덈뒗吏"瑜?吏곴??곸쑝濡??ㅻ챸(Explainable)?⑸땲??
 
-`Uncertain Probability`는 별도의 확률값 또는 별도 모델 출력이 아닙니다.
+## `Uncertain Probability` ?쒗쁽
+
+`Uncertain Probability`??蹂꾨룄???뺣쪧媛??먮뒗 蹂꾨룄 紐⑤뜽 異쒕젰???꾨떃?덈떎.
 
 ```text
 p_calib
 = calibrated_probability
 ```
 
-이며,
+?대ŉ,
 
 ```text
 tau_low < p_calib < tau_high
 ```
 
-인 **Calibrated Probability Gray Zone**에 들어온 경우 사용하는 라우팅 사유(`reason`) 표현입니다.
+??**Calibrated Probability Gray Zone**???ㅼ뼱??寃쎌슦 ?ъ슜?섎뒗 ?쇱슦???ъ쑀(`reason`) ?쒗쁽?낅땲??
 
-따라서 공식 런타임 필드명은 계속:
+?곕씪??怨듭떇 ?고????꾨뱶紐낆? 怨꾩냽:
 
 ```text
 calibrated_probability
 ```
 
-를 사용합니다.
+瑜??ъ슜?⑸땲??
 
 > **Critical**  
-> `calibrated_probability` 필드를 `uncertain_probability`로 변경하지 않습니다.  
-> `Uncertain Probability`는 Gray Zone에 대한 설명용 Reason Label입니다.
+> `calibrated_probability` ?꾨뱶瑜?`uncertain_probability`濡?蹂寃쏀븯吏 ?딆뒿?덈떎.  
+> `Uncertain Probability`??Gray Zone??????ㅻ챸??Reason Label?낅땲??
 
-## 우선순위와 Reason 기록
+## ?ㅼ쨷 ?좏샇 ?섏쭛 (Multi-Signal Tracking)
 
-현재 구현은 `if / elif` 구조이므로 하나의 샘플이 여러 위험 조건을 동시에 만족하더라도  
-**가장 먼저 매칭된 규칙 하나가 대표 `reason`으로 기록됩니다.**
+?꾩옱 JRR ?쇱슦?곗쓽 諛깆뿏??援ы쁽? ?낅┰?곸씤 ?щ윭 媛쒖쓽 `if`臾?援ъ“濡?吏쒖뿬???덉뒿?덈떎. ?곕씪???섎굹???섑뵆???щ윭 ?꾪뿕 議곌굔???숈떆??留뚯”??寃쎌슦, **議곌굔??留뚯”??紐⑤뱺 ?꾪뿕 ?좏샇媛 `triggered_signals` 諛곗뿴???꾨? ?섏쭛?⑸땲??**
 
-예:
+??
 
 ```text
-OOD 조건 충족
+OOD 議곌굔 異⑹”
 + disagreement >= 0.30
 + difficulty_score >= 5
 ```
 
-인 샘플은 첫 번째 OOD 규칙에서 라우팅이 종료되므로:
+???섑뵆? ?ㅼ쓬怨?媛숈씠 ?먯젙?⑸땲??
 
 ```text
 initial_verdict = HIGH_RISK_UNCERTAIN
-reason = OOD Detected
+reason = OOD Detected (泥?踰덉㎏ 諛쒗쁽 ?ъ쑀 ?붿빟)
+triggered_signals = ["OOD", "DISAGREEMENT", "DIFFICULTY"]
 ```
 
-로 기록됩니다.
-
-이는 실제로 다른 위험 신호가 존재하지 않는다는 의미가 아니라  
-**JRR의 대표 라우팅 사유가 우선순위상 OOD였다는 의미**입니다.
-
-필요한 경우 향후 `triggered_signals` 배열을 추가하여 동시에 충족된 모든 위험 신호를 별도 보존할 수 있습니다.
+?댁쿂??諛깆뿏??濡쒖쭅?먯꽌???숈떆??異⑹”??紐⑤뱺 ?꾪뿕 ?좏샇瑜??섎굹??鍮좎쭚?놁씠 蹂댁〈?섍린 ?꾪빐 **`triggered_signals` 諛곗뿴???④퍡 異쒕젰**?섎ŉ, ?꾨줎?몄뿏?쒕뒗 ?대? ?쒖슜???붾㈃???ㅼ쨷 ?ъ쑀瑜?紐⑤몢 ?쒖떆?????덉뒿?덈떎.
 
 ## Route
 
 ```text
 AUTO_BENIGN
-→ route = FINAL
+??route = FINAL
 
 AUTO_MALICIOUS
-→ route = FINAL
+??route = FINAL
 
 HIGH_RISK_UNCERTAIN
-→ route = DEEP_ANALYSIS
+??route = DEEP_ANALYSIS
 ```
 
 > **Critical**  
-> 현재 공식 JRR에 임의 가중치를 적용한 Weighted Risk Score는 사용하지 않습니다.
+> ?꾩옱 怨듭떇 JRR???꾩쓽 媛以묒튂瑜??곸슜??Weighted Risk Score???ъ슜?섏? ?딆뒿?덈떎.
 
 ---
 
-## Eval 평가 원칙
+## Eval ?됯? ?먯튃
 
-Calibration에서 모든 Threshold를 확정한 뒤 Eval에는 고정 적용합니다.
+Calibration?먯꽌 紐⑤뱺 Threshold瑜??뺤젙????Eval?먮뒗 怨좎젙 ?곸슜?⑸땲??
 
-현재 주요 Eval 결과:
+?꾩옱 二쇱슂 Eval 寃곌낵:
 
 ```text
-ROC-AUC ≈ 0.9978
-TPR      ≈ 89.11%
-FPR      ≈ 0.12%
+ROC-AUC ??0.9978
+TPR      ??89.11%
+FPR      ??0.12%
 ```
 
-정확한 표현:
+?뺥솗???쒗쁽:
 
-> Calibration에서 FPR ≤ 0.1% 조건으로 확정한 `tau_high=0.983645`를 고정 적용한 결과 Eval TPR 89.11%, FPR 0.12%를 기록하였다.
+> Calibration?먯꽌 FPR ??0.1% 議곌굔?쇰줈 ?뺤젙??`tau_high=0.983645`瑜?怨좎젙 ?곸슜??寃곌낵 Eval TPR 89.11%, FPR 0.12%瑜?湲곕줉?섏???
 
 ---
 
-# ⑦ SHAP / XAI
+# ??SHAP / XAI
 
-| 항목 | 내용 |
+| ??ぉ | ?댁슜 |
 |---|---|
-| 대상 모델 | LightGBM |
-| 입력 | LightGBM + Top-500 Feature |
-| 방법 | TreeExplainer |
-| 출력 | `top_features` |
-| 목적 | 모델 판정의 주요 특징 및 방향 제공 |
+| ???紐⑤뜽 | LightGBM |
+| ?낅젰 | LightGBM + Top-500 Feature |
+| 諛⑸쾿 | TreeExplainer |
+| 異쒕젰 | `top_features` |
+| 紐⑹쟻 | 紐⑤뜽 ?먯젙??二쇱슂 ?뱀쭠 諛?諛⑺뼢 ?쒓났 |
 
-### 출력 예시
+### 異쒕젰 ?덉떆
 
 ```json
 {
@@ -659,76 +671,105 @@ FPR      ≈ 0.12%
 ```
 
 > **Critical**  
-> SHAP은 **Raw LightGBM 모델 출력의 근거**를 설명합니다.  
-> 보정된 확률(`calibrated_probability`)을 SHAP이 직접 설명하는 것으로 표현하지 않습니다.
+> SHAP? **Raw LightGBM 紐⑤뜽 異쒕젰??洹쇨굅**瑜??ㅻ챸?⑸땲??  
+> 蹂댁젙???뺣쪧(`calibrated_probability`)??SHAP??吏곸젒 ?ㅻ챸?섎뒗 寃껋쑝濡??쒗쁽?섏? ?딆뒿?덈떎.
 
 ---
 
-# ⑧ Deep Analysis
+# ??Deep Analysis ???대떦: ?댁긽??
 
-대상:
+???
 
 ```text
 initial_verdict == HIGH_RISK_UNCERTAIN
 ```
 
-## Tier 1 — CAPA + FLOSS
+## ?④퀎蹂??먮쫫
 
-두 도구를 정적 심층분석의 1차 Evidence 수집 단계로 사용합니다.
+```text
+HIGH_RISK_UNCERTAIN
+        ??
+        ??
+CAPA + FLOSS (Tier 1)
+        ??
+        ?쒋? 洹쇨굅媛 異⑸텇???????????????????
+        ??                              ??
+        ?붴? 洹쇨굅媛 遺議깊븿                ??
+                  ??                    ??
+          SQS???묒? ?묒뾽 硫붿떆吏 ?꾩넚    ??
+                  ??                    ??
+          Speakeasy Worker (Tier 2)     ??
+                  ??                    ??
+                  ?붴??????????????р?????????
+                                ??
+                    Evidence ?뺢퇋?붋룻넻??
+                                ??
+                       ?좏깮??LLM ?ㅻ챸
+                                ??
+                                ??
+                   Backend Final Assessment
+```
+
+Backend??`deep_gateway.py`??蹂꾨룄 Deep Analysis ?쒕퉬?ㅻ? ?몄텧?섍퀬 ?곹깭瑜?媛?몄삤???곌껐遺?낅땲?? ?꾩옱 諛깆뿏?쒖쓽 Gateway ?곕룞遺???꾩꽦?섏뼱 ?덉쑝?? ?ㅼ젣 SQS ??諛?Worker瑜??댁슜???쒕퉬???고????듯빀? **誘멸뎄???곹깭(?ν썑 怨쇱젣)**?낅땲?? (媛쒕컻 諛??뚯뒪???쒖뿉???⑥씪 ?몃뱶 ?숆린 泥섎━ 諛⑹떇???ъ슜?⑸땲??)
+
+## Tier 1 ??CAPA + FLOSS
+
+???꾧뎄瑜??뺤쟻 ?ъ링遺꾩꽍??1李?Evidence ?섏쭛 ?④퀎濡??ъ슜?⑸땲??
 
 ### CAPA
 
-주요 역할:
+二쇱슂 ??븷:
 
-- Capability 탐지
-- Rule 기반 정적 Evidence
-- MITRE ATT&CK 연계 정보
+- Capability ?먯?
+- Rule 湲곕컲 ?뺤쟻 Evidence
+- MITRE ATT&CK ?곌퀎 ?뺣낫
 
 ### FLOSS
 
-주요 역할:
+二쇱슂 ??븷:
 
 - Static Strings
 - Stack Strings
 - Tight Strings
 - Decoded Strings
 
-> FLOSS 문자열 자체를 악성 판정으로 사용하지 않고 분석 Evidence로 활용합니다.
+> FLOSS 臾몄옄???먯껜瑜??낆꽦 ?먯젙?쇰줈 ?ъ슜?섏? ?딄퀬 遺꾩꽍 Evidence濡??쒖슜?⑸땲??
 
 ---
 
-## Tier 2 — Speakeasy
+## Tier 2 ??Speakeasy
 
-Tier 1만으로 충분하지 않은 경우 Speakeasy 에뮬레이션을 수행합니다.
+Tier 1留뚯쑝濡?異⑸텇?섏? ?딆? 寃쎌슦 Speakeasy ?먮??덉씠?섏쓣 ?섑뻾?⑸땲??
 
-주요 Evidence:
+二쇱슂 Evidence:
 
 - Process
 - API Call
 - File
 - Registry
-- Network 관련 행위
+- Network 愿???됱쐞
 
-Speakeasy는 장시간 실행될 수 있으므로 서비스 단계에서는 **비동기 Task Queue + Worker** 구조로 실행합니다.
-
----
-
-## Optional Tier — CAPE / External Behavioral Report
-
-CAPE는 현재 Core PoC 필수 모듈로 두지 않습니다.
-
-가능한 확장:
-
-- CAPE 환경 직접 구축
-- 외부에서 생성된 CAPE Behavioral Report 연동/파싱
-
-Ghidra는 자동 파이프라인에서 제외하고 Analyst Review용 수동 도구로 유지합니다.
+Speakeasy???μ떆媛??ㅽ뻾?????덉쑝誘濡??쒕퉬???④퀎?먯꽌??**鍮꾨룞湲?Task Queue + Worker** 援ъ“濡??ㅽ뻾?⑸땲??
+SQS 硫붿떆吏?먮뒗 ?먮낯 ?뚯씪???ｌ? ?딆뒿?덈떎. `analysis_id`, `sha256`, ?대? `file_location`, `requested_stage`, `requested_at`留??꾨떖?⑸땲?? Worker??S3?먯꽌 ?뚯씪???대젮諛쏄퀬 SHA-256???ㅼ떆 ?뺤씤????Speakeasy瑜??ㅽ뻾?⑸땲??
 
 ---
 
-# ⑨ MITRE ATT&CK Evidence Normalization
+## Optional Tier ??CAPE / External Behavioral Report
 
-도구별 결과를 MITRE ATT&CK Technique 단위로 정규화합니다.
+CAPE???꾩옱 Core PoC ?꾩닔 紐⑤뱢濡??먯? ?딆뒿?덈떎.
+
+媛?ν븳 ?뺤옣:
+
+- CAPE ?섍꼍 吏곸젒 援ъ텞
+- ?몃??먯꽌 ?앹꽦??CAPE Behavioral Report ?곕룞/?뚯떛
+
+Ghidra???먮룞 ?뚯씠?꾨씪?몄뿉???쒖쇅?섍퀬 Analyst Review???섎룞 ?꾧뎄濡??좎??⑸땲??
+
+---
+
+# ??MITRE ATT&CK Evidence Normalization
+
+?꾧뎄蹂?寃곌낵瑜?MITRE ATT&CK Technique ?⑥쐞濡??뺢퇋?뷀빀?덈떎.
 
 ```json
 {
@@ -739,7 +780,7 @@ Ghidra는 자동 파이프라인에서 제외하고 Analyst Review용 수동 도
 }
 ```
 
-Evidence Source 예:
+Evidence Source ??
 
 ```text
 CAPA
@@ -748,15 +789,15 @@ SPEAKEASY
 CAPE_REPORT
 ```
 
-> FLOSS가 직접 MITRE Technique을 제공하지 않는 경우 LLM/후처리 단계에서 임의 확정하지 않고 원본 문자열 Evidence로 별도 보존합니다.
+> FLOSS媛 吏곸젒 MITRE Technique???쒓났?섏? ?딅뒗 寃쎌슦 LLM/?꾩쿂由??④퀎?먯꽌 ?꾩쓽 ?뺤젙?섏? ?딄퀬 ?먮낯 臾몄옄??Evidence濡?蹂꾨룄 蹂댁〈?⑸땲??
 
 ---
 
-# ⑩ LLM Analyst Assist
+# ??LLM Analyst Assist
 
-LLM은 심층분석 Evidence를 분석가가 빠르게 확인할 수 있도록 요약·해석하는 보조 계층입니다.
+LLM? ?ъ링遺꾩꽍 Evidence瑜?遺꾩꽍媛媛 鍮좊Ⅴ寃??뺤씤?????덈룄濡??붿빟쨌?댁꽍?섎뒗 蹂댁“ 怨꾩링?낅땲??
 
-## 입력
+## ?낅젰
 
 - Initial Verdict
 - Risk Signals
@@ -764,165 +805,168 @@ LLM은 심층분석 Evidence를 분석가가 빠르게 확인할 수 있도록 �
 - FLOSS
 - Speakeasy
 - MITRE ATT&CK Evidence
-- 필요한 경우 SHAP 요약
+- ?꾩슂??寃쎌슦 SHAP ?붿빟
 
-## 출력
+## 異쒕젰
 
-- 주요 분석 요약
-- 의심 행위 정리
+- 二쇱슂 遺꾩꽍 ?붿빟
+- ?섏떖 ?됱쐞 ?뺣━
 - Analyst Notes
 
 > **Critical**
-> LLM이 Raw PE를 직접 분석하도록 보내지 않습니다.
+> LLM??Raw PE瑜?吏곸젒 遺꾩꽍?섎룄濡?蹂대궡吏 ?딆뒿?덈떎.
 >
-> LLM Summary는 CAPA/Speakeasy 등의 원본 Evidence를 대체하지 않습니다.
+> LLM Summary??CAPA/Speakeasy ?깆쓽 ?먮낯 Evidence瑜??泥댄븯吏 ?딆뒿?덈떎.
 
 ---
 
-# ⑪ Final Assessment
+# ??Final Assessment
 
-Deep Analysis와 정규화 Evidence를 기반으로 최종 자동화 판정을 생성합니다.
+Deep Analysis? ?뺢퇋??Evidence瑜?湲곕컲?쇰줈 理쒖쥌 ?먮룞???먯젙???앹꽦?⑸땲??
 
-예정 출력:
+?덉젙 異쒕젰 (?꾩옱 `schemas.py` 湲곗? `FinalAssessment` 媛앹껜):
 
 ```json
 {
   "final_verdict": "BENIGN | MALICIOUS | UNCERTAIN",
-  "evidence": [],
-  "llm_summary": {}
+  "disposition": "AUTO_ALLOW_RECOMMENDED | ALERT_RECOMMENDED | MANUAL_REVIEW | ANALYSIS_FAILED",
+  "requires_human_review": true,
+  "reason": "string",
+  "policy_version": "backend-review-first-v1"
 }
 ```
 
-> Final Assessment의 정확한 자동 판정 규칙은 서비스 통합 단계에서 확정합니다.
+> **李멸퀬**: `evidence` 諛?`llm_summary`????媛앹껜 ?대?媛 ?꾨땶 ?꾩껜 遺꾩꽍 ?묐떟(`AnalysisResponse`)??蹂꾨룄 ?꾨뱶濡??쒓났?⑸땲??
+> Final Assessment???뺥솗???먮룞 ?먯젙 洹쒖튃? ?쒕퉬???듯빀 ?④퀎?먯꽌 ?뺤젙?⑸땲??
 
 ---
 
-# ⑫ Analyst Review
+# ??Analyst Review
 
-자동화 파이프라인에서 최종 판단이 충분하지 않은 경우 Analyst Review 대상으로 전달합니다.
+?먮룞???뚯씠?꾨씪?몄뿉??理쒖쥌 ?먮떒??異⑸텇?섏? ?딆? 寃쎌슦 Analyst Review ??곸쑝濡??꾨떖?⑸땲??
 
 ```text
 UNCERTAIN
-    ↓
+    ??
 Analyst Review
-    ↓
-필요 시 Ghidra 수동 분석
-    ↓
+    ??
+?꾩슂 ??Ghidra ?섎룞 遺꾩꽍
+    ??
 analyst_final_verdict
 ```
 
-분석가의 최종 판정은 기존 `initial_verdict` 및 `final_verdict`를 덮어쓰지 않습니다.
+遺꾩꽍媛??理쒖쥌 ?먯젙? 湲곗〈 `initial_verdict` 諛?`final_verdict`瑜???뼱?곗? ?딆뒿?덈떎.
 
 ---
 
-# 4. 서비스 계층과의 연결
+# 4. ?쒕퉬??怨꾩링怨쇱쓽 ?곌껐
 
-본 문서는 분석 파이프라인 자체를 정의합니다.
+蹂?臾몄꽌??遺꾩꽍 ?뚯씠?꾨씪???먯껜瑜??뺤쓽?⑸땲??
 
-실제 서비스에서는 아래 구조를 통해 실행됩니다.
+?ㅼ젣 ?쒕퉬?ㅼ뿉?쒕뒗 ?꾨옒 援ъ“瑜??듯빐 ?ㅽ뻾?⑸땲??
 
 ```text
 Streamlit
-   ↓
+   ??
 FastAPI
-   ↓
+   ??
 TRUST-Triage Analysis Pipeline
-   ↓
+   ??
 PostgreSQL
 
 HIGH_RISK_UNCERTAIN
-   ↓
+   ??
 CAPA + FLOSS
-   ↓
+   ??
 Task Queue
-   ↓
+   ??
 Speakeasy Worker
-   ↓
+   ??
 PostgreSQL
 
 Raw PE
-   ↕
+   ??
 Temporary Storage / S3
 ```
 
-세부 서버 배치 및 AWS 구성은:
+?몃? ?쒕쾭 諛곗튂 諛?AWS 援ъ꽦?:
 
 ```text
 service_architecture.md
 ```
 
-세부 JSON/API/Queue 데이터 계약은:
+?몃? JSON/API/Queue ?곗씠??怨꾩빟?:
 
 ```text
 interface_spec.md
 ```
 
-를 기준으로 합니다.
+瑜?湲곗??쇰줈 ?⑸땲??
 
 ---
 
-# 5. API / Web / MCP 관계
+# 5. API / Web / MCP 愿怨?
 
-분석 엔진은 하나만 유지합니다.
+遺꾩꽍 ?붿쭊? ?섎굹留??좎??⑸땲??
 
 ```text
-                 ┌─ Streamlit Web
-                 │
-Client ──────────┼─ REST API
-                 │
-AI Agent ────────┴─ MCP
-                        │
-                        ▼
-                 동일 Backend /
+                 ?뚢? Streamlit Web
+                 ??
+Client ???????????쇄? REST API
+                 ??
+AI Agent ?????????닳? MCP
+                        ??
+                        ??
+                 ?숈씪 Backend /
                  Analysis Pipeline
 ```
 
 > **Critical**
-> Web, REST API, MCP를 위해 별도의 분석 파이프라인을 각각 구현하지 않습니다.
+> Web, REST API, MCP瑜??꾪빐 蹂꾨룄??遺꾩꽍 ?뚯씠?꾨씪?몄쓣 媛곴컖 援ы쁽?섏? ?딆뒿?덈떎.
 
 ---
 
-# 6. 현재 확인 / 결정 필요 사항
+# 6. ?꾩옱 ?뺤씤 / 寃곗젙 ?꾩슂 ?ы빆
 
-- [ ] CAPA + FLOSS → Speakeasy Tier 진입 조건 최종 확정
-- [ ] Final Assessment 자동 판정 규칙 확정
-- [ ] `final_verdict` Enum 최종 확정
-- [ ] Task Queue 최종 선택: Redis + RQ / AWS SQS
-- [ ] 단일 / 분산 서버 배치 구조 확정
-- [ ] Raw PE 임시 저장 위치 및 삭제/Lifecycle 정책 확정
-- [ ] Batch 최대 파일 수 및 파일 크기 제한 확정
-- [ ] PostgreSQL 배포 방식 확정
-- [ ] MCP 구현 범위 확정
-- [ ] End-to-End 통합 후 Lockbox 실행 전 전체 Pipeline Freeze
+- [ ] CAPA + FLOSS ??Speakeasy Tier 吏꾩엯 議곌굔 理쒖쥌 ?뺤젙
+- [ ] Final Assessment ?먮룞 ?먯젙 洹쒖튃 ?뺤젙
+- [ ] `final_verdict` Enum 理쒖쥌 ?뺤젙
+- [ ] Task Queue 理쒖쥌 ?좏깮: Redis + RQ / AWS SQS
+- [ ] ?⑥씪 / 遺꾩궛 ?쒕쾭 諛곗튂 援ъ“ ?뺤젙
+- [ ] Raw PE ?꾩떆 ????꾩튂 諛???젣/Lifecycle ?뺤콉 ?뺤젙
+- [ ] Batch 理쒕? ?뚯씪 ??諛??뚯씪 ?ш린 ?쒗븳 ?뺤젙
+- [ ] PostgreSQL 諛고룷 諛⑹떇 ?뺤젙
+- [ ] MCP 援ы쁽 踰붿쐞 ?뺤젙
+- [ ] End-to-End ?듯빀 ??Lockbox ?ㅽ뻾 ???꾩껜 Pipeline Freeze
 
 ---
 
-# 7. 모델 평가 Protocol
+# 7. 紐⑤뜽 ?됯? Protocol
 
-현재 모델 평가 구조:
+?꾩옱 紐⑤뜽 ?됯? 援ъ“:
 
 ```text
 Train
-Weeks 0–33
-   ↓
+Weeks 0??3
+   ??
 Validation
-Weeks 34–39
-   ↓
+Weeks 34??9
+   ??
 Calibration
-Weeks 40–45
-   ↓
+Weeks 40??5
+   ??
 Eval
-Weeks 46–51
-   ↓
+Weeks 46??1
+   ??
 Lockbox / Challenge
 Final One-Time Evaluation
 ```
 
-## 역할
+## ??븷
 
 ### Train
 
-모델 학습.
+紐⑤뜽 ?숈뒿.
 
 ### Validation
 
@@ -933,24 +977,29 @@ Final One-Time Evaluation
 ### Calibration
 
 - Isotonic Calibration
-- 운영 Threshold 선택
-- JRR routing policy 선택
+- ?댁쁺 Threshold ?좏깮
+- JRR routing policy ?좏깮
 
 ### Eval
 
-- 고정된 모델/Threshold/정책 성능 평가
-- 재튜닝 금지
+- 怨좎젙??紐⑤뜽/Threshold/?뺤콉 ?깅뒫 ?됯?
+- ?ы뒠??湲덉?
 
 ### Lockbox
 
-전체 Pipeline과 정책을 Freeze한 후 **최종 1회 평가**에만 사용합니다.
+?꾩껜 Pipeline怨??뺤콉??Freeze????**理쒖쥌 1???됯?**?먮쭔 ?ъ슜?⑸땲??
 
 ---
 
-# 8. 변경 이력
+# 8. 蹂寃??대젰
 
-| 날짜 | 버전 | 변경 내용 | 작성자 |
+| ?좎쭨 | 踰꾩쟾 | 蹂寃??댁슜 | ?묒꽦??|
 |---|---|---|---|
-| 2026-08-06 | v1 | 최초 작성 | 김정윤 |
-| 2026-08-22 | v2 | JRR, 위험 신호, Tiered Deep Analysis, 판정 이력 및 서비스 구조 반영 | 김정윤 |
-| 2026-09-07 | v3 | 4-Way 평가 Protocol, Priority-ordered Rule-based JRR, JRR Reason/Gray Zone 표현, Isolation Forest OOD, Difficulty Threshold, CAPA+FLOSS, Speakeasy Worker, LLM Analyst Assist 및 M4 서비스 통합 구조 반영 | 김정윤 |
+| 2026-08-06 | v1 | 理쒖큹 ?묒꽦 | 源?뺤쑄 |
+| 2026-08-22 | v2 | JRR, ?꾪뿕 ?좏샇, Tiered Deep Analysis, ?먯젙 ?대젰 諛??쒕퉬??援ъ“ 諛섏쁺 | 源?뺤쑄 |
+| 2026-09-07 | v3 | 4-Way ?됯? Protocol, Priority-ordered Rule-based JRR, JRR Reason/Gray Zone ?쒗쁽, Isolation Forest OOD, Difficulty Threshold, CAPA+FLOSS, Speakeasy Worker, LLM Analyst Assist 諛?M4 ?쒕퉬???듯빀 援ъ“ 諛섏쁺 | 源?뺤쑄 |
+| 2026-09-09 | v3.1 | Backend API, PostgreSQL, S3, SQS Worker, ?ㅼ젣 ?뚯씪쨌?섏〈??援ъ“ 諛섏쁺 | ?댁긽??|
+| 2026-09-09 | v3.2 | 諛곗튂 ?붿빟쨌怨좎쐞???꾪꽣쨌ZIP ?낅젰 諛??뚯씪蹂??묒닔 ?댁뿭 諛섏쁺 | ?댁긽??|
+| 2026-09-15 | v3.3 | 諛깆뿏??肄붾뱶? 臾몄꽌 ?뺥빀??援먯젙 諛??덇굅???ㅽ겕由쏀듃 ?섏젙 | 源嫄댁슦 |
+
+
