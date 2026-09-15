@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import joblib 
+import joblib
 
 # 1. 데이터 경로 설정
 DATA_DIR = os.path.join("data")
@@ -33,10 +33,10 @@ if os.path.exists(lgb_prob_path):
     p_lgb = np.load(lgb_prob_path)
     if p_lgb.ndim == 2:
         p_lgb = p_lgb[:, 1]
-    
+
     # 불일치도 계산 (|p_lgb_raw - p_xgb_raw|)
     disagreement = np.abs(p_lgb - p_xgb)
-    
+
     print("\n" + "="*45)
     print("Model Disagreement 통계 요약 (Raw Prob 기준)")
     print("="*45)
@@ -45,10 +45,10 @@ if os.path.exists(lgb_prob_path):
     print(f"불일치 > 0.2 (주의 샘플) 비율: {(disagreement > 0.2).mean() * 100:.2f}% ({(disagreement > 0.2).sum():,}개)")
     print(f"불일치 > 0.5 (위험 갈등 샘플) 비율: {(disagreement > 0.5).mean() * 100:.2f}% ({(disagreement > 0.5).sum():,}개)")
     print("="*45)
-    
+
     # 불일치도 저장
     out_disagree = os.path.join(DATA_DIR, "model_disagreement.npy")
     np.save(out_disagree, disagreement)
     print(f"Disagreement 파일 저장 완료: {out_disagree}")
 else:
-    print(f"\nLightGBM 원시 확률 파일({lgb_prob_path})이 없습니다. 불일치 계산 대기 중...")
+    print(f"\nLightGBM 원시 확률 파일({lgb_prob_path})이 없습니다. 불일치 계산 대기 중...")

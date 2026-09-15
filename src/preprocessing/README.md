@@ -84,8 +84,8 @@ python manifest.py --root C:\EMBER\result --thrember-repo C:\EMBER\src\EMBER2024
 
 ### 주요 인자
 
-모든 단계 공통: `--root <경로>` (기본 `./ember2024_work`), `--force`(완료 마커
-무시하고 재실행).
+모든 단계 공통 (05 제외): `--root <경로>` (기본 `./ember2024_work`), `--force`(완료 마커
+무시하고 재실행). 05단계는 `--force` 없이 동작합니다.
 
 - **01**: `--min-free-gb 60` 여유 공간 하한 / `--skip-preflight` 환경 점검 생략 /
   `--strict-preflight` 경고도 실패 처리 / `--retries 3` / `--skip-challenge`(비권장)
@@ -133,14 +133,14 @@ validation은 원래 없었습니다(train이 0–39 통짜). 그 상태면 모�
 | 주차 경계(`WEEK_*`) | `04 --force` → `05 --skip-lockbox` → `06` |
 | 라벨 마스크 / `PE_FILE_TYPES` | `04 --force` → `05 --skip-lockbox` → `06` |
 | 계약·README 문구만 | `06` |
-| thrember/pefile 버전, 특징 추출기 | `02 --force` → `03 --force` → `04 --force` → `05 --force` → `06` |
+| thrember/pefile 버전, 특징 추출기 | `02 --force` → `03 --force` → `04 --force` → `05` → `06` |
 | 데이터 추가 다운로드 | `01` → 이하 전부 `--force` |
 
 - **04는 X를 복사하지 않습니다.** 그래서 분할 기준을 바꿔도 21GB 재복사가
   아니라 수 MB짜리 인덱스만 다시 만들면 됩니다. 이 구조 덕에 분할 실험이 쌉니다.
-- **05는 낡은 산출물을 자동으로 감지합니다.** 기존 `X_*.npy`의 shape가 현재
-  인덱스와 다르면 `--force` 없이도 경고 후 재생성하고, 일치하면 스킵합니다.
-  경계를 바꾼 뒤 `--force`를 깜빡해 X와 인덱스가 어긋난 채 남는 사고를 막습니다.
+- **05는 항상 X를 새로 복사합니다.** 인덱스와 X 데이터가 엇갈리는
+  데이터 꼬임 현상을 막기 위해, 파일 존재 여부와 상관없이 매번 동기화하여
+  생성합니다.
 - **06을 다시 돌리면 manifest의 모든 해시가 갱신됩니다.** 이전 해시는 무효가
   되니, 데이터를 이미 공유했다면 새 manifest도 같이 넘기세요.
 
@@ -195,8 +195,6 @@ accuracy/F1이 아니라 **ROC-AUC와 고정 FPR에서의 TPR**을 씁니다.
 - **`UnicodeDecodeError`로 .jsonl 읽기 실패** — Windows 기본 인코딩이 cp949라
   그렇습니다. `encoding="utf-8"` 명시.
 - **"이미 완료되었습니다"만 찍고 끝남** — `.state` 마커 때문입니다. `--force`.
-- **05가 X_tr을 스킵함** — 정상입니다. shape가 인덱스와 일치한다는 뜻입니다.
-  강제로 다시 만들려면 `--force`.
 - **lockbox 파일 쓰기 실패** — 06이 0o444로 봉인해서 그렇습니다. 05가
   `ensure_writable()`로 자동으로 풉니다. 수동이면 `attrib -r <파일>`.
 - **디스크 부족** — 01의 `--min-free-gb`가 미리 잡아줍니다. HF 캐시가 별도

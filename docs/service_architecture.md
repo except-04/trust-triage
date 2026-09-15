@@ -1185,7 +1185,7 @@ M4 초기에 아래 사항을 최종 결정하고 본 문서를 업데이트합�
 # 19. 문서 간 관계
 
 ```text
-pipeline_architecture.md
+pipeline_architecture_v3.md
 │
 │ "분석이 어떤 순서로 진행되는가?"
 │
@@ -1211,7 +1211,7 @@ service_architecture.md     interface_spec.md
        ↓
 3. interface_spec.md 영향 확인
        ↓
-4. pipeline_architecture.md 영향 확인
+4. pipeline_architecture_v3.md 영향 확인
        ↓
 5. 담당 모듈 구현
        ↓

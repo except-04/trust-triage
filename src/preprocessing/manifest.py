@@ -114,7 +114,7 @@ val / calib / eval의 폭이 모두 6주로 같으므로 구간별 성능 저하
   `valid_mask_*.npy`(-1이 아닌 행 = True)만 별도로 넣어두었습니다.
   최종 평가 시점에 마스크를 적용하세요.
 * 파일은 읽기 전용(0o444)이며 sha256이 manifest.json에 기록되어 있습니다.
-* challenge는 **전부 악성**입니다. 정확도나 AUC는 의미가 없고, eval에서 정한
+* challenge는 **전부 악성**입니다. 정확도나 AUC는 의미가 없고, Calibration에서 정한
   임계값에서의 탐지율(recall)로만 봐야 합니다.
 * challenge에는 APK/ELF/PDF도 섞여 있습니다. Win32/Win64만 보려면
   `arch_challenge.npy`로 필터링하세요. 필터 후 표본이 작으므로 신뢰구간을

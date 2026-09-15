@@ -1,10 +1,10 @@
 """
     Feature Importance 기준 교차 검증 ㅡ split vs gain
-    
-    Baseline 500개 선택은 LightGBM 기본값인 split(분기 사용 빈도) 기준으로 뽑았다. 
+
+    Baseline 500개 선택은 LightGBM 기본값인 split(분기 사용 빈도) 기준으로 뽑았다.
     gain(오차 감소 기여도) 기준과 비교해 얼마나 겹치는지 확인해, 어느 기준으로 봐도 비슷한 특징이 중요하다는 것을 교차 검증한다.
-    저장된 모델을 불러와서 확인한다. 
-        
+    저장된 모델을 불러와서 확인한다.
+
 """
 
 import mlflow

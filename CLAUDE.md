@@ -56,7 +56,7 @@ Key invariant repeated throughout this module: **training data and a live extrac
 
 ### `src/preprocessing/` — EMBER2024 dataset pipeline (one-time / offline, not part of the shipped service)
 
-Six numbered stage scripts (`download.py` … `manifest.py`, run via `run_all.ps1`/`run_all.sh`) turn raw EMBER2024 Win32/Win64 data into a reproducible, time-based train/calibration/eval split plus a sealed lockbox (test/challenge). Each stage writes a completion marker under `.state/` so reruns skip finished stages (`--force` to redo). `src/preprocessing/README.md` documents *why* each design choice was made — read it before touching this pipeline; the highlights:
+Six numbered stage scripts (`download.py` … `manifest.py`, run via `python materialize.py` 등) turn raw EMBER2024 Win32/Win64 data into a reproducible, time-based train/calibration/eval split plus a sealed lockbox (test/challenge). Each stage writes a completion marker under `.state/` so reruns skip finished stages (`--force` to redo). `src/preprocessing/README.md` documents *why* each design choice was made — read it before touching this pipeline; the highlights:
 
 - **Time-based split only**, via `week_id`: weeks 0–33 = train, 34–39 = validation, 40–45 = calibration, 46–51 = eval. Never re-split randomly/by stratification — EMBER2024 is explicitly non-IID over time, and calibration/eval must stay equal-width (6 weeks each) so eval's performance drift is a valid proxy for lockbox drift.
 - **Never call `thrember.read_vectorized_features()`** — it materializes the full matrix in RAM (~21GB+). Use `common.open_dat()` / `np.memmap` instead; `common.py`'s `Layout` class centralizes the on-disk directory structure (`dataset/`, `out/dev/`, `out/lockbox/`, `out/index/`, `out/reports/`).
@@ -72,14 +72,14 @@ Standalone scripts (not a package) that train/compare LightGBM baselines against
 ### `docs/` — cross-team contracts (source of truth over code comments where they conflict)
 
 - `docs/feature_schema.md` — canonical list of every feature name/block the extraction module must produce and the model/calibration/JRR teams consume. Do not introduce feature names not listed here without a full-team doc update first.
-- `docs/docs_api_contract.md` — draft REST endpoints for the not-yet-built FastAPI service (`/analyze/file`, `/analyze/hash`, `/queue/*`, `/review/{file_id}/verdict`) and the Slack alert payload shape.
+- `docs/docs_api_contract.md` — draft REST endpoints for the backend API service (refer to `docs/backend-api/api-reference.md` for the actual HTTP contract).
 - `docs/docs_eval_lockbox_policy.md` — binding policy: metrics (ROC-AUC + TPR@FPR only), threshold-from-calibration-only rule, lockbox handling, kill-test criteria for the Joint Risk Router and the Speakeasy emulation extension.
 - `docs/docs_sqlite_schema.md` — (Legacy) planned SQLite schema. See PostgreSQL `schema.sql` and `docs/backend-api/storage.md` instead.
 - `docs/feature-extraction/` — feature-extraction module docs: `feature-extraction.md` (usage), `feature-selection.md` (selection-manifest contract), `ember-v3-schema.json` (schema manifest asserted against at runtime by `test_documented_ember_schema_matches_runtime_schema`), `plan.md` (module status/roadmap).
 
 ## Testing notes
 
-- `tests/test_feature_extraction.py` is the only test module; it exercises real PE fixtures copied from the local Windows install (`sys.executable`, `notepad.exe`, `RegAsm.exe`) and skips gracefully when a fixture isn't available on the machine (e.g. non-Windows, missing `WINDIR`) — don't "fix" a skip by hardcoding a path.
+- Various tests are located in `tests/` (e.g., `test_feature_extraction.py`, `test_shap_lightgbm.py`); they exercise real PE fixtures copied from the local Windows install (`sys.executable`, `notepad.exe`, `RegAsm.exe`) and skip gracefully when a fixture isn't available on the machine (e.g. non-Windows, missing `WINDIR`) — don't "fix" a skip by hardcoding a path.
 - Some tests assert the checked-in schema/selection JSON docs (`docs/feature-extraction/ember-v3-schema.json`, `feature-selection-ember-v3-top500.json`) match the *runtime* schema produced by the installed `thrember` version — if you change feature groups or the pinned thrember commit, update these JSON files too or the tests will fail by design.
 
 ## Source of truth
