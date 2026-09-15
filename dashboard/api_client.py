@@ -12,6 +12,8 @@ import requests
 BASE_URL = os.getenv("TRUST_TRIAGE_API", "http://127.0.0.1:8000").rstrip("/")
 API_TOKEN = os.getenv("TRUST_TRIAGE_API_TOKEN", "")
 TIMEOUT_SEC = 30
+# ZIP은 백엔드가 해제·항목 검증까지 수행하므로(기본 상한 60초) 더 오래 기다린다.
+ZIP_TIMEOUT_SEC = 150
 
 
 class ApiError(Exception):
@@ -49,10 +51,14 @@ def _to_api_error(response):
     )
 
 
-def _request(method, path, **kwargs):
+def _request(method, path, *, timeout=None, **kwargs):
     try:
         response = requests.request(
-            method, f"{BASE_URL}{path}", headers=_headers(), timeout=TIMEOUT_SEC, **kwargs
+            method,
+            f"{BASE_URL}{path}",
+            headers=_headers(),
+            timeout=timeout or TIMEOUT_SEC,
+            **kwargs,
         )
     except requests.RequestException as e:
         # 백엔드가 아예 안 떠 있는 경우. 화면이 두 종류의 실패를
@@ -82,6 +88,16 @@ def upload_batch(files_):
     """여러 파일을 한 번에 접수한다. files_: [(filename, content), ...]"""
     payload = [("files", (name, content, "application/octet-stream")) for name, content in files_]
     return _request("POST", "/batches", files=payload)
+
+
+def upload_zip(filename, content):
+    """ZIP 한 개를 접수한다. 해제·내부 PE 검증·보안 검사는 백엔드가 수행한다.
+
+    필드 이름은 files가 아니라 file 하나다 (POST /batches/zip 계약).
+    반환: batch_id / entries / analyses / accepted_count / skipped_count ...
+    """
+    files = {"file": (filename, content, "application/zip")}
+    return _request("POST", "/batches/zip", files=files, timeout=ZIP_TIMEOUT_SEC)
 
 
 def get_status(analysis_id):
