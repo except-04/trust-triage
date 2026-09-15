@@ -97,6 +97,17 @@ def get_result(analysis_id):
     return _request("GET", f"/analyses/{analysis_id}")
 
 
+def get_batch(batch_id):
+    """묶음 전체의 진행 상황과 결과를 한 번에 조회한다. 배치 폴링용.
+
+    파일별 /status + /analyses 반복 조회를 이 한 번으로 대체한다.
+    응답의 analyses 항목은 get_result()와 같은 종합 결과 형태다.
+
+    반환: batch_id / status / status_counts / finished_count / summary / analyses ...
+    """
+    return _request("GET", f"/batches/{batch_id}")
+
+
 def health():
     """서버가 살아 있는지 확인한다."""
     return _request("GET", "/health")
