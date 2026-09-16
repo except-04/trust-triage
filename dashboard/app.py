@@ -1,5 +1,6 @@
 import hashlib
 import api_client
+import re
 import time
 from html import escape
 from uuid import uuid4
@@ -20,6 +21,23 @@ ARCHIVE_EXTENSIONS = (".zip",)
 # /batches 한 번에 보낼 수 있는 PE 개수. 백엔드 기본값(BACKEND_MAX_BATCH_FILES)을
 # 반영한 사전 안내용이며, 최종 판단은 백엔드가 한다.
 MAX_BATCH_FILES = 10
+# 해시 검색 입력 검증. 백엔드 GET /analyses 의 sha256 필터와 같은 정규식이라
+# 형식이 어긋난 입력은 422를 받기 전에 프론트에서 막는다.
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+# 한 번에 가져올 이력 건수. 백엔드 limit 상한은 100이다.
+HASH_SEARCH_LIMIT = 20
+# 상세 화면이 서식 문자열에서 직접 인덱싱하는 값들. 하나라도 비어 있으면
+# 렌더 도중 TypeError가 나므로 상세 전환 전에 존재를 확인한다.
+DETAIL_REQUIRED_FIELDS = (
+    "route",
+    "raw_probability",
+    "calibrated_probability",
+    "disagreement",
+    "ood_score",
+    "difficulty_score",
+)
+# 검색이 쓰는 session_state 키. 접수/폴링 키와 겹치지 않게 한곳에 모아 둔다.
+HASH_SEARCH_KEYS = ("hash_search", "hash_search_error", "hash_search_selector")
 
 
 def reset_analysis_result():
@@ -35,6 +53,7 @@ def reset_analysis_result():
     st.session_state.pop("poll_started_at", None)
     st.session_state.pop("poll_timed_out", None)
     st.session_state.pop("intake_receipt", None)
+    st.session_state.pop("batch_filter_query", None)
 
 
 def reset_analysis_session():
@@ -872,6 +891,24 @@ def load_mock_analysis(analysis_id, batch_data=None):
     return None
 
 
+def filter_batch_analyses(analyses, query):
+    """현재 배치 결과에서 파일명 또는 SHA-256으로 찾는다. 백엔드는 부르지 않는다.
+
+    파일명은 대소문자를 무시한 부분 일치, SHA-256도 부분 일치다. 화면 머리말이
+    해시를 앞 12자리...뒤 8자리로 잘라 보여주므로, 어느 쪽을 복사해 붙여도
+    맞도록 앞부분만이 아니라 부분 문자열로 비교한다. 빈 검색어는 전부 돌려준다.
+    """
+    needle = (query or "").strip().lower()
+    if not needle:
+        return analyses
+    return [
+        analysis
+        for analysis in analyses
+        if needle in (analysis.get("filename") or "").lower()
+        or needle in (analysis.get("sha256") or "").lower()
+    ]
+
+
 def group_batch_analyses(analyses):
     """Partition results by analyst workflow priority."""
     groups = {
@@ -979,6 +1016,233 @@ def render_intake_notice(target, receipt):
             width="stretch",
             height=min(38 * (len(skipped) + 1), 220),
         )
+
+
+def normalize_hash_query(value):
+    """검색어를 백엔드가 받는 형태로 맞춘다.
+
+    붙여넣기에는 앞뒤 공백이, 도구 출력에는 대문자 해시가 섞여 들어온다.
+    백엔드 정규식은 소문자만 받으므로 여기서 한 번 정규화한다.
+    """
+    return (value or "").strip().lower()
+
+
+def is_valid_sha256(value):
+    return SHA256_PATTERN.fullmatch(value or "") is not None
+
+
+def search_result_view(full):
+    """검색 응답 한 건을 상세 화면이 읽는 평면 뷰로 옮긴다.
+
+    GET /analyses 의 analyses 항목은 GET /analyses/{id} 와 같은 종합 결과라서
+    to_view()를 그대로 쓸 수 있다. 다만 to_view()는 filename/sha256/size를
+    previous에서 물려받는 전제이므로, 접수 경로의 entry_view()가 채우던
+    기본 키를 여기서 응답으로 직접 채운다.
+    """
+    base = {
+        "analysis_id": full.get("analysis_id"),
+        "batch_id": full.get("batch_id"),
+        "created_at": full.get("created_at"),
+        "sha256": full.get("sha256") or "",
+        "filename": full.get("filename") or "(이름 없음)",
+        "file_size": full.get("size_bytes") or 0,
+    }
+    return to_view(full, base)
+
+
+def detail_blocker(analysis):
+    """상세 화면으로 보낼 수 없는 이유. 보낼 수 있으면 None.
+
+    상태가 COMPLETED여도 예외가 아니다. prediction/risk_signals는 백엔드
+    스키마상 null이 될 수 있는데, 상세 화면은 그 값들을 `{...:.1%}` 처럼
+    직접 서식에 넣으므로 비어 있으면 화면이 뜨는 대신 예외가 난다.
+    이 경우 목록 표시까지만 하고 전환을 막는다.
+    """
+    status = analysis.get("status")
+    if status != "COMPLETED":
+        return f"완료된 분석만 상세 화면으로 열 수 있습니다. (상태: {status or '알 수 없음'})"
+
+    missing = [key for key in DETAIL_REQUIRED_FIELDS if analysis.get(key) is None]
+    if missing:
+        return (
+            "상세 화면에 필요한 모델 결과가 이 이력에 없습니다: "
+            + ", ".join(missing)
+        )
+    return None
+
+
+def clear_hash_search():
+    """검색 결과만 비운다. 입력창 값은 그대로 둔다(위젯 키는 건드리지 않는다)."""
+    for key in HASH_SEARCH_KEYS:
+        st.session_state.pop(key, None)
+
+
+def run_hash_search(query):
+    """해시 하나를 조회해 결과를 검색 전용 키에만 남긴다.
+
+    조회만으로는 batch/polling 상태를 전혀 바꾸지 않는다. 진행 중인 접수를
+    검색이 끊어 놓지 않기 위해서다.
+    """
+    st.session_state.pop("hash_search", None)
+    st.session_state.pop("hash_search_selector", None)
+
+    if not is_valid_sha256(query):
+        st.session_state.hash_search_error = (
+            "SHA-256은 16진수 64자리여야 합니다. 입력을 확인하세요."
+        )
+        return
+
+    st.session_state.pop("hash_search_error", None)
+    try:
+        with st.spinner("분석 이력을 조회하는 중입니다..."):
+            response = api_client.search_analyses(
+                query, limit=HASH_SEARCH_LIMIT, sort="newest"
+            )
+    except ApiError as e:
+        st.session_state.hash_search_error = f"검색 실패: {e.message} (코드 {e.code})"
+        return
+
+    st.session_state.hash_search = {
+        "query": query,
+        # 없는 해시는 404가 아니라 total_count 0으로 온다. 결과 없음은 건수로 본다.
+        "total_count": response.get("total_count") or 0,
+        "analyses": [
+            search_result_view(item) for item in (response.get("analyses") or [])
+        ],
+    }
+
+
+def open_search_result(analysis_id):
+    """검색 결과 한 건을 기존 상세 화면으로 넘긴다.
+
+    접수 흐름과 상세 화면은 analysis_result/batch_data를 함께 쓴다. 배치
+    상태를 남겨 두면 상세 대신 폴링 패널이나 배치 표가 먼저 뜨고,
+    sync_selected_analysis()가 analysis_result를 덮어쓴다. 그래서 전환
+    직전에 배치·폴링 상태를 비운다.
+
+    selected_analysis_id는 일부러 비워 둔 채로 남긴다 — 값이 남아 있으면
+    다음 접수에서 commit_receipt()가 첫 분석을 자동 선택하지 못한다.
+
+    반환: 전환했으면 True
+    """
+    search = st.session_state.get("hash_search") or {}
+    selected = next(
+        (
+            analysis
+            for analysis in search.get("analyses") or []
+            if analysis.get("analysis_id") == analysis_id
+        ),
+        None,
+    )
+    if selected is None or detail_blocker(selected):
+        return False
+
+    reset_analysis_result()
+    clear_hash_search()
+    st.session_state.analysis_result = selected
+    return True
+
+
+def hash_search_rows(analyses):
+    """백엔드가 실제로 주는 필드만 표로 옮긴다."""
+    return [
+        {
+            "Created At": analysis.get("created_at") or "-",
+            "Analysis ID": analysis.get("analysis_id") or "-",
+            "File": analysis.get("filename") or "-",
+            "Status": analysis.get("status") or "-",
+            "Initial Verdict": analysis.get("initial_verdict") or "-",
+            "Final Verdict": analysis.get("final_verdict") or "-",
+        }
+        for analysis in analyses
+    ]
+
+
+def render_hash_search_results(target):
+    """조회 결과를 목록으로 보여주고, 열 수 있는 건만 상세로 잇는다."""
+    search = st.session_state.get("hash_search")
+    if not search:
+        return
+
+    analyses = search.get("analyses") or []
+    total = search.get("total_count") or 0
+    if not analyses:
+        target.info(
+            "이 SHA-256으로 접수된 분석 이력이 없습니다. "
+            f"({truncate_hash(search.get('query') or '-')})"
+        )
+        return
+
+    rows = hash_search_rows(analyses)
+    target.caption(f"분석 이력 {total}건")
+    if total > len(analyses):
+        # 이번 브랜치는 페이지 이동 UI 없이 최신 구간만 보여준다.
+        target.info(f"이력이 {total}건입니다. 최신 {len(analyses)}건만 표시합니다.")
+    target.dataframe(
+        rows,
+        hide_index=True,
+        width="stretch",
+        height=min(38 * (len(rows) + 1), 300),
+    )
+
+    analysis_by_id = {analysis["analysis_id"]: analysis for analysis in analyses}
+    selector_key = "hash_search_selector"
+    selected_id = target.selectbox(
+        "상세 보기할 분석 선택",
+        options=list(analysis_by_id),
+        format_func=lambda analysis_id: (
+            f"{analysis_by_id[analysis_id]['filename']} · "
+            f"{analysis_by_id[analysis_id]['status']} · {analysis_id}"
+        ),
+        key=selector_key,
+    )
+    selected = analysis_by_id.get(
+        selected_id or st.session_state.get(selector_key) or next(iter(analysis_by_id))
+    )
+    if selected is None:
+        return
+
+    blocker = detail_blocker(selected)
+    if blocker:
+        target.info(blocker)
+        return
+
+    if target.button("상세 보기", key="hash_search_open", type="primary"):
+        if open_search_result(selected["analysis_id"]):
+            st.rerun()
+
+
+def render_hash_search():
+    """업로드 패널 아래의 SHA-256 분석 이력 검색 패널.
+
+    접수(unified upload)와 폴링에는 관여하지 않는다. 조회만으로는 어떤
+    batch/polling 상태도 바꾸지 않고, 사용자가 상세 보기를 누른 순간에만
+    화면을 기존 상세 결과로 전환한다.
+    """
+    panel = st.container(border=True, key="hash_search_panel")
+    panel.markdown(
+        '<div class="batch-panel-title">분석 이력 검색</div>',
+        unsafe_allow_html=True,
+    )
+    panel.caption(
+        "SHA-256으로 지난 분석을 찾습니다. 같은 파일을 여러 번 접수했으면 "
+        "이력이 모두 나옵니다."
+    )
+
+    query_col, button_col = panel.columns([5, 1])
+    raw_query = query_col.text_input(
+        "SHA-256",
+        key="hash_search_input",
+        placeholder="소문자/대문자 구분 없이 64자리 SHA-256",
+        label_visibility="collapsed",
+    )
+    if button_col.button("검색", key="hash_search_button", width="stretch"):
+        run_hash_search(normalize_hash_query(raw_query))
+
+    error = st.session_state.get("hash_search_error")
+    if error:
+        panel.error(error)
+    render_hash_search_results(panel)
 
 
 def render_input_view():
@@ -1196,8 +1460,15 @@ def render_batch_group_results(group_key, analyses):
 
 
 def render_batch_triage(batch_data):
-    """Render the analyst-first Batch Summary and result navigation."""
-    groups = group_batch_analyses(batch_data["analyses"])
+    """Render the analyst-first Batch Summary and result navigation.
+
+    파일 검색은 그룹으로 나누기 직전에 목록을 한 번 거르는 것으로 끝난다.
+    그룹 라벨 건수·표·선택 위젯·상세 연결은 걸러진 목록을 그대로 받아
+    동작하므로 따로 손대지 않는다. 검색 결과가 없으면 안내만 남기고
+    여기서 멈춘다 — 아래 상세 화면이 직전에 고른 파일을 계속 보여 주면
+    "없음" 안내와 어긋나기 때문이다. analysis_result는 비우지 않으므로
+    검색어를 지우거나 결과가 다시 생기면 이전 화면으로 그대로 돌아온다.
+    """
     labels = {
         "needs_review": "Needs Review",
         "auto_malicious": "Auto Malicious",
@@ -1210,6 +1481,22 @@ def render_batch_triage(batch_data):
     with batch_area:
         render_batch_summary(batch_data)
         render_intake_notice(st, batch_data)
+
+        query = st.text_input(
+            "파일명 또는 SHA-256으로 찾기",
+            key="batch_filter_query",
+            placeholder="파일명 일부 또는 SHA-256 일부",
+        )
+        analyses = batch_data["analyses"]
+        matched = filter_batch_analyses(analyses, query)
+        searching = bool((query or "").strip())
+        if searching:
+            st.caption(f"검색 결과 {len(matched)}건 / 전체 {len(analyses)}건")
+            if not matched:
+                st.info("검색 조건에 맞는 파일이 없습니다.")
+                st.stop()
+        groups = group_batch_analyses(matched)
+
         st.markdown(
             '<div class="batch-section-heading">분석 결과 분류</div>',
             unsafe_allow_html=True,
@@ -1236,6 +1523,17 @@ def render_batch_triage(batch_data):
             )
         group_key = group_key or "needs_review"
         render_batch_group_results(group_key, groups[group_key])
+        if searching and not groups[group_key]:
+            # 매칭은 있지만 지금 보는 그룹에는 없다. render_batch_group_results()는
+            # 빈 그룹에서 선택을 건드리지 않고 돌아오므로, 그대로 두면 검색과
+            # 무관한 직전 파일의 상세가 아래에 남는다. 그룹 위젯은 이미 그려졌으니
+            # 사용자가 건수가 표시된 그룹을 고르면 기존 선택 로직이 상세를 잇는다.
+            # 그룹·선택·analysis_result는 바꾸지 않는다 — 검색어를 지우면 그대로 복귀.
+            st.info(
+                f"검색 결과 {len(matched)}건은 다른 그룹에 있습니다. "
+                "위 분류에서 건수가 표시된 그룹을 선택하세요."
+            )
+            st.stop()
         st.markdown(
             '<div class="detail-section-break">선택 파일 상세 분석</div>',
             unsafe_allow_html=True,
@@ -1856,6 +2154,7 @@ result = st.session_state.analysis_result
 
 if result is None:
     render_input_view()
+    render_hash_search()
 
 else:
     batch_data = st.session_state.get("batch_data")
