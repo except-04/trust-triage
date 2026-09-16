@@ -34,6 +34,7 @@ def reset_analysis_result():
     st.session_state.pop("group_analysis_selector", None)
     st.session_state.pop("poll_started_at", None)
     st.session_state.pop("poll_timed_out", None)
+    st.session_state.pop("intake_receipt", None)
 
 
 def reset_analysis_session():
@@ -598,17 +599,32 @@ def receipt_views(receipt, source):
     return analyses, skipped
 
 
-def submit_batch(file_descriptors):
+def submit_batch(file_descriptors, on_progress=None):
     """업로드를 백엔드에 접수하고, 결과가 아직 비어 있는 batch_data를 만든다.
 
     PE/DLL은 /batches 한 번으로, ZIP은 파일당 /batches/zip 한 번으로 보낸다.
     백엔드가 요청마다 batch_id를 새로 발급하므로 한 화면이 여러 배치를 갖는다.
     한 요청이 실패해도 나머지 접수 결과는 버리지 않고 errors에 모아 알린다.
+
+    on_progress는 요청 하나가 끝날 때마다(성공/실패 모두) 그 시점까지 누적된
+    receipt로 호출된다. 여러 ZIP을 순차 접수하는 도중 뒤 요청이 실패하거나
+    화면이 다시 그려져도, 이미 백엔드가 받아 준 batch_id를 잃지 않기 위해서다.
+    batch_id를 잃으면 그 배치는 접수만 되고 폴링할 방법이 없어진다.
     """
     pe_files = [d for d in file_descriptors if d["kind"] == "PE"]
     zip_files = [d for d in file_descriptors if d["kind"] == "ZIP"]
 
-    batch_ids, analyses, skipped, errors = [], [], [], []
+    # 누적 대상은 이 dict 하나다. on_progress에 넘기는 것도 같은 객체이므로
+    # 중간 저장 시점마다 "그때까지 확보한 전부"가 그대로 전달된다.
+    receipt = {"batch_ids": [], "analyses": [], "skipped": [], "errors": []}
+    batch_ids = receipt["batch_ids"]
+    analyses = receipt["analyses"]
+    skipped = receipt["skipped"]
+    errors = receipt["errors"]
+
+    def commit():
+        if on_progress is not None:
+            on_progress(receipt)
 
     # 백엔드가 받지 않는 확장자는 요청을 보내지 않고 화면에서만 알린다
     for descriptor in file_descriptors:
@@ -625,14 +641,18 @@ def submit_batch(file_descriptors):
 
     def collect(call, source, label):
         try:
-            receipt = call()
+            response = call()
         except ApiError as e:
             errors.append({"filename": label, "code": e.code, "message": e.message})
+            # 실패 사유도 즉시 남긴다. 앞서 성공한 접수는 이미 저장되어 있다.
+            commit()
             return
-        batch_ids.append(receipt["batch_id"])
-        accepted, dropped = receipt_views(receipt, source)
+        batch_ids.append(response["batch_id"])
+        accepted, dropped = receipt_views(response, source)
         analyses.extend(accepted)
         skipped.extend(dropped)
+        # 접수 성공 직후 저장한다. 다음 요청이 무엇을 하든 이 결과는 남는다.
+        commit()
 
     if pe_files:
         payload = [(d["filename"], d["content"]) for d in pe_files]
@@ -649,12 +669,11 @@ def submit_batch(file_descriptors):
             descriptor["filename"],
         )
 
-    return {
-        "batch_ids": batch_ids,
-        "analyses": analyses,
-        "skipped": skipped,
-        "errors": errors,
-    }
+    # 보낼 요청이 하나도 없었던 경우(전건 OTHER)에도 제외 사유는 저장한다
+    if not pe_files and not zip_files:
+        commit()
+
+    return receipt
 
 def refresh_pending(batch_data):
     """끝나지 않은 분석들의 상태를 백엔드에 다시 묻고 갱신한다.
@@ -891,14 +910,26 @@ def deep_analysis_status_text(analysis):
     return "QUEUED"
 
 
-def store_mock_batch(batch_data):
-    """Persist the accepted batch using the existing session-state contract.
+def commit_receipt(batch_data):
+    """접수 결과를 그 시점 그대로 session_state에 반영한다.
 
-    분석 작업으로 등록된 건이 하나도 없으면 결과 화면으로 넘기지 않고 False를
-    돌려준다. 전건 SKIPPED인 ZIP처럼 백엔드가 202 + analyses: [] 를 정상 반환하는
-    경우가 있기 때문이다.
+    submit_batch()가 요청 하나를 끝낼 때마다 호출하므로, 여러 ZIP 중 뒤 요청이
+    실패하거나 중간에 화면이 다시 그려져도 앞서 성공한 batch_id/analyses/제외
+    사유는 이미 저장되어 있다. 같은 접수의 뒤 호출은 누적된 상태를 덮어쓴다.
+
+    분석 작업으로 등록된 건이 하나도 없으면 batch_id와 제외 사유만 저장하고
+    결과 화면으로는 넘기지 않는다(False). 전건 SKIPPED인 ZIP처럼 백엔드가
+    202 + analyses: [] 를 정상 반환하는 경우가 있기 때문이다. 이때 batch_data는
+    저장하지 않는다 — analyses가 빈 batch_data가 폴링 경로로 들어가면 조회할
+    대상 없이 완료 판정이 나기 때문이다.
+
+    반환: 결과 화면으로 넘길 수 있으면(등록된 분석이 하나 이상) True
     """
     analyses = batch_data.get("analyses") or []
+
+    # 접수 단계의 제외/실패 사유는 등록된 분석이 없어도 화면에 남겨야 한다
+    st.session_state.intake_receipt = batch_data
+
     if not analyses:
         return False
 
@@ -910,11 +941,12 @@ def store_mock_batch(batch_data):
     st.session_state.batch_data = batch_data
     st.session_state.batch_ids = batch_id_list(batch_data)
     st.session_state.batch_results = analyses
-    st.session_state.selected_analysis_id = initial_analysis["analysis_id"]
-    st.session_state.analysis_result = initial_analysis
-    # 새 배치이므로 폴링 타이머를 다시 시작한다
-    st.session_state.poll_started_at = time.monotonic()
-    st.session_state.poll_timed_out = False
+    if not st.session_state.get("selected_analysis_id"):
+        st.session_state.selected_analysis_id = initial_analysis["analysis_id"]
+        st.session_state.analysis_result = initial_analysis
+        # 첫 분석이 등록된 시점부터 폴링 상한을 센다
+        st.session_state.poll_started_at = time.monotonic()
+        st.session_state.poll_timed_out = False
     return True
 
 
@@ -1013,17 +1045,22 @@ def render_input_view():
         type="primary",
         disabled=not file_descriptors or bool(blocking),
     ):
+        # 새 접수는 이전 접수 결과를 비우고 처음부터 누적한다
+        reset_analysis_result()
         try:
-            receipt = submit_batch(file_descriptors)
+            receipt = submit_batch(file_descriptors, on_progress=commit_receipt)
         except ApiError as e:
             input_panel.error(f"접수 실패: {e.message}")
         else:
-            if store_mock_batch(receipt):
+            if commit_receipt(receipt):
                 st.rerun()
             input_panel.info(
                 "분석 작업으로 등록된 파일이 없습니다. 아래 사유를 확인하세요."
             )
             render_intake_notice(input_panel, receipt)
+    elif st.session_state.get("intake_receipt"):
+        # 접수 도중 화면이 다시 그려진 경우에도 직전 접수 결과는 남겨 둔다
+        render_intake_notice(input_panel, st.session_state["intake_receipt"])
 
 
 def render_batch_summary(batch_data):
