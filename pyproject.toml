@@ -13,3 +13,5 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "trust_triage.backend_api" = ["schema.sql"]
+"trust_triage.speakeasy_worker" = ["schema.sql"]
+"trust_triage.deep_analysis" = ["service_schema.sql"]

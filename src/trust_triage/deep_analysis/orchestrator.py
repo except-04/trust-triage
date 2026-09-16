@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .checkpoints import StaticAnalysisCheckpoint, tool_snapshot
 from .models import (
     AnalysisTier,
     DeepAnalysisDisposition,
@@ -23,7 +25,6 @@ from .normalizer import (
     normalize_floss_result,
     normalize_speakeasy_result,
 )
-
 
 DEFAULT_DEEP_ROUTES = frozenset(
     {
@@ -62,6 +63,24 @@ class DeepAnalysisConfig:
                 raise ValueError(f"{field_name} must be between 0 and 1")
         if self.max_floss_evidence_strings < 1:
             raise ValueError("max_floss_evidence_strings must be positive")
+
+    def fingerprint(self) -> str:
+        """Persist the policy identity so a resumed run cannot change its routing rules."""
+
+        payload = {
+            "schema_version": "deep-policy-v1",
+            "deep_routes": sorted(self.deep_routes),
+            "minimum_weighted_score": self.evidence_policy.minimum_weighted_score,
+            "minimum_mapped_techniques": self.evidence_policy.minimum_mapped_techniques,
+            "capa_reliability": self.capa_reliability,
+            "floss_reliability": self.floss_reliability,
+            "max_floss_evidence_strings": self.max_floss_evidence_strings,
+            "speakeasy_reliability": self.speakeasy_reliability,
+            "enable_ghidra_capa": self.enable_ghidra_capa,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, allow_nan=False).encode("utf-8")
+        ).hexdigest()
 
     def requires_deep_analysis(self, initial_route: str) -> bool:
         return str(initial_route).upper() in self.deep_routes
@@ -105,7 +124,48 @@ class DeepAnalysisOrchestrator:
         initial_verdict: str | None = None,
         sha256: str | None = None,
     ) -> DeepAnalysisResult:
-        """Run the bounded flow for one PE and return a serializable result."""
+        """Keep the existing synchronous API while sharing the staged flow."""
+
+        checkpoint = self.prepare(
+            sample_path,
+            initial_route=initial_route,
+            initial_verdict=initial_verdict,
+            sha256=sha256,
+        )
+        if isinstance(checkpoint, DeepAnalysisResult):
+            return checkpoint
+        if not checkpoint.needs_speakeasy:
+            return self.finalize_static(checkpoint)
+        if self.speakeasy_analyzer is None:
+            return self._failed(
+                sha256=checkpoint.sha256,
+                initial_route=checkpoint.initial_route,
+                initial_verdict=checkpoint.initial_verdict,
+                executed_tiers=list(checkpoint.executed_tiers),
+                evidence=list(checkpoint.evidence),
+                tool_statuses=checkpoint.tool_statuses,
+                reason_codes=checkpoint.reason_codes,
+                errors=(*checkpoint.errors, "Speakeasy analyzer is not configured"),
+                assessment=checkpoint.assessment,
+            )
+        try:
+            result = self.speakeasy_analyzer.analyze(Path(sample_path))
+        except Exception as exc:  # noqa: BLE001 - preserve tool failure for review.
+            result = {
+                "status": "TOOL_ERROR",
+                "errors": [f"Speakeasy analyzer raised {type(exc).__name__}: {exc}"],
+            }
+        return self.resume_speakeasy(checkpoint, result, sample_path=sample_path)
+
+    def prepare(
+        self,
+        sample_path: str | Path,
+        *,
+        initial_route: str,
+        initial_verdict: str | None = None,
+        sha256: str | None = None,
+    ) -> StaticAnalysisCheckpoint | DeepAnalysisResult:
+        """Run CAPA/FLOSS once; return a checkpoint before Speakeasy or LLM."""
 
         path = Path(sample_path)
         route = str(initial_route).upper()
@@ -158,7 +218,7 @@ class DeepAnalysisOrchestrator:
                     )
                 )
                 errors.extend(_result_errors(capa_result))
-            except Exception as exc:  # Boundary: preserve tool failure for review.
+            except Exception as exc:  # noqa: BLE001 - preserve tool failure for review.
                 capa_status = "TOOL_ERROR"
                 errors.append(f"CAPA analyzer raised {type(exc).__name__}: {exc}")
         tool_statuses[AnalysisTier.CAPA.value] = capa_status
@@ -185,7 +245,7 @@ class DeepAnalysisOrchestrator:
                     )
                 )
                 errors.extend(_result_errors(floss_result))
-            except Exception as exc:  # Boundary: preserve tool failure for review.
+            except Exception as exc:  # noqa: BLE001 - preserve tool failure for review.
                 floss_status = "TOOL_ERROR"
                 errors.append(f"FLOSS analyzer raised {type(exc).__name__}: {exc}")
             tool_statuses[AnalysisTier.FLOSS.value] = floss_status
@@ -193,51 +253,85 @@ class DeepAnalysisOrchestrator:
                 reason_codes.append(f"FLOSS_{floss_status}")
 
         static_last_tier = (
-            AnalysisTier.FLOSS
-            if floss_status == "SUCCESS"
-            else AnalysisTier.CAPA
+            AnalysisTier.FLOSS if floss_status == "SUCCESS" else AnalysisTier.CAPA
         )
         assessment = self.config.evidence_policy.assess(evidence)
         if assessment.sufficient:
             reason_codes.extend(assessment.reason_codes)
-            return self._complete(
-                sha256=sample_sha256 or _result_sha256(capa_result),
-                initial_route=route,
-                initial_verdict=verdict,
-                last_tier=static_last_tier,
-                executed_tiers=executed_tiers,
-                evidence=evidence,
-                tool_statuses=tool_statuses,
-                reason_codes=reason_codes,
-                errors=errors,
-                assessment=assessment,
+        else:
+            if capa_status != "SUCCESS":
+                reason_codes.append(f"CAPA_{capa_status}")
+            reason_codes.extend(assessment.reason_codes)
+            reason_codes.append("ADVANCE_TO_SPEAKEASY")
+        return StaticAnalysisCheckpoint(
+            sha256=sample_sha256 or _result_sha256(capa_result),
+            initial_route=route,
+            initial_verdict=verdict,
+            config_fingerprint=self.config.fingerprint(),
+            needs_speakeasy=not assessment.sufficient,
+            last_tier=static_last_tier,
+            assessment=assessment,
+            executed_tiers=tuple(executed_tiers),
+            evidence=tuple(evidence),
+            tool_statuses=tool_statuses,
+            reason_codes=tuple(reason_codes),
+            errors=tuple(errors),
+            tool_results={
+                "CAPA": tool_snapshot(capa_result, capa_status),
+                "FLOSS": tool_snapshot(floss_result, floss_status),
+            },
+        )
+
+    def finalize_static(
+        self, checkpoint: StaticAnalysisCheckpoint
+    ) -> DeepAnalysisResult:
+        """Interpret a persisted sufficient static checkpoint without rerunning tools."""
+
+        self._check_checkpoint_config(checkpoint)
+        if checkpoint.needs_speakeasy:
+            raise ValueError(
+                "Checkpoint requires a Speakeasy result before finalization"
             )
+        return self._complete(
+            sha256=checkpoint.sha256,
+            initial_route=checkpoint.initial_route,
+            initial_verdict=checkpoint.initial_verdict,
+            last_tier=checkpoint.last_tier,
+            executed_tiers=list(checkpoint.executed_tiers),
+            evidence=list(checkpoint.evidence),
+            tool_statuses=checkpoint.tool_statuses,
+            reason_codes=list(checkpoint.reason_codes),
+            errors=list(checkpoint.errors),
+            assessment=checkpoint.assessment,
+        )
 
-        if capa_status != "SUCCESS":
-            reason_codes.append(f"CAPA_{capa_status}")
-        reason_codes.extend(assessment.reason_codes)
-        reason_codes.append("ADVANCE_TO_SPEAKEASY")
+    def _check_checkpoint_config(self, checkpoint: StaticAnalysisCheckpoint) -> None:
+        if checkpoint.config_fingerprint != self.config.fingerprint():
+            raise ValueError("Deep-analysis configuration changed since the checkpoint")
 
-        # Tier 2 is supplied by the dynamic-analysis branch.  This branch
-        # only defines the contract and orchestration boundary.
-        if self.speakeasy_analyzer is None:
-            errors.append("Speakeasy analyzer is not configured")
-            return self._failed(
-                sha256=sample_sha256 or _result_sha256(capa_result),
-                initial_route=route,
-                initial_verdict=verdict,
-                executed_tiers=executed_tiers,
-                evidence=evidence,
-                tool_statuses=tool_statuses,
-                reason_codes=tuple(reason_codes),
-                errors=tuple(errors),
-                assessment=assessment,
-            )
+    def resume_speakeasy(
+        self,
+        checkpoint: StaticAnalysisCheckpoint,
+        speakeasy_result: Any,
+        *,
+        sample_path: str | Path | None = None,
+    ) -> DeepAnalysisResult:
+        """Resume from a completed Worker tool result, without repeating CAPA/FLOSS."""
 
+        self._check_checkpoint_config(checkpoint)
+        if not checkpoint.needs_speakeasy:
+            raise ValueError("Checkpoint does not request Speakeasy")
+        path = Path(sample_path) if sample_path is not None else None
+        sample_sha256 = checkpoint.sha256
+        route, verdict = checkpoint.initial_route, checkpoint.initial_verdict
+        capa_result = checkpoint.tool_results.get("CAPA")
+        executed_tiers = list(checkpoint.executed_tiers)
+        evidence = list(checkpoint.evidence)
+        tool_statuses = dict(checkpoint.tool_statuses)
+        reason_codes = list(checkpoint.reason_codes)
+        errors = list(checkpoint.errors)
         executed_tiers.append(AnalysisTier.SPEAKEASY)
-        speakeasy_result: Any | None = None
         try:
-            speakeasy_result = self.speakeasy_analyzer.analyze(path)
             speakeasy_status = _status_value(speakeasy_result) or "UNKNOWN"
             evidence.extend(
                 normalize_speakeasy_result(
@@ -247,11 +341,9 @@ class DeepAnalysisOrchestrator:
                 )
             )
             errors.extend(_result_errors(speakeasy_result))
-        except Exception as exc:  # Boundary: preserve tool failure for review.
+        except Exception as exc:  # noqa: BLE001 - preserve tool failure for review.
             speakeasy_status = "TOOL_ERROR"
-            errors.append(
-                f"Speakeasy analyzer raised {type(exc).__name__}: {exc}"
-            )
+            errors.append(f"Speakeasy analyzer raised {type(exc).__name__}: {exc}")
         tool_statuses[AnalysisTier.SPEAKEASY.value] = speakeasy_status
 
         assessment = self.config.evidence_policy.assess(evidence)
@@ -330,6 +422,19 @@ class DeepAnalysisOrchestrator:
                 assessment=assessment,
             )
 
+        if path is None:
+            return self._failed(
+                sha256=result_sha256,
+                initial_route=route,
+                initial_verdict=verdict,
+                executed_tiers=executed_tiers,
+                evidence=evidence,
+                tool_statuses=tool_statuses,
+                reason_codes=(*reason_codes, "GHIDRA_SAMPLE_NOT_AVAILABLE"),
+                errors=(*errors, "Ghidra CAPA requires the original sample"),
+                assessment=assessment,
+            )
+
         executed_tiers.append(AnalysisTier.GHIDRA_CAPA)
         ghidra_result: Any | None = None
         try:
@@ -342,7 +447,7 @@ class DeepAnalysisOrchestrator:
                 )
             )
             errors.extend(_result_errors(ghidra_result))
-        except Exception as exc:  # Boundary: preserve tool failure for review.
+        except Exception as exc:  # noqa: BLE001 - preserve tool failure for review.
             ghidra_status = "TOOL_ERROR"
             errors.append(f"Ghidra CAPA analyzer raised {type(exc).__name__}: {exc}")
         tool_statuses[AnalysisTier.GHIDRA_CAPA.value] = ghidra_status
@@ -409,7 +514,7 @@ class DeepAnalysisOrchestrator:
                     sha256=sha256,
                     initial_verdict=initial_verdict,
                 )
-            except Exception as exc:  # Boundary: keep LLM failure advisory only.
+            except Exception as exc:  # noqa: BLE001 - keep LLM failure advisory only.
                 llm_interpretation = LLMInterpretation(
                     status=LLMInterpretationStatus.API_ERROR,
                     model="",

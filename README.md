@@ -10,6 +10,12 @@ HTTP 서버와 분석 처리기는 별도 프로세스로 실행합니다. 실�
 
 DB·S3 등의 설정 예시는 루트의 [.env.backend.example](.env.backend.example)에 있습니다. 처음 설정할 때 이 파일을 `.env`로 복사해 실제 값을 채우고, 백엔드 실행 명령에 `--env-file .env`를 지정합니다.
 
+## Speakeasy Worker
+
+SQS 요청 수신, S3 원본 확인, 기존 Speakeasy 분석기 호출, PostgreSQL 상태·결과 저장을 담당하는 별도 프로세스입니다. 중복 수신 방지, 작업 점유 갱신, 재시도·DLQ 처리와 SHA-256 경로의 정규화 리포트 보관을 제공합니다.
+
+[실행 방법](docs/worker/speakeasy-worker.md), [Backend 연결·실행 절차](docs/worker/backend-integration.md), [요청·결과 계약](docs/worker/contracts.md), [환경변수 예시](.env.worker.example)를 참고하세요. Backend 처리기가 CAPA/FLOSS 결과를 저장하고 필요한 작업을 SQS에 전달하며, Worker 결과를 수신하면 저장된 단계에서 증거 반영·선택적 LLM 요약·전체 상태 갱신을 이어간다. Worker 완료는 Speakeasy 단계의 완료를 뜻한다. 실제 AWS 환경과 승인된 PE를 통한 검증은 배포 환경에서 수행해야 한다.
+
 ## 개발 환경 설정
 
 아래 과정은 Windows 환경을 기준으로 작성되었습니다.

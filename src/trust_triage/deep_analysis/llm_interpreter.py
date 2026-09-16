@@ -1,5 +1,8 @@
 """MonoGPT OpenAI-compatible client for structured Evidence interpretation."""
 
+# Response validation preserves the existing ValueError contract for malformed data.
+# ruff: noqa: TRY004
+
 from __future__ import annotations
 
 import json
@@ -59,10 +62,14 @@ class MonoGPTConfig:
     max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS
 
     @classmethod
-    def from_env(cls) -> "MonoGPTConfig":
-        """Load MonoGPT settings from the process environment and ``.env``."""
+    def from_env(cls, *, load_env_file: bool = True) -> MonoGPTConfig:
+        """Read settings, optionally loading the default ``.env`` first.
 
-        if load_dotenv is not None:
+        Callers that already selected an environment file should pass False
+        so an unrelated default file cannot fill in omitted LLM settings.
+        """
+
+        if load_env_file and load_dotenv is not None:
             load_dotenv()
 
         api_key = os.getenv("MONOGPT_API_KEY", "").strip()
@@ -150,7 +157,7 @@ class MonoGPTClaudeInterpreter:
         self.session = session or requests.Session()
 
     @classmethod
-    def from_env(cls) -> "MonoGPTClaudeInterpreter":
+    def from_env(cls) -> MonoGPTClaudeInterpreter:
         """Create an interpreter using the current environment settings."""
 
         return cls(MonoGPTConfig.from_env())
@@ -481,7 +488,9 @@ def _serialize_evidence(evidence: Sequence[Evidence]) -> list[dict[str, Any]]:
 
     serialized: list[dict[str, Any]] = []
     for item in evidence:
-        status = item.status.value if hasattr(item.status, "value") else str(item.status)
+        status = (
+            item.status.value if hasattr(item.status, "value") else str(item.status)
+        )
         serialized_item: dict[str, Any] = {
             "evidence_id": str(item.evidence_id),
             "source": _clean_text(item.source, field_name="source"),
@@ -534,9 +543,7 @@ def _llm_context(item: Evidence) -> dict[str, Any]:
     else:
         allowed = ()
     return {
-        key: _bounded_context_value(details[key])
-        for key in allowed
-        if key in details
+        key: _bounded_context_value(details[key]) for key in allowed if key in details
     }
 
 
@@ -545,10 +552,14 @@ def _bounded_context_value(value: Any, *, depth: int = 0) -> Any:
 
     if depth >= 2:
         if isinstance(value, str):
-            return _clean_text(value, field_name="context", max_length=_MAX_CONTEXT_TEXT_LENGTH)
+            return _clean_text(
+                value, field_name="context", max_length=_MAX_CONTEXT_TEXT_LENGTH
+            )
         return str(value)[:_MAX_CONTEXT_TEXT_LENGTH]
     if isinstance(value, str):
-        return _clean_text(value, field_name="context", max_length=_MAX_CONTEXT_TEXT_LENGTH)
+        return _clean_text(
+            value, field_name="context", max_length=_MAX_CONTEXT_TEXT_LENGTH
+        )
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, Mapping):
@@ -568,7 +579,11 @@ def _extract_content(response_json: Any) -> str:
     if not isinstance(response_json, Mapping):
         raise ValueError("response body must be an object")
     choices = response_json.get("choices")
-    if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)) or not choices:
+    if (
+        not isinstance(choices, Sequence)
+        or isinstance(choices, (str, bytes))
+        or not choices
+    ):
         raise ValueError("response choices are missing")
     first_choice = choices[0]
     if not isinstance(first_choice, Mapping):

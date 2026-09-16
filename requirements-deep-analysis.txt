@@ -1,0 +1,4 @@
+# -*- coding: utf-8 -*-
+# 심층 분석 서비스는 Worker 연결과 기존 LLM HTTP 해석기를 함께 사용한다.
+-r requirements-worker.txt
+requests>=2.31
