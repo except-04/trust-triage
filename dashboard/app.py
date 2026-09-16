@@ -1489,7 +1489,8 @@ def render_batch_triage(batch_data):
         )
         analyses = batch_data["analyses"]
         matched = filter_batch_analyses(analyses, query)
-        if (query or "").strip():
+        searching = bool((query or "").strip())
+        if searching:
             st.caption(f"검색 결과 {len(matched)}건 / 전체 {len(analyses)}건")
             if not matched:
                 st.info("검색 조건에 맞는 파일이 없습니다.")
@@ -1522,6 +1523,17 @@ def render_batch_triage(batch_data):
             )
         group_key = group_key or "needs_review"
         render_batch_group_results(group_key, groups[group_key])
+        if searching and not groups[group_key]:
+            # 매칭은 있지만 지금 보는 그룹에는 없다. render_batch_group_results()는
+            # 빈 그룹에서 선택을 건드리지 않고 돌아오므로, 그대로 두면 검색과
+            # 무관한 직전 파일의 상세가 아래에 남는다. 그룹 위젯은 이미 그려졌으니
+            # 사용자가 건수가 표시된 그룹을 고르면 기존 선택 로직이 상세를 잇는다.
+            # 그룹·선택·analysis_result는 바꾸지 않는다 — 검색어를 지우면 그대로 복귀.
+            st.info(
+                f"검색 결과 {len(matched)}건은 다른 그룹에 있습니다. "
+                "위 분류에서 건수가 표시된 그룹을 선택하세요."
+            )
+            st.stop()
         st.markdown(
             '<div class="detail-section-break">선택 파일 상세 분석</div>',
             unsafe_allow_html=True,

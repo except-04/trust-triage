@@ -224,10 +224,12 @@ def test_results_reappearing_restores_the_view(
     assert screen["caption"][-1] == "검색 결과 1건 / 전체 4건"
 
 
-def test_group_counts_follow_the_query(app, typed, screen, no_backend):
+def test_group_counts_follow_the_query(app, typed, screen, no_backend, stop_signal):
     batch_data = seed_batch(app)
     typed("helper")
-    app.render_batch_triage(batch_data)
+    # 기본 그룹(needs_review)에는 매칭이 없으므로 라벨을 그린 뒤 멈춘다
+    with pytest.raises(stop_signal):
+        app.render_batch_triage(batch_data)
 
     format_group = screen["group_calls"][0]["format_func"]
     assert [format_group(key) for key in ("needs_review", "auto_malicious", "auto_benign", "failed")] == [
@@ -251,6 +253,101 @@ def test_selecting_a_match_in_a_group_opens_its_detail(app, typed, screen, no_ba
     assert app.st.session_state.group_analysis_selector == "A2"
 
 
+def two_group_batch(app):
+    """리뷰 재현용: A1(Auto Benign) 선택 중, 매칭은 Needs Review의 A2뿐."""
+    a1 = analysis("A1", "benign.exe", HASH_A, "AUTO_BENIGN")
+    a2 = analysis("A2", "malware.exe", HASH_B, "HIGH_RISK_UNCERTAIN")
+    batch_data = {"batch_ids": ["B1"], "analyses": [a1, a2], "skipped": [], "errors": []}
+    app.st.session_state.update(
+        analysis_result=a1,
+        batch_data=batch_data,
+        batch_results=batch_data["analyses"],
+        batch_ids=["B1"],
+        selected_analysis_id="A1",
+        group_analysis_selector="A1",
+        batch_group="auto_benign",
+        poll_started_at=1.0,
+        poll_timed_out=False,
+    )
+    return batch_data
+
+
+def test_match_only_in_another_group_hides_the_stale_detail(
+    app, typed, screen, no_backend, stop_signal
+):
+    batch_data = two_group_batch(app)
+    before = dict(app.st.session_state)
+    screen["group"] = "auto_benign"
+    typed("malware")
+
+    with pytest.raises(stop_signal):
+        app.render_batch_triage(batch_data)
+
+    # 안내는 남기되 상세로는 내려가지 않는다
+    assert screen["caption"] == ["검색 결과 1건 / 전체 2건"]
+    assert screen["info"] == [
+        "검색 결과 1건은 다른 그룹에 있습니다. 위 분류에서 건수가 표시된 그룹을 선택하세요."
+    ]
+    # 그룹 위젯은 stop 전에 그려져 사용자가 옮겨 갈 수 있다
+    assert len(screen["group_calls"]) == 1
+    format_group = screen["group_calls"][0]["format_func"]
+    assert format_group("needs_review") == "Needs Review (1)"
+    assert format_group("auto_benign") == "Auto Benign (0)"
+    # 그룹·선택·analysis_result는 강제로 바꾸지 않는다
+    for key in ("batch_group", "selected_analysis_id", "analysis_result",
+                "group_analysis_selector", "batch_data", "batch_ids"):
+        assert app.st.session_state[key] == before[key], key
+    assert app.st.session_state.analysis_result["filename"] == "benign.exe"
+
+
+def test_switching_to_the_matching_group_opens_its_detail(
+    app, typed, screen, no_backend, stop_signal
+):
+    batch_data = two_group_batch(app)
+    screen["group"] = "auto_benign"
+    typed("malware")
+    with pytest.raises(stop_signal):
+        app.render_batch_triage(batch_data)
+
+    # 사용자가 Needs Review 를 고른 다음 실행
+    screen["group"] = "needs_review"
+    app.st.session_state.batch_group = "needs_review"
+    app.render_batch_triage(batch_data)  # 멈추지 않고 끝까지 그린다
+
+    assert screen["info"][-1].startswith("검색 결과 1건은 다른 그룹에")  # 새 안내 없음
+    assert len(screen["info"]) == 1
+    assert app.st.session_state.selected_analysis_id == "A2"
+    assert app.st.session_state.group_analysis_selector == "A2"
+    assert app.st.session_state.analysis_result["filename"] == "malware.exe"
+
+
+def test_clearing_the_query_after_a_group_mismatch_restores_the_old_view(
+    app, typed, screen, no_backend, stop_signal
+):
+    batch_data = two_group_batch(app)
+    screen["group"] = "auto_benign"
+    typed("malware")
+    with pytest.raises(stop_signal):
+        app.render_batch_triage(batch_data)
+
+    typed("")
+    app.render_batch_triage(batch_data)
+
+    assert app.st.session_state.batch_group == "auto_benign"
+    assert app.st.session_state.analysis_result["analysis_id"] == "A1"
+
+
+def test_match_in_the_current_group_does_not_stop(
+    app, typed, screen, no_backend
+):
+    batch_data = two_group_batch(app)
+    screen["group"] = "auto_benign"
+    typed("benign")
+    app.render_batch_triage(batch_data)
+    assert screen["info"] == []
+    assert app.st.session_state.analysis_result["analysis_id"] == "A1"
+
+
 def test_sha256_fragment_reaches_the_detail_view(app, typed, screen, no_backend):
     batch_data = seed_batch(app, selected="A1")
     screen["group"] = "auto_benign"
@@ -269,6 +366,7 @@ def test_a_still_matching_selection_is_kept(app, typed, screen, no_backend):
 
 def test_summary_card_keeps_whole_batch_counts(app, typed, screen, no_backend):
     batch_data = seed_batch(app)
+    screen["group"] = "auto_malicious"
     typed("helper")
     app.render_batch_triage(batch_data)
     assert batch_data["summary"]["total"] == 4
@@ -278,6 +376,7 @@ def test_search_leaves_hash_search_and_polling_state_alone(app, typed, screen, n
     batch_data = seed_batch(app)
     app.st.session_state.hash_search = {"query": HASH_A, "total_count": 1, "analyses": []}
     app.st.session_state.hash_search_error = None
+    screen["group"] = "auto_malicious"
     typed("helper")
     app.render_batch_triage(batch_data)
 
