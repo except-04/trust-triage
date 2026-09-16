@@ -1,9 +1,25 @@
 import hashlib
+import api_client
+import time
 from html import escape
 from uuid import uuid4
+from api_client import ApiError
 
 import matplotlib.pyplot as plt
 import streamlit as st
+
+# 진행 상황 패널의 자동 갱신 주기. 전체 app rerun이 아니라 fragment만 다시 돈다.
+POLL_INTERVAL_SECONDS = 2
+# 백엔드가 응답은 하지만 상태가 끝나지 않는 경우까지 대비한 상한. 무한 폴링 방지용.
+POLL_TIMEOUT_SECONDS = 600
+# 더 이상 조회할 필요가 없는 상태.
+TERMINAL_STATUSES = ("COMPLETED", "FAILED")
+# 업로드 항목을 전송 경로로 나누는 기준. 내용 검증은 백엔드가 한다.
+PE_EXTENSIONS = (".exe", ".dll")
+ARCHIVE_EXTENSIONS = (".zip",)
+# /batches 한 번에 보낼 수 있는 PE 개수. 백엔드 기본값(BACKEND_MAX_BATCH_FILES)을
+# 반영한 사전 안내용이며, 최종 판단은 백엔드가 한다.
+MAX_BATCH_FILES = 10
 
 
 def reset_analysis_result():
@@ -12,24 +28,18 @@ def reset_analysis_result():
     st.session_state.pop("batch_data", None)
     st.session_state.pop("batch_results", None)
     st.session_state.pop("batch_id", None)
+    st.session_state.pop("batch_ids", None)
     st.session_state.pop("selected_analysis_id", None)
     st.session_state.pop("batch_group", None)
     st.session_state.pop("group_analysis_selector", None)
+    st.session_state.pop("poll_started_at", None)
+    st.session_state.pop("poll_timed_out", None)
 
 
 def reset_analysis_session():
     """Return the console to its upload state for a new batch."""
     reset_analysis_result()
-    st.session_state.pop("pe_file_uploader", None)
-    st.session_state.pop("zip_file_uploader", None)
-    st.session_state.pop("input_mode", None)
-
-
-def reset_input_mode():
-    """Discard incompatible uploader state when PE/ZIP mode changes."""
-    reset_analysis_result()
-    st.session_state.pop("pe_file_uploader", None)
-    st.session_state.pop("zip_file_uploader", None)
+    st.session_state.pop("batch_file_uploader", None)
 
 
 def select_analysis_result(widget_key="selected_analysis_id"):
@@ -139,49 +149,30 @@ def format_file_size(size_bytes):
     return f"{size_bytes / 1024:.1f} KB"
 
 
-def uploaded_pe_descriptors(uploaded_files):
-    """Normalize Streamlit uploads before passing them to the mock transport."""
+def file_kind(filename):
+    """업로드 항목을 전송 경로로 분류한다.
+
+    확장자만 본다. ZIP 해제와 PE 유효성은 백엔드가 판정하므로 프론트는
+    어느 엔드포인트로 보낼지만 결정한다.
+    """
+    lowered = (filename or "").lower()
+    if lowered.endswith(ARCHIVE_EXTENSIONS):
+        return "ZIP"
+    if lowered.endswith(PE_EXTENSIONS):
+        return "PE"
+    return "OTHER"
+
+
+def uploaded_descriptors(uploaded_files):
+    """Normalize Streamlit uploads before handing them to the transport layer."""
     return [
         {
             "filename": uploaded_file.name,
             "size": uploaded_file.size,
             "content": uploaded_file.getvalue(),
+            "kind": file_kind(uploaded_file.name),
         }
         for uploaded_file in (uploaded_files or [])
-    ]
-
-
-def mock_zip_descriptors(uploaded_zip):
-    """Represent ZIP contents without extracting or validating the archive."""
-    if uploaded_zip is None:
-        return []
-
-    archive_stem = uploaded_zip.name.rsplit(".", 1)[0] or "batch"
-    archive_bytes = uploaded_zip.getvalue()
-    extensions = (
-        "exe",
-        "dll",
-        "exe",
-        "exe",
-        "dll",
-        "exe",
-        "dll",
-        "exe",
-        "exe",
-        "dll",
-    )
-    size_steps = (1.2, 0.8, 2.1, 1.5, 0.9, 1.8, 1.1, 2.4, 0.7, 1.4)
-
-    return [
-        {
-            "filename": f"{archive_stem}_{index:02d}.{extension}",
-            "size": int(size_mb * 1024 * 1024),
-            "content": archive_bytes + f"::{index}".encode(),
-        }
-        for index, (extension, size_mb) in enumerate(
-            zip(extensions, size_steps),
-            start=1,
-        )
     ]
 
 
@@ -332,7 +323,6 @@ def mock_triage_profile(index):
             "disagreement": 0.02,
             "ood_score": 0.084,
             "difficulty_score": 2,
-            "risk_score": 8,
             "initial_verdict": initial_verdict,
             "route": "FINAL",
             "reason": "High Benign Confidence",
@@ -346,7 +336,6 @@ def mock_triage_profile(index):
             "disagreement": 0.01,
             "ood_score": 0.072,
             "difficulty_score": 3,
-            "risk_score": 96,
             "initial_verdict": initial_verdict,
             "route": "FINAL",
             "reason": "High Malicious Confidence",
@@ -365,7 +354,6 @@ def mock_triage_profile(index):
         "disagreement": 0.13,
         "ood_score": -0.031,
         "difficulty_score": 6,
-        "risk_score": 82,
         "initial_verdict": initial_verdict,
         "route": "DEEP_ANALYSIS",
         "reason": review_reasons[index % len(review_reasons)],
@@ -549,6 +537,312 @@ def load_mock_batch(file_descriptors):
         "analyses": analyses,
     }
 
+def entry_view(entry, status):
+    """접수 응답의 entries 항목 하나를 대시보드 뷰 모델로 옮긴다.
+
+    filename/sha256/size_bytes는 이 응답만이 알고 있다. ZIP 내부 PE는 프론트에
+    바이트가 없어서 로컬 해시로는 복원할 수 없기 때문에 entries가 유일한 근거다.
+    """
+    return {
+        "analysis_id": entry.get("analysis_id"),
+        "sha256": entry.get("sha256") or "",
+        "status": status,
+        "filename": entry.get("filename") or "(이름 없음)",
+        "file_size": entry.get("size_bytes") or 0,
+        "initial_verdict": None,
+        "route": None,
+        "reason": None,
+        "final_verdict": None,
+        "calibrated_probability": None,
+        "raw_probability": None,
+        "disagreement": None,
+        "ood_score": None,
+        "difficulty_score": None,
+        "top_features": [],
+        "deep_analysis_status": {},
+        "evidence": [],
+        "llm_summary": None,
+        "error": None,
+    }
+
+
+def receipt_views(receipt, source):
+    """접수 응답을 (분석 뷰 모델, 제외 항목) 으로 나눈다.
+
+    source는 ZIP 접수일 때 그 ZIP 파일명, 직접 업로드면 None이다. 백엔드 응답에는
+    ZIP 파일명이 담기지 않으므로 화면 표기는 프론트가 알고 있는 이름을 쓴다.
+    """
+    accepted_status = {
+        item["analysis_id"]: item.get("status", "QUEUED")
+        for item in receipt.get("analyses", [])
+        if item.get("analysis_id")
+    }
+
+    analyses, skipped = [], []
+    for entry in receipt.get("entries", []):
+        analysis_id = entry.get("analysis_id")
+        if entry.get("status") == "ACCEPTED" and analysis_id:
+            analyses.append(
+                entry_view(entry, accepted_status.get(analysis_id, "QUEUED"))
+            )
+        elif entry.get("status") == "SKIPPED":
+            skipped.append(
+                {
+                    "filename": entry.get("filename") or "(이름 없음)",
+                    "size_bytes": entry.get("size_bytes"),
+                    "reason_code": entry.get("reason_code") or "-",
+                    "reason": entry.get("reason") or "사유가 제공되지 않았습니다.",
+                    "source": source,
+                }
+            )
+    return analyses, skipped
+
+
+def submit_batch(file_descriptors):
+    """업로드를 백엔드에 접수하고, 결과가 아직 비어 있는 batch_data를 만든다.
+
+    PE/DLL은 /batches 한 번으로, ZIP은 파일당 /batches/zip 한 번으로 보낸다.
+    백엔드가 요청마다 batch_id를 새로 발급하므로 한 화면이 여러 배치를 갖는다.
+    한 요청이 실패해도 나머지 접수 결과는 버리지 않고 errors에 모아 알린다.
+    """
+    pe_files = [d for d in file_descriptors if d["kind"] == "PE"]
+    zip_files = [d for d in file_descriptors if d["kind"] == "ZIP"]
+
+    batch_ids, analyses, skipped, errors = [], [], [], []
+
+    # 백엔드가 받지 않는 확장자는 요청을 보내지 않고 화면에서만 알린다
+    for descriptor in file_descriptors:
+        if descriptor["kind"] == "OTHER":
+            skipped.append(
+                {
+                    "filename": descriptor["filename"],
+                    "size_bytes": descriptor["size"],
+                    "reason_code": "UNSUPPORTED_FILE_TYPE",
+                    "reason": ".exe·.dll·.zip 파일만 접수합니다.",
+                    "source": None,
+                }
+            )
+
+    def collect(call, source, label):
+        try:
+            receipt = call()
+        except ApiError as e:
+            errors.append({"filename": label, "code": e.code, "message": e.message})
+            return
+        batch_ids.append(receipt["batch_id"])
+        accepted, dropped = receipt_views(receipt, source)
+        analyses.extend(accepted)
+        skipped.extend(dropped)
+
+    if pe_files:
+        payload = [(d["filename"], d["content"]) for d in pe_files]
+        collect(
+            lambda: api_client.upload_batch(payload),
+            None,
+            f"PE/DLL {len(pe_files)}건",
+        )
+
+    for descriptor in zip_files:
+        collect(
+            lambda d=descriptor: api_client.upload_zip(d["filename"], d["content"]),
+            descriptor["filename"],
+            descriptor["filename"],
+        )
+
+    return {
+        "batch_ids": batch_ids,
+        "analyses": analyses,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+def refresh_pending(batch_data):
+    """끝나지 않은 분석들의 상태를 백엔드에 다시 묻고 갱신한다.
+
+    반환: 아직 진행 중인 건이 하나라도 있으면 True
+    """
+    still_running = False
+
+    for index, analysis in enumerate(batch_data["analyses"]):
+        # 이미 끝난 건 다시 묻지 않는다
+        if analysis.get("status") in ("COMPLETED", "FAILED"):
+            continue
+
+        try:
+            progress = api_client.get_status(analysis["analysis_id"])
+        except ApiError as e:
+            analysis["status"] = "FAILED"
+            analysis["error"] = {
+                "code": e.code, "message": e.message, "stage": e.stage,
+            }
+            continue
+
+        analysis["status"] = progress.get("status", "QUEUED")
+        analysis["error"] = progress.get("error")
+
+        if analysis["status"] == "COMPLETED":
+            # 완료된 것만 전체 결과를 한 번 가져온다
+            try:
+                full = api_client.get_result(analysis["analysis_id"])
+                batch_data["analyses"][index] = to_view(full, analysis)
+            except ApiError as e:
+                analysis["error"] = {
+                    "code": e.code, "message": e.message, "stage": e.stage,
+                }
+        elif analysis["status"] != "FAILED":
+            still_running = True
+
+    return still_running
+
+def to_view(full, previous):
+    """API 응답을 대시보드가 읽는 평면 키로 옮긴다."""
+    prediction = full.get("prediction") or {}
+    signals = full.get("risk_signals") or {}
+
+    return {
+        **previous,
+        "status": full.get("status"),
+        "initial_verdict": full.get("initial_verdict"),
+        "route": full.get("route"),
+        "reason": full.get("reason"),
+        "final_verdict": full.get("final_verdict"),
+        "raw_probability": prediction.get("lgbm_raw_probability"),
+        "calibrated_probability": prediction.get("calibrated_probability"),
+        "disagreement": signals.get("disagreement"),
+        "ood_score": signals.get("ood_score"),
+        "difficulty_score": signals.get("difficulty_score"),
+        "top_features": full.get("top_features", []),
+        "deep_analysis_status": full.get("deep_analysis_status", {}),
+        "evidence": full.get("evidence", []),
+        "llm_summary": full.get("llm_summary"),
+        "error": full.get("error"),
+    }
+
+def pending_analyses(batch_data):
+    """아직 종료되지 않은 분석만 고른다."""
+    return [
+        analysis
+        for analysis in batch_data.get("analyses", [])
+        if analysis.get("status") not in TERMINAL_STATUSES
+    ]
+
+
+def poll_status_counts(analyses):
+    """진행 상황 패널용 상태별 건수.
+
+    완료 화면의 derive_batch_summary()는 초기 판정을 세고, 이쪽은 작업 상태를 센다.
+    서로 다른 집계이므로 합치지 않는다.
+    """
+    counts = {"QUEUED": 0, "RUNNING": 0, "COMPLETED": 0, "FAILED": 0}
+    for analysis in analyses:
+        status = analysis.get("status") or "QUEUED"
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def sync_selected_analysis(batch_data):
+    """갱신된 batch_data를 session_state에 다시 연결한다.
+
+    refresh_batch()/refresh_pending()은 완료된 건의 리스트 요소를 새 dict로
+    교체한다. 이 재연결을 빼먹으면 상세 화면이 접수 직후의 빈 dict를 계속 본다.
+    """
+    st.session_state.batch_data = batch_data
+    st.session_state.batch_results = batch_data["analyses"]
+    selected_id = st.session_state.get("selected_analysis_id")
+    for analysis in batch_data["analyses"]:
+        if analysis["analysis_id"] == selected_id:
+            st.session_state.analysis_result = analysis
+            break
+
+
+def batch_id_list(batch_data):
+    """이 화면이 조회해야 하는 배치 번호들.
+
+    PE는 /batches 한 번, ZIP은 파일당 /batches/zip 한 번으로 접수되므로 배치가
+    여러 개일 수 있다. 단일 배치만 있던 이전 세션도 같은 형태로 다룬다.
+    """
+    ids = [value for value in (batch_data.get("batch_ids") or []) if value]
+    if ids:
+        return ids
+    single = batch_data.get("batch_id")
+    return [single] if single else []
+
+
+def batch_id_label(batch_data):
+    """화면 머리말에 쓸 배치 번호 표기."""
+    ids = batch_id_list(batch_data)
+    if not ids:
+        return "-"
+    if len(ids) == 1:
+        return ids[0]
+    return f"{ids[0]} 외 {len(ids) - 1}건"
+
+
+def refresh_batch(batch_data):
+    """등록된 배치들의 상태를 배치 단위로 갱신한다.
+
+    GET /batches/{batch_id}의 analyses는 GET /analyses/{id}와 같은 종합 결과라서
+    파일별 status/result 반복 조회를 대신할 수 있다. 조회 대상이 없거나 모든 배치
+    조회가 실패하면 기존 파일별 폴링(refresh_pending)으로 물러난다.
+
+    반환: 아직 진행 중인 건이 하나라도 있으면 True
+    """
+    batch_ids = batch_id_list(batch_data)
+    if not batch_ids:
+        return refresh_pending(batch_data)
+
+    by_id, failed = {}, 0
+    for batch_id in batch_ids:
+        try:
+            batch = api_client.get_batch(batch_id)
+        except ApiError:
+            # 한 배치만 실패했다면 그 배치의 건들은 아래에서 진행 중으로 남는다
+            failed += 1
+            continue
+        for item in batch.get("analyses", []):
+            if item.get("analysis_id"):
+                by_id[item["analysis_id"]] = item
+
+    if failed == len(batch_ids):
+        return refresh_pending(batch_data)
+
+    still_running = False
+    for index, analysis in enumerate(batch_data["analyses"]):
+        # 이미 끝난 건은 다시 반영하지 않는다
+        if analysis.get("status") in TERMINAL_STATUSES:
+            continue
+
+        full = by_id.get(analysis["analysis_id"])
+        if full is None:
+            # 배치 응답에 없는 건은 상태를 추측하지 않고 진행 중으로 둔다
+            still_running = True
+            continue
+
+        status = full.get("status") or analysis.get("status") or "QUEUED"
+        if status == "COMPLETED":
+            # 완료된 건만 상세 뷰 모델로 옮긴다. refresh_pending과 같은 기준이다.
+            batch_data["analyses"][index] = to_view(full, analysis)
+        else:
+            analysis["status"] = status
+            analysis["error"] = full.get("error")
+            if status != "FAILED":
+                still_running = True
+
+    return still_running
+
+
+def poll_started_at():
+    """폴링 시작 시각. 세션이 이어진 경우를 대비해 없으면 지금으로 채운다."""
+    if "poll_started_at" not in st.session_state:
+        st.session_state.poll_started_at = time.monotonic()
+    return st.session_state.poll_started_at
+
+
+def resume_polling():
+    """시간 초과 뒤 수동 재조회. 경과 시간을 다시 센다."""
+    st.session_state.poll_timed_out = False
+    st.session_state.poll_started_at = time.monotonic()
+
 
 def load_mock_analysis(analysis_id, batch_data=None):
     """Mock detail endpoint; replace with get_analysis_from_api(analysis_id)."""
@@ -598,23 +892,65 @@ def deep_analysis_status_text(analysis):
 
 
 def store_mock_batch(batch_data):
-    """Persist the mock response using the existing session-state contract."""
-    groups = group_batch_analyses(batch_data["analyses"])
+    """Persist the accepted batch using the existing session-state contract.
+
+    분석 작업으로 등록된 건이 하나도 없으면 결과 화면으로 넘기지 않고 False를
+    돌려준다. 전건 SKIPPED인 ZIP처럼 백엔드가 202 + analyses: [] 를 정상 반환하는
+    경우가 있기 때문이다.
+    """
+    analyses = batch_data.get("analyses") or []
+    if not analyses:
+        return False
+
+    groups = group_batch_analyses(analyses)
     initial_group = "needs_review"
     initial_analysis = (
-        groups[initial_group][0]
-        if groups[initial_group]
-        else batch_data["analyses"][0]
+        groups[initial_group][0] if groups[initial_group] else analyses[0]
     )
     st.session_state.batch_data = batch_data
-    st.session_state.batch_id = batch_data["batch_id"]
-    st.session_state.batch_results = batch_data["analyses"]
+    st.session_state.batch_ids = batch_id_list(batch_data)
+    st.session_state.batch_results = analyses
     st.session_state.selected_analysis_id = initial_analysis["analysis_id"]
     st.session_state.analysis_result = initial_analysis
+    # 새 배치이므로 폴링 타이머를 다시 시작한다
+    st.session_state.poll_started_at = time.monotonic()
+    st.session_state.poll_timed_out = False
+    return True
+
+
+def render_intake_notice(target, receipt):
+    """접수 단계에서 제외되거나 실패한 입력을 분석 목록과 분리해 알린다."""
+    skipped = receipt.get("skipped") or []
+    errors = receipt.get("errors") or []
+    if not skipped and not errors:
+        return
+
+    for item in errors:
+        target.error(
+            f"접수 실패 · {item['filename']} — {item['message']} "
+            f"(코드 {item['code']})"
+        )
+
+    if skipped:
+        target.warning(f"분석 대상에서 제외된 입력 {len(skipped)}건")
+        target.dataframe(
+            [
+                {
+                    "File": item["filename"],
+                    "Source": item["source"] or "직접 업로드",
+                    "Reason": item["reason"],
+                    "Code": item["reason_code"],
+                }
+                for item in skipped
+            ],
+            hide_index=True,
+            width="stretch",
+            height=min(38 * (len(skipped) + 1), 220),
+        )
 
 
 def render_input_view():
-    """Render single/multiple PE and mock ZIP batch input controls."""
+    """Render the unified PE/DLL/ZIP batch input controls."""
     st.title("EXCEPT 04 Trust Triage")
     st.caption("신뢰 기반 악성코드 트리아지 대시보드")
 
@@ -623,67 +959,71 @@ def render_input_view():
         '<div class="batch-panel-title">분석 입력</div>',
         unsafe_allow_html=True,
     )
-    input_mode = input_panel.radio(
-        "입력 유형",
-        options=("PE 파일", "ZIP 파일"),
-        horizontal=True,
-        key="input_mode",
-        on_change=reset_input_mode,
+
+    uploaded_files = input_panel.file_uploader(
+        "PE 파일(.exe/.dll)과 ZIP을 함께 선택할 수 있습니다",
+        type=["exe", "dll", "zip"],
+        key="batch_file_uploader",
+        on_change=reset_analysis_result,
+        accept_multiple_files=True,
     )
+    file_descriptors = uploaded_descriptors(uploaded_files)
 
-    file_descriptors = []
-    preview_rows = []
-    if input_mode == "PE 파일":
-        uploaded_files = input_panel.file_uploader(
-            "단일 또는 다중 PE 파일을 선택하세요",
-            type=["exe", "dll"],
-            key="pe_file_uploader",
-            on_change=reset_analysis_result,
-            accept_multiple_files=True,
-        )
-        file_descriptors = uploaded_pe_descriptors(uploaded_files)
-        preview_rows = [
-            {
-                "File": descriptor["filename"],
-                "Size": format_file_size(descriptor["size"]),
-            }
-            for descriptor in file_descriptors
-        ]
-    else:
-        uploaded_zip = input_panel.file_uploader(
-            "PE 파일이 포함된 ZIP을 선택하세요",
-            type=["zip"],
-            key="zip_file_uploader",
-            on_change=reset_analysis_result,
-        )
-        file_descriptors = mock_zip_descriptors(uploaded_zip)
-        if uploaded_zip is not None:
-            preview_rows = [
-                {
-                    "File": uploaded_zip.name,
-                    "Size": format_file_size(uploaded_zip.size),
-                }
-            ]
-            input_panel.caption(
-                "ZIP 해제·PE 검증은 수행하지 않습니다. 이번 화면에서는 "
-                f"Mock PE {len(file_descriptors)}개로 분석 결과를 구성합니다."
-            )
-
-    if preview_rows:
+    if file_descriptors:
         input_panel.dataframe(
-            preview_rows,
+            [
+                {
+                    "File": descriptor["filename"],
+                    "Type": descriptor["kind"],
+                    "Size": format_file_size(descriptor["size"]),
+                }
+                for descriptor in file_descriptors
+            ],
             hide_index=True,
             width="stretch",
-            height=min(38 * (len(preview_rows) + 1), 260),
+            height=min(38 * (len(file_descriptors) + 1), 260),
         )
+
+    pe_count = sum(1 for d in file_descriptors if d["kind"] == "PE")
+    zip_count = sum(1 for d in file_descriptors if d["kind"] == "ZIP")
+    empty_names = [d["filename"] for d in file_descriptors if d["size"] == 0]
+
+    # 개수 상한만 접수를 막는다. 나머지 판정은 백엔드가 하고 사유를 돌려준다.
+    blocking = (
+        f"PE/DLL은 한 번에 {MAX_BATCH_FILES}개까지 접수할 수 있습니다. "
+        f"현재 {pe_count}개를 선택했습니다."
+        if pe_count > MAX_BATCH_FILES
+        else None
+    )
+
+    if file_descriptors:
+        input_panel.caption(
+            f"PE/DLL {pe_count}건은 한 번에, ZIP {zip_count}건은 파일별로 접수합니다. "
+            "ZIP 해제와 내부 PE 검증은 백엔드가 수행합니다."
+        )
+    if empty_names:
+        input_panel.warning(
+            "내용이 빈 파일은 백엔드에서 제외됩니다: " + ", ".join(empty_names[:5])
+        )
+    if blocking:
+        input_panel.error(blocking)
 
     if input_panel.button(
         "분석 시작",
         type="primary",
-        disabled=not file_descriptors,
+        disabled=not file_descriptors or bool(blocking),
     ):
-        store_mock_batch(load_mock_batch(file_descriptors))
-        st.rerun()
+        try:
+            receipt = submit_batch(file_descriptors)
+        except ApiError as e:
+            input_panel.error(f"접수 실패: {e.message}")
+        else:
+            if store_mock_batch(receipt):
+                st.rerun()
+            input_panel.info(
+                "분석 작업으로 등록된 파일이 없습니다. 아래 사유를 확인하세요."
+            )
+            render_intake_notice(input_panel, receipt)
 
 
 def render_batch_summary(batch_data):
@@ -694,7 +1034,7 @@ def render_batch_summary(batch_data):
         f"""
         <div class="batch-section-heading batch-section-heading-first">
             <span>Batch Summary</span>
-            <span class="batch-context">Batch ID · {escape(batch_data['batch_id'])}</span>
+            <span class="batch-context">Batch ID · {escape(batch_id_label(batch_data))}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -832,6 +1172,7 @@ def render_batch_triage(batch_data):
     batch_area = st.container(key="batch_triage_area")
     with batch_area:
         render_batch_summary(batch_data)
+        render_intake_notice(st, batch_data)
         st.markdown(
             '<div class="batch-section-heading">분석 결과 분류</div>',
             unsafe_allow_html=True,
@@ -862,6 +1203,128 @@ def render_batch_triage(batch_data):
             '<div class="detail-section-break">선택 파일 상세 분석</div>',
             unsafe_allow_html=True,
         )
+
+
+def render_polling_panel(batch_data, auto_refresh):
+    """진행 상황만 보여주는 영역.
+
+    그룹 테이블·selectbox·상세 결과는 여기에 넣지 않는다. 완료 후 화면과 구성이
+    겹치면 자동 갱신 때마다 그 위젯들이 다시 그려지기 때문이다.
+    """
+    analyses = batch_data["analyses"]
+    counts = poll_status_counts(analyses)
+    total = len(analyses)
+    finished = counts["COMPLETED"] + counts["FAILED"]
+
+    st.markdown(
+        f"""
+        <div class="batch-section-heading batch-section-heading-first">
+            <span>분석 진행 중</span>
+            <span class="batch-context">
+                Batch ID · {escape(batch_id_label(batch_data))}
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    panel = st.container(border=True, key="batch_polling_panel")
+    panel.markdown(
+        f"""
+        <div class="batch-summary-grid">
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Total</div>
+                <div class="batch-summary-value">{total}</div>
+            </div>
+            <div class="batch-summary-item batch-summary-priority">
+                <div class="batch-summary-label">Queued</div>
+                <div class="batch-summary-value">{counts["QUEUED"]}</div>
+            </div>
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Running</div>
+                <div class="batch-summary-value">{counts["RUNNING"]}</div>
+            </div>
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Completed</div>
+                <div class="batch-summary-value">{counts["COMPLETED"]}</div>
+            </div>
+            <div class="batch-summary-item">
+                <div class="batch-summary-label">Failed</div>
+                <div class="batch-summary-value">{counts["FAILED"]}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    panel.progress(
+        finished / total if total else 0.0,
+        text=f"{finished} / {total} 처리 종료",
+    )
+    panel.dataframe(
+        [
+            {
+                "File": analysis.get("filename", "(이름 없음)"),
+                "Status": analysis.get("status") or "QUEUED",
+            }
+            for analysis in analyses
+        ],
+        hide_index=True,
+        width="stretch",
+        # 건수는 폴링 중 변하지 않으므로 높이가 흔들리지 않는다
+        height=min(38 * (total + 1), 300),
+    )
+
+    elapsed = int(max(0.0, time.monotonic() - poll_started_at()))
+    clock = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+    if auto_refresh:
+        panel.caption(
+            f"경과 {clock} · {POLL_INTERVAL_SECONDS}초마다 이 영역만 자동 갱신됩니다."
+        )
+    else:
+        panel.caption(f"경과 {clock} · 자동 갱신이 멈춘 상태입니다.")
+
+    render_intake_notice(st, batch_data)
+
+
+@st.fragment(run_every=POLL_INTERVAL_SECONDS)
+def polling_fragment():
+    """이 함수 안에서만 재실행된다.
+
+    CSS 블록·상단 레이아웃·완료 결과 화면은 fragment 밖에 있어서 자동 갱신 대상이
+    아니다. 모든 건이 종료되면 app 전체를 딱 한 번 재실행해 완료 화면으로 넘긴다.
+    """
+    batch_data = st.session_state.get("batch_data")
+    if not batch_data:
+        return
+
+    still_running = refresh_batch(batch_data)
+    sync_selected_analysis(batch_data)
+
+    if not still_running:
+        # 종료 조건 1: 전부 COMPLETED/FAILED. 완료 화면 전환용 app rerun 1회.
+        st.rerun()
+
+    if time.monotonic() - poll_started_at() > POLL_TIMEOUT_SECONDS:
+        # 종료 조건 2: 상한 초과. fragment 렌더를 멈추게 해서 자동 갱신을 끊는다.
+        st.session_state.poll_timed_out = True
+        st.rerun()
+
+    render_polling_panel(batch_data, auto_refresh=True)
+
+
+def render_polling_view(batch_data):
+    """진행 중 화면. 시간 초과 뒤에는 자동 갱신 없이 같은 패널을 그린다."""
+    if st.session_state.get("poll_timed_out"):
+        render_polling_panel(batch_data, auto_refresh=False)
+        st.warning(
+            f"{POLL_TIMEOUT_SECONDS // 60}분 안에 분석이 끝나지 않아 자동 갱신을 "
+            "멈췄습니다. 백엔드 처리 상태를 확인한 뒤 다시 조회하세요."
+        )
+        st.button("지금 다시 확인", key="poll_resume", on_click=resume_polling)
+        return
+
+    polling_fragment()
 
 
 st.set_page_config(
@@ -1006,6 +1469,7 @@ st.markdown(
 
         .st-key-batch_input_panel [data-testid="stVerticalBlock"],
         .st-key-batch_triage_area [data-testid="stVerticalBlock"],
+        .st-key-batch_polling_panel [data-testid="stVerticalBlock"],
         .st-key-batch_group_results [data-testid="stVerticalBlock"] {
             gap: 1.5rem;
         }
@@ -1345,7 +1809,8 @@ if "batch_results" not in st.session_state:
     st.session_state.batch_results = []
 if "batch_data" not in st.session_state and st.session_state.batch_results:
     st.session_state.batch_data = {
-        "batch_id": st.session_state.get("batch_id", "legacy_batch"),
+        "batch_ids": st.session_state.get("batch_ids") or [],
+        "batch_id": st.session_state.get("batch_id"),
         "summary": derive_batch_summary(st.session_state.batch_results),
         "analyses": st.session_state.batch_results,
     }
@@ -1358,8 +1823,26 @@ if result is None:
 else:
     batch_data = st.session_state.get("batch_data")
     if batch_data:
+        sync_selected_analysis(batch_data)
+
+        if pending_analyses(batch_data):
+            # 진행 중에는 폴링 패널만 그린다. 아래 완료 화면은 종료 후에 렌더된다.
+            render_polling_view(batch_data)
+            st.stop()
+
         render_batch_triage(batch_data)
         result = st.session_state.analysis_result
+
+    status = result.get("status")
+    if status != "COMPLETED":
+        if status == "FAILED":
+            error = result.get("error") or {}
+            st.error(f"분석 실패: {error.get('message', '원인을 확인할 수 없습니다.')}")
+            if error.get("code"):
+                st.caption(f"코드 {error['code']} · 단계 {error.get('stage') or '-'}")
+        else:
+            st.info(f"분석이 진행 중입니다. (상태: {status or '대기 중'})")
+        st.stop()
 
     difficulty_labels = {
         "Low": "낮음 (Low)",
@@ -1433,10 +1916,6 @@ else:
             <div>
                 <div class="summary-label">Final Verdict</div>
                 {verdict_badge_markup(result.get('final_verdict') or 'Pending')}
-            </div>
-            <div>
-                <div class="summary-label">Risk Score</div>
-                <div class="summary-value summary-score">{result['risk_score']}</div>
             </div>
             <div>
                 <div class="summary-label">Route</div>

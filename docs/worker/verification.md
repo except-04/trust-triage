@@ -1,6 +1,6 @@
 # Worker 구현·검증 기록
 
-검증일: 2026-09-13. 기준은 `main`의 `064e1db`(Backend PR #105 병합)이며 작업 브랜치는 `feature/worker`다.
+검증일: 2026-09-16. `main`의 `bedd3b5`(PR #111까지 병합)를 반영한 `feature/worker`에서 재검증했다. PR #108의 CAPA/FLOSS 결과 SHA-256 검증도 유지한다.
 
 ## 구현 파일
 
@@ -27,10 +27,10 @@ Python 3.11.9, 독립 가상환경, 임시 PostgreSQL 17.11에서 확인했다. 
 | 범위 | 결과 |
 | --- | --- |
 | Worker | 118 passed: 일반·AWS 대역·프로세스 전송 103개 + PostgreSQL 15개 |
-| Deep Analysis·Backend↔Worker 연결 | 200 passed: 일반 161개 + PostgreSQL 39개. 요청부터 결과 반영까지의 통합 사례 10개 포함 |
+| Deep Analysis·Backend↔Worker 연결 | 204 passed: 일반 165개 + PostgreSQL 39개. 요청부터 결과 반영까지의 통합 사례 10개 포함 |
 | Backend 회귀 | 598 passed, 2 skipped |
 | 기존 Dynamic / Deep / ATT&CK / LLM 입력 제한 / FLOSS | 37 passed |
-| 합계 | **953 passed, 2 skipped** |
+| 합계 | **957 passed, 2 skipped** |
 | Ruff lint / format | 변경 Python 파일 통과 |
 | `pip check` | 의존성 충돌 없음 |
 | Wheel 생성 | 성공, Worker·Backend·Deep Analysis의 SQL 스키마 포함 확인 |
@@ -59,6 +59,8 @@ $workerPython = ".\trust-triage-env\Scripts\python.exe"
 완료 결과 commit 전에는 SQS 메시지를 삭제하지 않는지, 중복 수신 시 재분석하지 않는지, 살아 있는 작업의 점유·결과를 다른 Worker가 변경하지 않는지 확인했다. S3 크기·해시·경로·시간 검사, 장애 후 재시도, DLQ 실패 기록, 원본 임시 파일 정리, 리포트 저장 실패 시 DB 관찰 결과 보존도 검사했다. 동일 원본의 새 분석은 별도 리포트로 보관한다.
 
 Backend↔Worker 통합 사례는 실제 HTTP 접수, 초기 심층 분석 경로, CAPA/FLOSS 체크포인트 저장, 실제 런타임의 SQS 전송 어댑터, Worker 소비, DB 결과 수신·증거 반영·LLM 호출 지점, 전체 분석 종료와 API 조회를 통과한다. 정적 분석만으로 종료하는 경우와 자동 초기 판정 경로는 SQS에 작업을 보내지 않는다. Worker 시간 초과는 Backend 실패와 전문가 검토 상태로 반영되며 악성으로 확정하지 않는다. 재시작과 중복 전달 후 CAPA/FLOSS·Speakeasy·저장 완료된 후처리가 반복되지 않는지 확인했다.
+
+최신 main의 정적 분석 해시 검증에 맞춰 기존 동기 테스트의 가짜 해시를 무해한 fixture 바이트의 실제 SHA-256으로 정렬했다. 별도 회귀 사례 4개로 CAPA/FLOSS 해시가 다르면 증거·재개 체크포인트에 수용하지 않고 Worker 요청·LLM 호출도 수행하지 않는지 확인했다.
 
 Speakeasy 결과 전송 검사는 일반 자식 프로세스가 무해한 큰 문자열을 보내도록 하여 수행했다. SQS/S3는 SDK·클라이언트 대역, 초기 모델·분석기·LLM은 가짜 결과를 반환하는 대역을 사용했다. 실제 PE 실행·에뮬레이션과 AWS/RDS·외부 LLM 접속은 수행하지 않았다.
 

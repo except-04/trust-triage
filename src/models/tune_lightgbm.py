@@ -54,7 +54,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument(
-        "--top-indices", type=Path, default=Path("top_feature_indices_500.npy")
+        "--top-indices", type=Path, default=Path("data/top_feature_indices_500.npy")
     )
     parser.add_argument("--model-output", type=Path, required=True)
     parser.add_argument("--n-trials", type=int, default=N_TRIALS)

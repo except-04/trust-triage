@@ -771,17 +771,16 @@ FAILED
 
 ```json
 {
-  "analysis_id": "a_20260907_000001",
+  "sample_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
   "initial_verdict": "HIGH_RISK_UNCERTAIN",
-  "risk_signals": {
-    "disagreement": 0.31,
-    "ood_score": -0.04,
-    "difficulty_score": 7
-  },
-  "capa": {},
-  "floss": {},
-  "speakeasy": {},
-  "evidence": []
+  "evidence": [
+    {
+      "technique_id": "T1059",
+      "technique_name": "Command and Scripting Interpreter",
+      "sources": ["CAPA"],
+      "summary": "Command execution related behavior detected."
+    }
+  ]
 }
 ```
 
@@ -837,8 +836,8 @@ MALICIOUS
 UNCERTAIN
 ```
 
-> **TBD**  
-> `final_verdict`의 정확한 Enum은 Final Assessment 로직 확정 시 최종 결정합니다.
+> **Review-first Policy**  
+> 시스템은 오탐/미탐을 최소화하기 위해 기본적으로 자동 판정을 보수적으로 진행하며, 불확실한 경우 `UNCERTAIN`으로 분류하여 전문가의 검토(MANUAL_REVIEW)를 제안합니다.
 
 ## `analyst_final_verdict`
 
@@ -855,10 +854,10 @@ MALICIOUS
 
 ```json
 {
-  "analysis_id": "a_20260907_000001",
   "analyst_final_verdict": "MALICIOUS",
-  "analyst_comment": "Suspicious process injection behavior confirmed.",
-  "updated_at": "2026-09-07T15:00:00+09:00"
+  "analyst_notes": "Suspicious process injection behavior confirmed.",
+  "reviewer_id": "analyst_1",
+  "expected_revision": 0
 }
 ```
 

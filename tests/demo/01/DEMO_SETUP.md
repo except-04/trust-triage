@@ -1,21 +1,23 @@
 ## 1. 폴더 구조
 
 ```
-Project/
-├── demo/
-│   ├── demo.py
-│   └── artifacts/
-│       ├── baseline_model_lightgbm_tuned_500_v4_9120.pkl   (약 29.9MB)
-│       ├── baseline_model_xgb_500.pkl                      (약 2.1MB)
-│       ├── feature-selection-ember-v3-top500.json          (약 16KB)
-│       └── jrr_calibrator.pkl                              (약 4KB)
-└── trust-triage/
-    ├── src/
-    │   └── jrr/
-    │       └── jrr_router.py
-    ├── pyproject.toml
-    ├── requirements.txt
-    └── ...
+trust-triage/
+├── tests/
+│   └── demo/
+│       └── 01/
+│           ├── demo.py
+│           └── artifacts/
+│               ├── baseline_model_lightgbm_tuned_500_4way.pkl
+│               ├── baseline_model_xgb_500_4way_1000cap.pkl
+│               ├── feature-selection-ember-v3-top500.json
+│               ├── jrr_calibrator_4way.pkl
+│               └── jrr_risk_signals.pkl
+├── src/
+│   └── jrr/
+│       └── jrr_router.py
+├── pyproject.toml
+├── requirements.txt
+└── ...
 ```
 
 ---
@@ -23,7 +25,7 @@ Project/
 ## 2. 패키지 설치
 
 ```
-cd Project/trust-triage        # clone한 폴더
+# 저장소 최상위 경로(trust-triage)에서 실행
 .\.venv\Scripts\Activate.ps1   # (Windows) 가상환경 켜기
 pip install -e .
 ```
@@ -32,8 +34,8 @@ pip install -e .
 
 ## 3. 실행 방법
 
-
 ```
+cd tests/demo/01
 python demo.py --path <분석할_파일_경로>
 ```
 
@@ -41,7 +43,7 @@ python demo.py --path <분석할_파일_경로>
 
 ```
 # Windows
-python demo\demo.py --path "C:\Windows\System32\notepad.exe"
+python demo.py --path "C:\Windows\System32\notepad.exe"
 ```
 
 ### 인자
@@ -64,18 +66,19 @@ python demo\demo.py --path "C:\Windows\System32\notepad.exe"
   "verdict": "자동 악성",
   "analysis_status": "SUCCESS",
   "calibrated_probability": 0.9731,
-  "risk_score": null,
-  "route": "AUTO_QUARANTINE",
+  "initial_verdict": "AUTO_MALICIOUS",
+  "route": "FINAL",
   "top_features": []
 }
 ```
 
 | 필드 | 의미 |
 |---|---|
-| `verdict` | `자동 정상`(AUTO_PASS) / `자동 악성`(AUTO_QUARANTINE) / `심층 분석`(그 외, 초기값) |
-| `route` | JRR 라우팅 결정. 기본값은 `MANUAL_REVIEW` |
+| `verdict` | `자동 정상`(AUTO_BENIGN) / `자동 악성`(AUTO_MALICIOUS) / `심층 분석`(그 외, 초기값) |
+| `initial_verdict` | JRR 초기 판정. 기본값은 `HIGH_RISK_UNCERTAIN` |
+| `route` | 다음 단계 처리 지시. 기본값은 `DEEP_ANALYSIS` |
 | `calibrated_probability` | 보정된 악성 확률 |
-| `risk_score`, `top_features` | 추후 추가 |
+| `top_features` | 추후 추가 |
 
 ### 종료 코드
 
@@ -95,11 +98,13 @@ python demo\demo.py --path "C:\Windows\System32\notepad.exe"
 바꾸려면 `demo.py` 상단 상수를 수정해야 합니다.
 
 ```python
-TAU_LOW            = 0.1    # 자동 통과 임계값
+TAU_LOW            = 0.65   # 자동 통과 임계값
 TAU_DISAGREE       = 0.3    # 모델 간 불일치 임계값
+TAU_OOD            = 0.0    # OOD 임계값
+TAU_DIFFICULTY     = 6.0    # 분석 난이도 임계값
 EXTRACT_TIMEOUT_SEC = 30.0  # 특징 추출 타임아웃(초)
 ```
 
-`TAU_HIGH`는 상수가 아니라 `jrr_calibrator.pkl` 안의 `threshold` 값을 그대로 사용
+`TAU_HIGH`는 상수가 아니라 `jrr_calibrator_4way.pkl` 안의 `threshold` 값을 그대로 사용
 
 ---

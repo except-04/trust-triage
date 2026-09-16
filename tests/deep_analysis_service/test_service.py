@@ -237,6 +237,24 @@ def test_changed_config_fails_safely_and_keeps_static_visible(harness):
     assert h.calls == (1, 1, 0, 1)
 
 
+@pytest.mark.parametrize("tool", ["capa", "floss"])
+def test_static_hash_conflict_never_dispatches_worker_or_calls_llm(harness, tool):
+    h = harness
+    result = getattr(h, tool).result
+    result.sha256 = "b" * 64
+    result.evidence = replace(result.evidence, sha256=result.sha256)
+    completed = h.service.start(h.request)
+    assert completed.phase is DeepAnalysisPhase.FAILED
+    assert "INVALID_PIPELINE_RESULT" in completed.result["reason_codes"]
+    assert completed.result["final_verdict"] == "UNKNOWN"
+    assert not h.queue.sent
+    assert h.worker_repository.get(h.request.analysis_id) is None
+    assert h.llm.calls == 0
+    assert all(
+        item["sha256"] == h.request.sha256 for item in completed.result["evidence"]
+    )
+
+
 @pytest.mark.parametrize(
     "corruption", ["version", "hash", "assessment", "missing_static"]
 )

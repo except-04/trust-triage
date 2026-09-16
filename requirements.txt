@@ -30,7 +30,7 @@ speakeasy-emulator==1.5.11
 # --- API / 대시보드 ---
 fastapi>=0.110
 uvicorn[standard]>=0.29
-streamlit>=1.33
+streamlit>=1.37
 python-multipart>=0.0.9      # FastAPI 파일 업로드용
 pydantic>=2.6
 

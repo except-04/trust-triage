@@ -16,16 +16,19 @@ from trust_triage.feature_extraction import (
 
 log = logging.getLogger("demo")
 ROOT = pathlib.Path(__file__).resolve().parent
-REPO_ROOT = ROOT.parent / "trust-triage"
+REPO_ROOT = ROOT.parents[2]
 ARTIFACTS = ROOT / "artifacts"
 SELECTION_JSON = ARTIFACTS / "feature-selection-ember-v3-top500.json"
-LGB_PATH = ARTIFACTS / "baseline_model_lightgbm_tuned_500_v4_9120.pkl"
-XGB_PATH = ARTIFACTS / "baseline_model_xgb_500.pkl"
-CALIB_PATH = ARTIFACTS / "jrr_calibrator.pkl"
+LGB_PATH = ARTIFACTS / "baseline_model_lightgbm_tuned_500_4way.pkl"
+XGB_PATH = ARTIFACTS / "baseline_model_xgb_500_4way_1000cap.pkl"
+CALIB_PATH = ARTIFACTS / "jrr_calibrator_4way.pkl"
+RISK_SIGNALS_PATH = ARTIFACTS / "jrr_risk_signals.pkl"
 JRR_ROUTER_PATH = REPO_ROOT / "src" / "jrr" / "jrr_router.py"
 
-TAU_LOW = 0.1
+TAU_LOW = 0.65
 TAU_DISAGREE = 0.3
+TAU_OOD = 0.0
+TAU_DIFFICULTY = 6.0
 EXTRACT_TIMEOUT_SEC = 30.0
 
 class InputError(Exception):
@@ -40,11 +43,11 @@ class ExtractError(Exception):
 def new_response(info: dict) -> dict:
     return {
         "sha256": info["sha256"],
-        "verdict": "심층 분석",
+        "verdict": "HIGH_RISK_UNCERTAIN",
         "analysis_status": None,
         "calibrated_probability": None,
-        "risk_score": None,
-        "route": "MANUAL_REVIEW",
+        "initial_verdict": "HIGH_RISK_UNCERTAIN",
+        "route": "DEEP_ANALYSIS",
         "top_features": []
     }
 
@@ -98,7 +101,7 @@ def prepare_extract() -> tuple:
     selector = FeatureSelector.from_json_file(extractor.schema, SELECTION_JSON)
 
     return extractor, selector
-    
+
 # 특징 추출 함수
 def extract(extractor, selector, path: pathlib.Path) -> tuple:
     result = extractor.extract_with_timeout(path, EXTRACT_TIMEOUT_SEC)
@@ -134,11 +137,24 @@ def load_models_calib() -> tuple:
     return calib, tau_high
 
 # JRR signal 계산
-def signals(calib, p_lgb_raw: float, p_xgb_raw: float) -> tuple:
+def signals(calib, p_lgb_raw: float, p_xgb_raw: float, x_500: np.ndarray) -> tuple:
     p_calib = float(calib.predict([p_lgb_raw])[0])
     disagreement = abs(p_lgb_raw - p_xgb_raw)
 
-    return p_calib, disagreement
+    ood_score = 0.0
+    difficulty_score = 0.0
+
+    if RISK_SIGNALS_PATH.exists():
+        risk_signals = joblib.load(RISK_SIGNALS_PATH)
+        ood_model = risk_signals['ood_model']
+        difficulty_indices = risk_signals['difficulty_indices']
+
+        ood_score = float(ood_model.decision_function(x_500.reshape(1, -1))[0])
+        difficulty_score = float(np.sum(x_500[difficulty_indices]))
+    else:
+        raise FileNotFoundError(f"위험 신호(OOD/Difficulty) 산출을 위한 모델을 찾을 수 없습니다: {RISK_SIGNALS_PATH}")
+
+    return p_calib, disagreement, ood_score, difficulty_score
 
 # jrr_router.py를 일반적인 방법으로 import 할 수 없어 사용
 def load_router_class(router_path: pathlib.Path):
@@ -150,11 +166,11 @@ def load_router_class(router_path: pathlib.Path):
 # 라우터 준비 함수
 def prepare_route(tau_high: float):
     JointRiskRouter = load_router_class(JRR_ROUTER_PATH)
-    return JointRiskRouter(tau_low = TAU_LOW, tau_high = tau_high, tau_disagree = TAU_DISAGREE)
+    return JointRiskRouter(tau_low = TAU_LOW, tau_high = tau_high, tau_disagree = TAU_DISAGREE, tau_ood = TAU_OOD, tau_difficulty = TAU_DIFFICULTY)
 
 # JRR 라우팅
-def route(router, p_calib: float, disagreement: float) -> dict:
-    return router.route_sample(p_calib, disagreement)
+def route(router, p_calib: float, disagreement: float, ood_score: float, difficulty_score: float) -> dict:
+    return router.route_sample(p_calib, disagreement, ood_score, difficulty_score)
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
@@ -198,22 +214,26 @@ def main(argv: list[str] | None = None) -> int:
         log.info("calib model: %s", type(calib).__name__)
 
         # JRR signal 계산
-        p_calib, disagreement = signals(calib, p_lgb_raw, p_xgb_raw)
+        p_calib, disagreement, ood_score, difficulty_score = signals(calib, p_lgb_raw, p_xgb_raw, x)
+
         response["calibrated_probability"] = p_calib
         log.info("p_calib = %.4f", p_calib)
-        log.info("disagreement = %.4f\n", disagreement)
+        log.info("disagreement = %.4f", disagreement)
+        log.info("ood_score = %.4f, difficulty_score = %.4f\n", ood_score, difficulty_score)
 
         # 라우팅
         router = prepare_route(TAU_HIGH)
-        routed = route(router, p_calib, disagreement)
-        response["route"] = routed["decision"]
+        routed = route(router, p_calib, disagreement, ood_score, difficulty_score)
+        response["initial_verdict"] = routed["initial_verdict"]
+        response["route"] = routed["route"]
         log.info("router ready (tau_high = %.4f, tau_low = %.4f, tau_disagreement = %.4f)", TAU_HIGH, TAU_LOW, TAU_DISAGREE)
-        log.info("route: %s", routed["decision"])
+        log.info("initial_verdict: %s", routed["initial_verdict"])
+        log.info("route: %s", routed["route"])
         log.info("reason: %s\n", routed["reason"])
 
-        if response["route"] == "AUTO_PASS":
+        if response["initial_verdict"] == "AUTO_BENIGN":
             response["verdict"] = "자동 정상"
-        elif response["route"] == "AUTO_QUARANTINE":
+        elif response["initial_verdict"] == "AUTO_MALICIOUS":
             response["verdict"] = "자동 악성"
         else:
             response["verdict"] = "심층 분석"

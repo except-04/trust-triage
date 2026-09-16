@@ -324,7 +324,7 @@ PostgreSQL → repository → service → app.py
 
 다중 파일과 ZIP 입력에서는 `batch_inputs.py`가 파일을 검사한다. 지원하지 않는 파일은 `SKIPPED`와 사유를 남기고 `service.py`가 지원 PE의 분석 작업과 접수 내역을 같은 DB 트랜잭션에 등록한다. 모두 제외돼도 `api_batches`에는 접수 내역이 남고 `api_analyses`는 추가되지 않는다. ZIP 자체는 영구 보관하지 않는다.
 
-`batch_results.py`는 전체 배치의 진행 상태·초기 판정 요약을 만들고 고위험 결과를 먼저 표시한다. 필터·페이지 API는 `repository.py`에서 전체 결과를 필터링·정렬한 다음 페이지를 가져온다. 원본 접수 내역 순서는 결과 정렬과 별도로 유지한다. 현재 Streamlit은 Mock 화면이므로 실제 화면 연결 시 이 응답을 사용한다.
+`batch_results.py`는 전체 배치의 진행 상태·초기 판정 요약을 만들고 고위험 결과를 먼저 표시한다. 필터·페이지 API는 `repository.py`에서 전체 결과를 필터링·정렬한 다음 페이지를 가져온다. 원본 접수 내역 순서는 결과 정렬과 별도로 유지한다. 실제 파일 접수·조회 기능이 추가된 상태입니다.
 
 원본 파일은 로컬 저장소 또는 S3에 있고, DB에는 그 위치를 보관한다. 화면용 응답은 `views.py`가 필요한 필드를 골라 만들며 내부 원본 저장 위치는 공개 응답에서 제외한다.
 
@@ -403,7 +403,7 @@ lease는 “이 작업을 지금 처리해도 되는 권한의 유효기간”, 
 | 심층 분석 대상 또는 자동 정상 경로의 SHAP 실패 | `UNCERTAIN` | 전문가 검토 |
 | 전체 분석 처리 실패 | `UNCERTAIN` | 분석 실패로 기록하고 전문가 검토 |
 
-심층 분석 후 자동으로 최종 악성·정상을 정하는 새 규칙은 팀 합의 후 `assess()`에 반영해야 한다. LLM 설명은 전문가가 참고할 증거 해석으로 제공한다.
+심층 분석 후 자동으로 최종 악성·정상을 정하는 새 규칙은 팀 합의 후 `assess()`에 반영해야 한다. 현재 `ExistingDeepGateway`는 `DeepAnalysisService`를 호출하여 CAPA/FLOSS 결과 저장, SQS Worker 요청, 결과 수신·재개와 선택적 LLM 해석을 연결한다. LLM 설명은 전문가가 참고할 증거 해석으로 제공하며 자동 확정하지 않는다. [연결·실행 절차](../worker/backend-integration.md)를 참고한다. 실제 AWS·분석 도구 환경 검증은 별도로 필요하다.
 
 초기 분석에는 팀이 검증한 LightGBM, XGBoost, Calibration, Risk Signals, Top-500 인덱스, Feature selection manifest가 필요하다. 각 파일 경로는 `runtime.py`의 `BACKEND_*_PATH` 설정으로 받는다.
 

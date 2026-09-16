@@ -201,6 +201,33 @@ def test_prepare_saves_static_phase_without_calling_later_tools_or_llm(
     assert {item.source for item in rig.checkpoint.evidence} == {"CAPA", "FLOSS"}
 
 
+@pytest.mark.parametrize("tool", ["capa", "floss"])
+def test_main_hash_validation_is_preserved_before_static_evidence_is_admitted(
+    tmp_path, tool
+):
+    rig = _rig(tmp_path)
+    result = getattr(rig, tool).result
+    result.sha256 = "b" * 64
+    result.evidence = tuple(
+        replace(item, sha256=result.sha256) for item in result.evidence
+    )
+    checkpoint = rig.orchestrator.prepare(
+        rig.sample,
+        initial_route="DEEP_ANALYSIS",
+        initial_verdict="UNKNOWN",
+        sha256=rig.sha256,
+    )
+    assert checkpoint.tool_statuses[tool.upper()] == "TOOL_ERROR"
+    assert all(
+        item.source != tool.upper() and item.sha256 == rig.sha256
+        for item in checkpoint.evidence
+    )
+    assert rig.llm.calls == rig.speakeasy.calls == 0
+    # An invalid tool payload is never accepted as a resumable service checkpoint.
+    with pytest.raises(ValueError, match="different SHA-256"):
+        checkpoint.validate_identity(**_identity(rig))
+
+
 def test_finalize_static_uses_restored_evidence_and_calls_llm_once_per_invocation(
     tmp_path,
 ):

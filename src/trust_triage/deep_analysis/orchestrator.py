@@ -211,6 +211,14 @@ class DeepAnalysisOrchestrator:
             try:
                 capa_result = self.capa_analyzer.analyze(path)
                 capa_status = _status_value(capa_result) or "UNKNOWN"
+
+                if capa_result:
+                    capa_sha256 = _result_sha256(capa_result)
+                    if capa_sha256 and capa_sha256.lower() != sample_sha256.lower():
+                        raise ValueError(
+                            f"Result SHA256 ({capa_sha256}) does not match sample ({sample_sha256})"
+                        )
+
                 evidence.extend(
                     normalize_capa_result(
                         capa_result,
@@ -237,6 +245,14 @@ class DeepAnalysisOrchestrator:
             try:
                 floss_result = self.floss_analyzer.analyze(path)
                 floss_status = _status_value(floss_result) or "UNKNOWN"
+
+                if floss_result:
+                    floss_sha256 = _result_sha256(floss_result)
+                    if floss_sha256 and floss_sha256.lower() != sample_sha256.lower():
+                        raise ValueError(
+                            f"Result SHA256 ({floss_sha256}) does not match sample ({sample_sha256})"
+                        )
+
                 evidence.extend(
                     normalize_floss_result(
                         floss_result,

@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 
+from trust_triage.attack_mapping import normalize_attack_labels
 from trust_triage.deep_analysis import (
     AnalysisTier,
-    Evidence,
-    EvidenceStatus,
     DeepAnalysisConfig,
     DeepAnalysisDisposition,
     DeepAnalysisOrchestrator,
     DeepAnalysisStatus,
+    Evidence,
+    EvidenceStatus,
     LLMInterpretation,
     LLMInterpretationStatus,
 )
-from trust_triage.attack_mapping import normalize_attack_labels
+
+_SAMPLE_BYTES = b"MZ\x00\x00fixture"
+_SAMPLE_SHA256 = hashlib.sha256(_SAMPLE_BYTES).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -23,7 +27,7 @@ class _Capability:
 
 
 class _FakeCapaResult:
-    sha256 = "b" * 64
+    sha256 = _SAMPLE_SHA256
 
     def __init__(
         self,
@@ -64,9 +68,11 @@ class _FakeCapaAnalyzer:
 
 
 class _FakeFlossResult:
-    sha256 = "f" * 64
+    sha256 = _SAMPLE_SHA256
 
-    def __init__(self, evidence: tuple[Evidence, ...] = (), *, status: str = "SUCCESS") -> None:
+    def __init__(
+        self, evidence: tuple[Evidence, ...] = (), *, status: str = "SUCCESS"
+    ) -> None:
         self.evidence = evidence
         self.status = status
 
@@ -114,7 +120,8 @@ class _FakeLLMInterpreter:
         sha256: str,
         initial_verdict: str | None,
     ) -> LLMInterpretation:
-        del sha256, initial_verdict
+        del initial_verdict
+        assert all(item.sha256 == sha256 for item in evidence)
         self.calls += 1
         self.evidence = tuple(evidence)
         return LLMInterpretation(
@@ -131,7 +138,7 @@ class _FakeLLMInterpreter:
 
 def _sample(tmp_path: Path) -> Path:
     sample = tmp_path / "sample.exe"
-    sample.write_bytes(b"MZ\x00\x00fixture")
+    sample.write_bytes(_SAMPLE_BYTES)
     return sample
 
 
@@ -150,7 +157,7 @@ def _injection_capability() -> _Capability:
 def _floss_string_evidence() -> Evidence:
     return Evidence(
         evidence_id="floss-1",
-        sha256="f" * 64,
+        sha256=_SAMPLE_SHA256,
         source="FLOSS",
         category="OBFUSCATED_STRING",
         severity=0.5,
@@ -249,7 +256,7 @@ def test_insufficient_capa_evidence_advances_to_speakeasy(tmp_path: Path) -> Non
     speakeasy = _FakeSpeakeasyAnalyzer(
         {
             "evidence_id": "speakeasy-1",
-            "sha256": "c" * 64,
+            "sha256": _SAMPLE_SHA256,
             "status": "SUCCESS",
             "observed_apis": [
                 "VirtualAllocEx",
@@ -284,16 +291,14 @@ def test_insufficient_speakeasy_evidence_advances_to_ghidra(tmp_path: Path) -> N
     speakeasy = _FakeSpeakeasyAnalyzer(
         {
             "evidence_id": "speakeasy-generic",
-            "sha256": "f" * 64,
+            "sha256": _SAMPLE_SHA256,
             "status": "SUCCESS",
             "observed_apis": ["CreateFileW"],
             "behaviors": ["file_access"],
             "events": {},
         }
     )
-    ghidra = _FakeCapaAnalyzer(
-        _capa_result(capabilities=[_injection_capability()])
-    )
+    ghidra = _FakeCapaAnalyzer(_capa_result(capabilities=[_injection_capability()]))
 
     result = DeepAnalysisOrchestrator(
         capa_analyzer=capa,
@@ -319,14 +324,12 @@ def test_speakeasy_failure_uses_ghidra_fallback(tmp_path: Path) -> None:
     speakeasy = _FakeSpeakeasyAnalyzer(
         {
             "evidence_id": "speakeasy-timeout",
-            "sha256": "g" * 64,
+            "sha256": _SAMPLE_SHA256,
             "status": "TIMEOUT",
             "errors": ["timeout"],
         }
     )
-    ghidra = _FakeCapaAnalyzer(
-        _capa_result(capabilities=[_injection_capability()])
-    )
+    ghidra = _FakeCapaAnalyzer(_capa_result(capabilities=[_injection_capability()]))
 
     result = DeepAnalysisOrchestrator(
         capa_analyzer=capa,
@@ -348,7 +351,7 @@ def test_ghidra_failure_returns_failed_status(tmp_path: Path) -> None:
     speakeasy = _FakeSpeakeasyAnalyzer(
         {
             "evidence_id": "speakeasy-generic",
-            "sha256": "h" * 64,
+            "sha256": _SAMPLE_SHA256,
             "status": "SUCCESS",
             "observed_apis": ["CreateFileW"],
             "behaviors": ["file_access"],
@@ -377,15 +380,13 @@ def test_ghidra_is_disabled_by_default_and_not_executed(tmp_path: Path) -> None:
     speakeasy = _FakeSpeakeasyAnalyzer(
         {
             "evidence_id": "speakeasy-generic",
-            "sha256": "i" * 64,
+            "sha256": _SAMPLE_SHA256,
             "status": "SUCCESS",
             "observed_apis": ["CreateFileW"],
             "behaviors": ["file_access"],
         }
     )
-    ghidra = _FakeCapaAnalyzer(
-        _capa_result(capabilities=[_injection_capability()])
-    )
+    ghidra = _FakeCapaAnalyzer(_capa_result(capabilities=[_injection_capability()]))
 
     result = DeepAnalysisOrchestrator(
         capa_analyzer=capa,
@@ -408,7 +409,7 @@ def test_speakeasy_failure_is_not_malicious_evidence(tmp_path: Path) -> None:
     speakeasy = _FakeSpeakeasyAnalyzer(
         {
             "evidence_id": "speakeasy-timeout",
-            "sha256": "d" * 64,
+            "sha256": _SAMPLE_SHA256,
             "status": "TIMEOUT",
             "observed_apis": ["VirtualAllocEx"],
             "behaviors": [],
@@ -434,7 +435,7 @@ def test_completed_but_uncertain_flow_requires_review(tmp_path: Path) -> None:
     speakeasy = _FakeSpeakeasyAnalyzer(
         {
             "evidence_id": "speakeasy-benign-looking",
-            "sha256": "e" * 64,
+            "sha256": _SAMPLE_SHA256,
             "status": "SUCCESS",
             "observed_apis": ["CreateFileW"],
             "behaviors": ["file_access"],

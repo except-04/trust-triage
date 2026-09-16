@@ -50,16 +50,16 @@ OUT_PROBA_PATH = "data/jrr_calibrated_proba.npy"
 
 def main() -> int:
     print("[train_calibrator] JRR 확률 보정 모델 학습 시작 (4-way Calibration Set)\n")
-    
+
     if not all(os.path.exists(p) for p in [Y_CALIB_PATH, X_CALIB_PATH, TOP_N_PATH, MODEL_PATH]):
         print("에러: 데이터를 찾을 수 없습니다. 경로를 확인해주세요.")
         return 1
 
     # MLflow 실험 공간 설정
     mlflow.set_experiment("JRR_Calibration")
-    
+
     with mlflow.start_run(run_name="07_Isotonic_Calibration_4way"):
-        
+
         # 1. 로컬 데이터 및 모델 로드
         print("Calibration 데이터 및 모델 로드 중...")
         y_calib = np.load(Y_CALIB_PATH)
@@ -67,30 +67,30 @@ def main() -> int:
         top_indices = np.load(TOP_N_PATH)
         model = joblib.load(MODEL_PATH)
         print(f"  -> 총 {len(y_calib):,}개 데이터 및 LightGBM 로드 완료")
-        
+
         # 2. Top 500 피처 추출 및 원시 확률 추론
         print("\nLightGBM을 통한 원시 예측 확률(Raw Proba) 산출 중...")
         X_calib_500 = X_calib[:, top_indices]
         raw_calib_proba = model.predict_proba(X_calib_500)[:, 1]
-        
+
         # 3. Isotonic Regression 보정기 학습
         print("\nIsotonic Regression 보정기 학습 중...")
         calibrator = IsotonicRegression(out_of_bounds="clip")
         calibrator.fit(raw_calib_proba, y_calib)
-        
+
         # 4. 신뢰도 보정 및 최적 임계값 도출 (Calibration Set 기준)
         print("\n수행계획서 FPR 0.1% 정책 적용 및 최적 임계값 도출 중...")
         calibrated_probs = calibrator.predict(raw_calib_proba)
         np.save("data/jrr_calibrated_proba_calib.npy", calibrated_probs)
         fpr, tpr, thresholds = roc_curve(y_calib, calibrated_probs)
-        
+
         # FPR이 목표치(0.001) 이하인 구간 중 가장 성적이 좋은(탐지율이 높은) 위치 탐색
         idx = np.where(fpr <= TARGET_FPR)[0][-1]
-        
+
         optimal_threshold = thresholds[idx]
         tpr_at_fpr = tpr[idx]
         fpr_at_fpr = fpr[idx]
-        
+
         print("\n=== [최종 결과] ===")
         print(f"JRR 확정 임계값(Threshold): {optimal_threshold:.6f}")
         print(f"보정 후 악성 탐지율(TPR): {tpr_at_fpr*100:.2f}%")
@@ -104,11 +104,11 @@ def main() -> int:
         mlflow.log_metric("optimal_threshold", optimal_threshold)
         mlflow.log_metric("tpr_at_fpr", tpr_at_fpr)
         mlflow.sklearn.log_model(calibrator, "07_jrr_calibrator_model")
-        
+
         # 6. 로컬 파일 저장
         print(f"라우터 연동용 로컬 파일({OUT_CALIBRATOR_PATH}) 저장 중...")
         joblib.dump({'model': calibrator, 'threshold': optimal_threshold}, OUT_CALIBRATOR_PATH)
-        
+
         # 7. Eval 데이터에 대한 예측 및 확률 보정 파일(jrr_calibrated_proba.npy) 생성
         print(f"\n평가셋(Eval) 원시 확률 추론 및 보정 적용 중...")
         if os.path.exists(X_EVAL_PATH):
@@ -116,14 +116,14 @@ def main() -> int:
             X_eval_500 = X_eval[:, top_indices]
             raw_eval_proba = model.predict_proba(X_eval_500)[:, 1]
             calibrated_eval_proba = calibrator.predict(raw_eval_proba)
-            
+
             print(f"보정된 확률 파일({OUT_PROBA_PATH}) 저장 중...")
             np.save(OUT_PROBA_PATH, calibrated_eval_proba)
         else:
             print(f"경고: {X_EVAL_PATH} 파일이 없어 jrr_calibrated_proba.npy를 생성하지 못했습니다.")
-        
+
         print("\n[train_calibrator] 완료되었습니다.")
-        
+
     return 0
 
 if __name__ == "__main__":
