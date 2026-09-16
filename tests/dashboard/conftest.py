@@ -56,7 +56,15 @@ class Element:
     Element 를 돌려줘서 `panel.markdown(...)` 같은 연쇄 호출이 성립한다.
     """
 
-    _LAYOUT = ("container", "expander", "empty", "form", "popover", "status")
+    _LAYOUT = (
+        "container",
+        "expander",
+        "empty",
+        "form",
+        "popover",
+        "status",
+        "spinner",
+    )
 
     def __init__(self):
         self.calls = []
@@ -148,3 +156,8 @@ def app():
 @pytest.fixture
 def rerun_signal():
     return Rerun
+
+
+@pytest.fixture
+def stop_signal():
+    return Stop

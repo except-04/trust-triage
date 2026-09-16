@@ -124,6 +124,24 @@ def get_batch(batch_id):
     return _request("GET", f"/batches/{batch_id}")
 
 
+def search_analyses(sha256, limit=20, offset=0, sort="newest"):
+    """SHA-256으로 분석 이력을 조회한다.
+
+    전용 해시 조회 엔드포인트가 아니라 목록 조회(GET /analyses)의 sha256
+    필터다. 같은 파일을 여러 번 접수했으면 이력이 모두 나온다 — 백엔드는
+    최신 한 건으로 줄이지 않는다.
+
+    없는 해시는 404가 아니라 total_count 0인 빈 목록으로 온다. 호출하는 쪽은
+    "결과 없음"을 예외가 아니라 건수로 판정해야 한다.
+
+    sha256은 소문자 64자리여야 한다(백엔드 정규식). 형식이 어긋나면 422다.
+
+    반환: {"total_count": ..., "limit": ..., "offset": ..., "analyses": [...]}
+    """
+    params = {"sha256": sha256, "limit": limit, "offset": offset, "sort": sort}
+    return _request("GET", "/analyses", params=params)
+
+
 def health():
     """서버가 살아 있는지 확인한다."""
     return _request("GET", "/health")
