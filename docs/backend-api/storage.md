@@ -130,7 +130,9 @@ reference = store.put_json(
 
 현재 백엔드에서 등록된 리포트는 `repository.list_artifacts(analysis_id)`로 얻는다. `storage.artifact_store(max_bytes=...).read(reference)`는 체크섬을 검증한 바이트를 반환한다. 리포트 기본 상한은 64 MiB이며 `BACKEND_MAX_ARTIFACT_BYTES`로 설정한다.
 
-이번 변경은 백엔드 단계 리포트 저장과 공통 저장 인터페이스까지 적용한다. 기존 Worker의 `include_raw_report=False`나 CAPA/FLOSS 실행부는 수정하지 않았다. `deep_analysis/report.json`은 Gateway에서 받은 종료 스냅샷이며 각 도구의 전체 원본 리포트를 뜻하지 않는다. 개별 도구 리포트 저장, 결과의 산출물 참조 전달, S3 산출물 쓰기 권한은 후속 Worker·Deep Analysis 통합에서 연결한다. 원본을 읽던 Worker 역할에는 산출물 경로의 쓰기 권한도 필요하다.
+백엔드는 단계 리포트를 저장하며, SQS Worker도 공통 인터페이스로 정규화된 Speakeasy 결과를 `speakeasy/<tool_run_id>/report.json`에 보관한다. 해당 참조는 `speakeasy_jobs.result.artifact`에 저장되고 심층 분석 체크포인트로 전달된다. Worker 역할에는 산출물 경로의 쓰기 권한이 필요하다. 보조 리포트 저장 실패는 `artifact_error`로 드러내고 관찰 결과는 DB에 보존한다. [Worker 결과 계약](../worker/contracts.md)을 참고한다.
+
+`include_raw_report=False`는 유지한다. `deep_analysis/report.json`은 Gateway의 종료 스냅샷이며 Worker 리포트 역시 제한된 이벤트를 담은 정규화 결과다. CAPA/FLOSS/Speakeasy 엔진의 전체 원본 리포트·메모리 덤프 보관을 뜻하지 않는다.
 
 ## 7. 검증
 

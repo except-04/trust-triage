@@ -8,14 +8,14 @@ import multiprocessing
 import queue
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .models import DynamicAnalysisResult, DynamicAnalysisStatus
-
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_INSTRUCTIONS = 1_000_000
@@ -174,7 +174,7 @@ def _run_speakeasy_worker(
 
     try:
         from speakeasy import Speakeasy
-    except Exception as exc:  # pragma: no cover - 설치 환경에 따라 결정된다.
+    except Exception as exc:  # noqa: BLE001 - optional engine import boundary
         _put_worker_message(
             result_queue,
             {"kind": "error", "status": "TOOL_ERROR", "message": str(exc)},
@@ -221,7 +221,7 @@ def _run_speakeasy_worker(
                 ]
 
         _put_worker_message(result_queue, message)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - isolate third-party engine failures
         message = str(exc) or exc.__class__.__name__
         _put_worker_message(
             result_queue,
@@ -317,6 +317,29 @@ def _close_queue(result_queue: Any) -> None:
         result_queue.close()
     finally:
         result_queue.join_thread()
+
+
+def _receive_worker_message(process: Any, result_queue: Any, timeout: float) -> str:
+    """Drain the result pipe before join so a full Queue cannot deadlock its child.
+
+    The child Queue feeder must flush before the process can exit. Waiting for
+    process exit first can turn a completed large report into TIMEOUT.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Speakeasy child exceeded its deadline")
+        try:
+            message = result_queue.get(timeout=min(0.1, remaining))
+        except queue.Empty:
+            if not process.is_alive():
+                raise
+            continue
+        process.join(max(0, deadline - time.monotonic()))
+        if process.is_alive():
+            raise TimeoutError("Speakeasy child did not exit after returning a result")
+        return message
 
 
 class SpeakeasyAnalyzer:
@@ -439,7 +462,7 @@ class SpeakeasyAnalyzer:
 
         try:
             process.start()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - process startup failure becomes a tool result
             _close_queue(result_queue)
             return self._failure(
                 evidence_id=evidence_id,
@@ -454,37 +477,36 @@ class SpeakeasyAnalyzer:
                 completed_at=_utc_now(),
             )
 
-        process.join(self.timeout_seconds)
-        elapsed_ms = int((time.perf_counter() - start) * 1000)
-        if process.is_alive():
+        try:
+            raw_message = _receive_worker_message(
+                process, result_queue, self.timeout_seconds
+            )
+        except TimeoutError:
             process.terminate()
             process.join(2)
             if process.is_alive():
                 # terminate()이 Windows에서 즉시 끝내지 못하는 경우의 마지막 안전장치다.
                 process.kill()
                 process.join(2)
-            _close_queue(result_queue)
             return self._failure(
                 evidence_id=evidence_id,
                 sha256=sha256,
                 status=DynamicAnalysisStatus.TIMEOUT,
                 summary="Speakeasy 분석이 제한 시간 안에 끝나지 않았습니다.",
-                analysis_time_ms=elapsed_ms,
+                analysis_time_ms=int((time.perf_counter() - start) * 1000),
                 metadata=metadata,
                 tool_version=self.tool_version,
                 started_at=started_at,
                 completed_at=_utc_now(),
             )
 
-        try:
-            raw_message = result_queue.get(timeout=2)
-        except queue.Empty:
+        except (queue.Empty, EOFError, OSError):
             return self._failure(
                 evidence_id=evidence_id,
                 sha256=sha256,
                 status=DynamicAnalysisStatus.TOOL_ERROR,
                 summary="Speakeasy 프로세스가 결과를 반환하지 않았습니다.",
-                analysis_time_ms=elapsed_ms,
+                analysis_time_ms=int((time.perf_counter() - start) * 1000),
                 errors=(f"process_exit_code={process.exitcode}",),
                 metadata=metadata,
                 tool_version=self.tool_version,
@@ -492,8 +514,15 @@ class SpeakeasyAnalyzer:
                 completed_at=_utc_now(),
             )
         finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(2)
+                if process.is_alive():
+                    process.kill()
+                    process.join(2)
             _close_queue(result_queue)
 
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
         try:
             message = json.loads(raw_message)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -586,9 +615,7 @@ class SpeakeasyAnalyzer:
             status=status,
             summary=summary,
             raw_reference=(
-                str(message["raw_reference"])
-                if message.get("raw_reference")
-                else None
+                str(message["raw_reference"]) if message.get("raw_reference") else None
             ),
             observed_apis=observed_apis,
             api_call_counts=api_call_counts,

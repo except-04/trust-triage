@@ -1032,7 +1032,7 @@ CAPA + FLOSS (Tier 1)
 > 평가 과정에서 **발현된 모든 위험 신호는 `triggered_signals` 배열에 빠짐없이 수집**됩니다. (참고로 `reason` 필드는 단순히 목록(Queue) 화면 등에서 1줄로 보여주기 위한 첫 번째 사유의 요약 텍스트일 뿐입니다.)
 > 과거에는 이러한 위험도를 하나의 뭉뚱그려진 `risk_score` 점수로 산출하여 프론트엔드 대시보드에 표시했지만, 현재는 **`risk_score`를 완전히 폐기**하고 백엔드에서 넘겨주는 **`triggered_signals` 배열을 활용해 발견된 다중 사유 전체를 프론트엔드 상세 화면에 모두 표시**함으로써 "왜 이 파일이 심층 분석으로 라우팅되었는지"를 직관적으로 설명(Explainable)합니다.
 
-Backend의 `deep_gateway.py`는 별도 Deep Analysis 서비스를 호출하고 상태를 가져오는 연결부입니다. 현재 백엔드의 Gateway 연동부는 완성되어 있으나, 실제 SQS 큐 및 Worker를 이용한 서비스 런타임 통합은 **미구현 상태(향후 과제)**입니다. (개발 및 테스트 시에는 단일 노드 동기 처리 방식을 사용합니다.)
+Backend의 `deep_gateway.py`는 `DeepAnalysisService`를 호출하고 상태를 가져오는 연결부입니다. `backend_api run`은 CAPA/FLOSS 체크포인트 저장 → 필요한 작업의 SQS 등록 → Worker 결과 수신 → 증거 반영·선택적 LLM 해석 → Backend 최종 상태 저장을 진행합니다. Worker는 별도 `speakeasy_worker run` 프로세스로 실행합니다. 코드 연결은 HTTP·클라우드 대역·실제 PostgreSQL로 검증했으며 실제 AWS·분석 도구·승인된 PE의 배포 환경 검증은 남아 있습니다. [연결·실행 절차](worker/backend-integration.md)와 [검증 기록](worker/verification.md)을 참고하세요.
 
 ## Tier 1 — CAPA + FLOSS
 
@@ -1410,3 +1410,4 @@ Final One-Time Evaluation
 | 2026-09-09 | v3.1 | Backend API, PostgreSQL, S3, SQS Worker, 실제 파일·의존성 구조 반영 | 이상욱 |
 | 2026-09-09 | v3.2 | 배치 요약·고위험 필터·ZIP 입력 및 파일별 접수 내역 반영 | 이상욱 |
 | 2026-09-15 | v3.3 | 백엔드 코드와 문서 정합성 교정 (Codex Implementation Audit 결과 반영) | 김건우 |
+| 2026-09-16 | v3.4 | SQS Worker 요청·결과 재개 구현과 배포 환경 검증 범위 반영 | Worker 브랜치 |

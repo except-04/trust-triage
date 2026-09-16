@@ -1,7 +1,7 @@
 """백엔드와 별도 심층 분석 구현 사이의 작은 연결부.
 
-feature/deep-analysis는 아직 팀 검토 전이다. 해당 구현이 설치되지 않아도
-API 명세/접수/조회는 실행되며, 실제 심층 분석 요청에는 명시적인 오류를 낸다.
+별도 backend run 프로세스가 CAPA/FLOSS 체크포인트와 SQS Worker 결과를 재개한다.
+접수·조회에서는 도구를 실행하지 않으며 실제 연결에는 S3/DB/SQS 설정이 필요하다.
 """
 
 from __future__ import annotations

@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadAndDispatchSpeakeasyJobs",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "arn:aws:sqs:ap-northeast-2:123456789012:trust-triage-speakeasy"
+    },
+    {
+      "Sid": "ReconcileSpeakeasyDeadLetters",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "arn:aws:sqs:ap-northeast-2:123456789012:trust-triage-speakeasy-dlq"
+    },
+    {
+      "Sid": "ReadAnalysisSamples",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::trust-triage-temp-example/raw/*"
+    },
+    {
+      "Sid": "WriteSpeakeasyReports",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::trust-triage-temp-example/raw/*/analyses/*/speakeasy/*/report.json"
+    }
+  ]
+}

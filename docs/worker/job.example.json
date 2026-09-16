@@ -1,0 +1,7 @@
+{
+  "analysis_id": "analysis-001",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "file_location": "s3://trust-triage-temp-example/raw/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/sample.bin",
+  "requested_stage": "SPEAKEASY",
+  "requested_at": "2026-09-07T10:00:00+00:00"
+}
