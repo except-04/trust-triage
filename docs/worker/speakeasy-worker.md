@@ -48,6 +48,8 @@ SQS 전송 누락을 Worker도 복구하므로 요청 큐의 `SendMessage` 권�
 
 `init-db`는 최초 테이블 생성용이며 기존 데이터를 지우지 않는다. CLI는 기본 `.env`를 읽고 이미 설정된 환경변수를 우선한다. `check`는 DB와 SQS/DLQ 설정을 확인한다. S3 읽기·쓰기 권한과 실제 분석까지 확인하는 명령은 아니다. Linux에서는 가상환경의 `bin/python`으로 같은 명령을 실행한다.
 
+큐 점검은 `QueueArn`, `RedrivePolicy`, `MessageRetentionPeriod`만 조회한다. `FifoQueue`는 FIFO 전용 속성이므로 Standard 큐에 요청하지 않는다. 큐 유형은 [AWS가 안내하는 `.fifo` 이름 접미사](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_GetQueueAttributes.html)를 반환된 ARN에서 확인한다. `Unknown Attribute FifoQueue` 오류가 발생했던 배포에서는 이 수정이 포함된 코드를 반영하고 `check`를 다시 실행한다.
+
 요청은 Backend 함수로 등록하거나, [예시 JSON](job.example.json)을 실제 값으로 바꿔 아래처럼 넣는다. 예시에 적힌 해시와 S3 파일은 설명용이다.
 
 ```powershell

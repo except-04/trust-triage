@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 
@@ -17,7 +18,9 @@ from .fakes import SAMPLE
 
 QUEUE_URL = "https://sqs.ap-northeast-2.amazonaws.com/123456789012/work"
 DLQ_URL = "https://sqs.ap-northeast-2.amazonaws.com/123456789012/dead"
+QUEUE_ARN = "arn:aws:sqs:ap-northeast-2:123456789012:work"
 DLQ_ARN = "arn:aws:sqs:ap-northeast-2:123456789012:dead"
+QUEUE_ATTRIBUTES = ["QueueArn", "RedrivePolicy", "MessageRetentionPeriod"]
 
 
 def aws_client(service):
@@ -92,34 +95,79 @@ def test_sqs_access_error_does_not_expose_service_message(job):
         assert "sensitive-service-details" not in str(caught.value)
 
 
+class StandardQueueClient:
+    """AWS Standard 큐의 FIFO 전용 속성 요청 거부를 재현한다."""
+
+    def __init__(self):
+        self.calls = []
+        self.attributes = {
+            QUEUE_URL: {
+                "QueueArn": QUEUE_ARN,
+                "RedrivePolicy": json.dumps(
+                    {"deadLetterTargetArn": DLQ_ARN, "maxReceiveCount": 3}
+                ),
+                "MessageRetentionPeriod": "345600",
+            },
+            DLQ_URL: {"QueueArn": DLQ_ARN, "MessageRetentionPeriod": "1209600"},
+        }
+
+    def get_queue_attributes(self, *, QueueUrl, AttributeNames):
+        self.calls.append(QueueUrl)
+        if "FifoQueue" in AttributeNames:
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "InvalidAttributeName",
+                        "Message": "Unknown Attribute FifoQueue.",
+                    }
+                },
+                "GetQueueAttributes",
+            )
+        return {
+            "Attributes": {
+                name: value
+                for name, value in self.attributes[QueueUrl].items()
+                if name in AttributeNames or "All" in AttributeNames
+            }
+        }
+
+
+def test_standard_queue_check_does_not_request_fifo_only_attributes():
+    client = StandardQueueClient()
+    queue, dlq = SqsQueue(client, QUEUE_URL), SqsQueue(client, DLQ_URL)
+    queue.check_dead_letter_queue(dlq)
+    assert client.calls == [QUEUE_URL, DLQ_URL]
+
+
 @pytest.mark.parametrize(
     "policy,retention,valid",
     [
         ({"deadLetterTargetArn": DLQ_ARN, "maxReceiveCount": 3}, "1209600", True),
         ({}, "1209600", False),
+        ({"deadLetterTargetArn": QUEUE_ARN, "maxReceiveCount": 3}, "1209600", False),
         ({"deadLetterTargetArn": DLQ_ARN, "maxReceiveCount": 8}, "1209600", False),
+        ({"deadLetterTargetArn": DLQ_ARN, "maxReceiveCount": 3}, "345600", False),
         ({"deadLetterTargetArn": DLQ_ARN, "maxReceiveCount": 3}, "86400", False),
     ],
 )
 def test_sqs_dead_letter_configuration_is_checked(policy, retention, valid):
     client = aws_client("sqs")
-    attributes = ["QueueArn", "RedrivePolicy", "FifoQueue", "MessageRetentionPeriod"]
     with Stubber(client) as stub:
         stub.add_response(
             "get_queue_attributes",
             {
                 "Attributes": {
-                    "QueueArn": "arn:aws:sqs:ap-northeast-2:123456789012:work",
+                    "QueueArn": QUEUE_ARN,
                     "RedrivePolicy": json.dumps(policy),
                     "MessageRetentionPeriod": "345600",
                 }
             },
-            {"QueueUrl": QUEUE_URL, "AttributeNames": attributes},
+            {"QueueUrl": QUEUE_URL, "AttributeNames": QUEUE_ATTRIBUTES},
         )
         stub.add_response(
             "get_queue_attributes",
             {"Attributes": {"QueueArn": DLQ_ARN, "MessageRetentionPeriod": retention}},
-            {"QueueUrl": DLQ_URL, "AttributeNames": attributes},
+            {"QueueUrl": DLQ_URL, "AttributeNames": QUEUE_ATTRIBUTES},
         )
         queue, dlq = SqsQueue(client, QUEUE_URL), SqsQueue(client, DLQ_URL)
         if valid:
@@ -127,6 +175,86 @@ def test_sqs_dead_letter_configuration_is_checked(policy, retention, valid):
         else:
             with pytest.raises(ValueError):
                 queue.check_dead_letter_queue(dlq)
+        stub.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize(
+    "source_fifo,target_fifo", [(True, False), (False, True), (True, True)]
+)
+def test_fifo_source_or_dead_letter_queue_is_rejected(source_fifo, target_fifo):
+    client = aws_client("sqs")
+    source_url = QUEUE_URL + (".fifo" if source_fifo else "")
+    target_url = DLQ_URL + (".fifo" if target_fifo else "")
+    source_arn = QUEUE_ARN + (".fifo" if source_fifo else "")
+    target_arn = DLQ_ARN + (".fifo" if target_fifo else "")
+    with Stubber(client) as stub:
+        stub.add_response(
+            "get_queue_attributes",
+            {
+                "Attributes": {
+                    "QueueArn": source_arn,
+                    "RedrivePolicy": json.dumps(
+                        {"deadLetterTargetArn": target_arn, "maxReceiveCount": 3}
+                    ),
+                    "MessageRetentionPeriod": "345600",
+                }
+            },
+            {"QueueUrl": source_url, "AttributeNames": QUEUE_ATTRIBUTES},
+        )
+        # 공통 속성만 요청하므로 FIFO 응답에도 FifoQueue 필드는 없다.
+        stub.add_response(
+            "get_queue_attributes",
+            {
+                "Attributes": {
+                    "QueueArn": target_arn,
+                    "MessageRetentionPeriod": "1209600",
+                }
+            },
+            {"QueueUrl": target_url, "AttributeNames": QUEUE_ATTRIBUTES},
+        )
+        with pytest.raises(ValueError, match="Worker requires Standard queues"):
+            SqsQueue(client, source_url).check_dead_letter_queue(
+                SqsQueue(client, target_url)
+            )
+        stub.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize("failed_url", [QUEUE_URL, DLQ_URL])
+def test_queue_attribute_access_error_is_not_ignored(failed_url):
+    client = aws_client("sqs")
+    with Stubber(client) as stub:
+        if failed_url == DLQ_URL:
+            stub.add_response(
+                "get_queue_attributes",
+                {"Attributes": {"QueueArn": QUEUE_ARN}},
+                {"QueueUrl": QUEUE_URL, "AttributeNames": QUEUE_ATTRIBUTES},
+            )
+        stub.add_client_error(
+            "get_queue_attributes",
+            "AccessDenied",
+            "sensitive-service-details",
+            403,
+            expected_params={
+                "QueueUrl": failed_url,
+                "AttributeNames": QUEUE_ATTRIBUTES,
+            },
+        )
+        with pytest.raises(RetryableError) as caught:
+            SqsQueue(client, QUEUE_URL).check_dead_letter_queue(
+                SqsQueue(client, DLQ_URL)
+            )
+        assert caught.value.code == "SQS_ERROR"
+        assert caught.value.__cause__.response["Error"]["Code"] == "AccessDenied"
+        assert "sensitive-service-details" not in str(caught.value)
+        stub.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize("missing_arn_url", [QUEUE_URL, DLQ_URL])
+def test_queue_type_must_not_be_assumed_without_arn(missing_arn_url):
+    client = StandardQueueClient()
+    del client.attributes[missing_arn_url]["QueueArn"]
+    with pytest.raises(ValueError, match="QueueArn"):
+        SqsQueue(client, QUEUE_URL).check_dead_letter_queue(SqsQueue(client, DLQ_URL))
 
 
 def test_s3_download_is_verified_and_removed(job, tmp_path):
