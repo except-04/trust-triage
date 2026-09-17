@@ -95,7 +95,6 @@ class SqsQueue:
             AttributeNames=[
                 "QueueArn",
                 "RedrivePolicy",
-                "FifoQueue",
                 "MessageRetentionPeriod",
             ],
         )["Attributes"]
@@ -108,12 +107,17 @@ class SqsQueue:
         if self.queue_url == dlq.queue_url:
             raise ValueError("SQS_QUEUE_URL and SQS_DLQ_URL must be different")
         source, target = self.attributes(), dlq.attributes()
-        if source.get("FifoQueue") == "true" or target.get("FifoQueue") == "true":
+        try:
+            source_arn, target_arn = source["QueueArn"], target["QueueArn"]
+        except KeyError as exc:
+            raise ValueError("SQS queue attributes must include QueueArn") from exc
+        # FifoQueue는 FIFO 전용 속성이다. 큐 이름의 필수 접미사를 ARN에서 확인한다.
+        if source_arn.endswith(".fifo") or target_arn.endswith(".fifo"):
             raise ValueError("Worker requires Standard queues, not FIFO queues")
         try:
             policy = json.loads(source.get("RedrivePolicy", "{}"))
             matched = (
-                policy["deadLetterTargetArn"] == target["QueueArn"]
+                policy["deadLetterTargetArn"] == target_arn
                 and int(policy["maxReceiveCount"]) == max_receive_count
             )
         except (KeyError, TypeError, ValueError) as exc:
