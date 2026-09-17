@@ -446,6 +446,7 @@ def _service(monkeypatch, messages=(), *, alive=True, ignores_terminate=False):
     ticks = iter(index * 0.2 for index in range(100))
     service = InitialAnalysisService(
         InitialAnalysisConfig(
+            reuse_models=False,
             extraction_timeout_seconds=1,
             inference_timeout_seconds=1,
             xai_timeout_seconds=0.5,

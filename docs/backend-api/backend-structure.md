@@ -155,6 +155,7 @@ backend-api/
 | [storage.py](../../src/trust_triage/backend_api/storage.py) | 원본 파일의 보관·다운로드·삭제 담당 | `LocalSampleStorage`, `S3SampleStorage`, SHA-256·크기·헤더 검사 |
 | [storage/artifacts.py](../../src/trust_triage/storage/artifacts.py) | 실행별 리포트를 원본과 같은 해시 폴더 아래 보관 | `ArtifactIdentity`, `ArtifactReference`, Local/S3 산출물 저장소 |
 | [initial_analysis.py](../../src/trust_triage/backend_api/initial_analysis.py) | 기존 Feature·모델·JRR·SHAP 모듈을 순서대로 호출 | `InitialAnalysisService.analyze()`, 분석용 자식 프로세스와 시간 제한 |
+| [initial_worker.py](../../src/trust_triage/backend_api/initial_worker.py) | 모델·SHAP 객체를 재사용하는 제한된 자식 프로세스 관리 | 모델 로딩·IPC·파일별 Feature 추출·실패 시 교체 |
 | [model_bundle.py](../../src/trust_triage/backend_api/model_bundle.py) | 분석에 사용할 모델 파일 묶음과 Feature 규격 검사 | `ModelBundleConfig`, `ModelBundle.load()` |
 | [deep_gateway.py](../../src/trust_triage/backend_api/deep_gateway.py) | 별도 심층 분석 서비스와 연결하는 담당 | `ExistingDeepGateway.advance()`, `get()`, `can_delete()` |
 | [views.py](../../src/trust_triage/backend_api/views.py) | DB·도구 결과를 화면용 응답으로 정리 | `analysis()`, `triage()`, `deep_analysis()`, `xai()` |
@@ -164,7 +165,7 @@ backend-api/
 | [__main__.py](../../src/trust_triage/backend_api/__main__.py) | 터미널 명령을 받아 실행을 시작하는 곳 | `main()`, `serve`, `run`, `init-db` 등 명령 분기 |
 | [__init__.py](../../src/trust_triage/backend_api/__init__.py) | Python 패키지를 구분하는 파일 | 패키지 설명 |
 
-처음에는 **`app.py → schemas.py → service.py → processor.py → repository.py`** 순서로 읽으면 된다. 이 다섯 파일을 읽으면 요청 형식, 업무 처리, 분석 실행, 저장의 관계를 이해할 수 있다. 이후 실제 분석이 궁금하면 `initial_analysis.py`와 `deep_gateway.py`를 보면 된다.
+처음에는 **`app.py → schemas.py → service.py → processor.py → repository.py`** 순서로 읽으면 된다. 이 다섯 파일을 읽으면 요청 형식, 업무 처리, 분석 실행, 저장의 관계를 이해할 수 있다. 이후 실제 분석이 궁금하면 `initial_analysis.py`, `initial_worker.py`, `deep_gateway.py`를 보면 된다.
 
 ### 이름이 비슷한 파일 구분하기
 
@@ -406,6 +407,8 @@ lease는 “이 작업을 지금 처리해도 되는 권한의 유효기간”, 
 심층 분석 후 자동으로 최종 악성·정상을 정하는 새 규칙은 팀 합의 후 `assess()`에 반영해야 한다. 현재 `ExistingDeepGateway`는 `DeepAnalysisService`를 호출하여 CAPA/FLOSS 결과 저장, SQS Worker 요청, 결과 수신·재개와 선택적 LLM 해석을 연결한다. LLM 설명은 전문가가 참고할 증거 해석으로 제공하며 자동 확정하지 않는다. [연결·실행 절차](../worker/backend-integration.md)를 참고한다. 실제 AWS·분석 도구 환경 검증은 별도로 필요하다.
 
 초기 분석에는 팀이 검증한 LightGBM, XGBoost, Calibration, Risk Signals, Top-500 인덱스, Feature selection manifest가 필요하다. 각 파일 경로는 `runtime.py`의 `BACKEND_*_PATH` 설정으로 받는다.
+
+`BACKEND_REUSE_MODELS=true`가 기본값이다. `backend_api run`은 모델·SHAP 객체를 별도 자식 프로세스에서 한 번 준비하고, 이후 작업에 재사용한다. 원본 PE의 Feature 추출은 파일마다 제한된 별도 프로세스에서 수행하므로 모델 프로세스에 원본 바이트를 계속 보관하지 않는다. 모델 파일의 경로·파일 정보가 바뀌거나 자식 프로세스가 오류·시간 초과를 내면 캐시를 폐기하고 다시 로드한다. 기본 100건마다도 프로세스를 교체한다. `BACKEND_MODEL_WORKER_MAX_JOBS`로 이 한도를 조정할 수 있고, 문제를 격리할 때 `BACKEND_REUSE_MODELS=false`로 기존 파일별 프로세스 방식으로 되돌릴 수 있다. 로그의 `initial_analysis_timing`에서 `model_reused=true`인 작업은 모델을 재사용한 경우다.
 
 기존 `feature/deep-analysis`·`feature/speakeasy-worker` 초안은 별도 작업이다. 이 백엔드는 옆 폴더의 코드를 자동으로 가져오지 않는다. 실제 연결에는 검토한 서비스 코드와 도구 의존성, 같은 PostgreSQL·S3 설정, SQS·Worker 환경이 필요하다.
 

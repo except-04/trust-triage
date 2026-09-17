@@ -17,6 +17,9 @@ from .storage import LocalSampleStorage, S3SampleStorage
 
 
 def initial_config(config: BackendConfig) -> InitialAnalysisConfig:
+    reuse = os.getenv("BACKEND_REUSE_MODELS", "true").strip().lower()
+    if reuse not in {"true", "false"}:
+        raise ValueError("BACKEND_REUSE_MODELS must be true or false")
     artifacts = ModelBundleConfig(
         **{
             name: os.getenv(f"BACKEND_{name.upper()}") or None
@@ -30,6 +33,8 @@ def initial_config(config: BackendConfig) -> InitialAnalysisConfig:
         xai_timeout_seconds=_positive("BACKEND_XAI_TIMEOUT_SECONDS", 30),
         shap_top_k=_integer("BACKEND_SHAP_TOP_K", 5),
         max_file_size_bytes=config.max_file_bytes,
+        reuse_models=reuse == "true",
+        model_worker_max_jobs=_integer("BACKEND_MODEL_WORKER_MAX_JOBS", 100),
     )
     total = (
         config.download_timeout_seconds

@@ -131,6 +131,11 @@ class BackendProcessor:
         )
         self.artifacts = storage.artifact_store(max_bytes=config.max_artifact_bytes)
 
+    def close(self) -> None:
+        close = getattr(self.initial, "close", None)
+        if close is not None:
+            close()
+
     def _checkpoint(self, record, token, tool, value, save, *, check=None):
         """Publish complete bytes, then commit reference and state together."""
         try:
