@@ -109,8 +109,17 @@ def get_status(analysis_id):
 
 
 def get_result(analysis_id):
-    """완료된 분석의 전체 결과를 가져온다."""
+    """현재까지 누적된 종합 결과를 가져온다.
+
+    전체 상태가 RUNNING이어도 Initial Analysis가 저장된 뒤라면 초기 판정과
+    SHAP, 심층 분석 도구별 상태가 채워져 온다.
+    """
     return _request("GET", f"/analyses/{analysis_id}")
+
+
+def get_deep_analysis(analysis_id):
+    """심층 분석의 종합 상태와 도구별 상세 결과를 가져온다."""
+    return _request("GET", f"/analyses/{analysis_id}/deep-analysis")
 
 
 def get_batch(batch_id):
