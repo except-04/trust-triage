@@ -197,12 +197,14 @@ def uploaded_descriptors(uploaded_files):
 
 
 def is_ood_detected(result):
-    if "ood_score" in result:
+    if result.get("ood_score") is not None:
         return result["ood_score"] < 0
     return bool(result.get("ood", False))
 
 
 def difficulty_label(score):
+    if score is None:
+        return "Unknown"
     if score <= 3:
         return "Low"
     if score <= 6:
@@ -578,10 +580,21 @@ def entry_view(entry, status):
         "disagreement": None,
         "ood_score": None,
         "difficulty_score": None,
+        "triggered_signals": None,
         "top_features": [],
         "deep_analysis_status": {},
+        "deep_status": None,
+        "current_stage": None,
         "evidence": [],
+        "evidence_details": [],
         "llm_summary": None,
+        "llm_status": None,
+        "final_assessment": None,
+        "capa": None,
+        "floss": None,
+        "speakeasy": None,
+        "tool_details": {},
+        "deep_error": None,
         "error": None,
     }
 
@@ -716,18 +729,25 @@ def refresh_pending(batch_data):
             continue
 
         analysis["status"] = progress.get("status", "QUEUED")
+        analysis["current_stage"] = progress.get("current_stage")
         analysis["error"] = progress.get("error")
 
-        if analysis["status"] == "COMPLETED":
-            # 완료된 것만 전체 결과를 한 번 가져온다
-            try:
-                full = api_client.get_result(analysis["analysis_id"])
-                batch_data["analyses"][index] = to_view(full, analysis)
-            except ApiError as e:
-                analysis["error"] = {
-                    "code": e.code, "message": e.message, "stage": e.stage,
-                }
-        elif analysis["status"] != "FAILED":
+        # Batch 조회를 쓸 수 없는 fallback에서도 누적 종합 결과를 읽는다.
+        # Initial Analysis가 저장되는 즉시 뷰에 반영하며, 별도 polling loop는
+        # 만들지 않고 기존 status polling의 같은 주기 안에서만 수행한다.
+        try:
+            full = api_client.get_result(analysis["analysis_id"])
+            updated = to_view(full, analysis)
+            if deep_result_ready(updated):
+                updated = load_deep_result_once(updated)
+            batch_data["analyses"][index] = updated
+            analysis = updated
+        except ApiError as e:
+            analysis["error"] = {
+                "code": e.code, "message": e.message, "stage": e.stage,
+            }
+
+        if analysis.get("status") not in TERMINAL_STATUSES:
             still_running = True
 
     return still_running
@@ -739,11 +759,14 @@ def to_view(full, previous):
 
     return {
         **previous,
-        "status": full.get("status"),
+        "status": full.get("status") or previous.get("status"),
+        "current_stage": full.get("current_stage", previous.get("current_stage")),
         "initial_verdict": full.get("initial_verdict"),
         "route": full.get("route"),
         "reason": full.get("reason"),
+        "triggered_signals": full.get("triggered_signals"),
         "final_verdict": full.get("final_verdict"),
+        "final_assessment": full.get("final_assessment"),
         "raw_probability": prediction.get("lgbm_raw_probability"),
         "calibrated_probability": prediction.get("calibrated_probability"),
         "disagreement": signals.get("disagreement"),
@@ -755,6 +778,61 @@ def to_view(full, previous):
         "llm_summary": full.get("llm_summary"),
         "error": full.get("error"),
     }
+
+
+def merge_deep_result(analysis, deep):
+    """Deep Analysis endpoint 응답을 기존 평면 뷰에 안전하게 합친다."""
+    return {
+        **analysis,
+        "deep_status": deep.get("status"),
+        "deep_analysis_status": deep.get("deep_analysis_status") or {},
+        "tool_details": deep.get("tool_details") or {},
+        "capa": deep.get("capa"),
+        "floss": deep.get("floss"),
+        "speakeasy": deep.get("speakeasy"),
+        "evidence": deep.get("evidence") or analysis.get("evidence") or [],
+        "evidence_details": deep.get("evidence_details") or [],
+        "llm_summary": deep.get("llm_summary") or analysis.get("llm_summary"),
+        "llm_status": deep.get("llm_status"),
+        "deep_error": deep.get("error"),
+        "deep_detail_loaded": True,
+    }
+
+
+def deep_result_ready(analysis):
+    """Deep이 끝났거나 전체 분석이 종료되어 상세 조회가 필요한지 확인한다."""
+    if analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN":
+        return False
+    if analysis.get("status") in TERMINAL_STATUSES:
+        return True
+    statuses = analysis.get("deep_analysis_status") or {}
+    return all(
+        statuses.get(tool) in {"COMPLETED", "FAILED", "NOT_REQUIRED"}
+        for tool in ("capa", "floss", "speakeasy")
+    )
+
+
+def load_deep_result_once(analysis):
+    """HIGH_RISK_UNCERTAIN의 완료된 Deep 상세를 한 번만 보강한다."""
+    if (
+        analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN"
+        or analysis.get("deep_detail_loaded")
+    ):
+        return analysis
+    try:
+        deep = api_client.get_deep_analysis(analysis["analysis_id"])
+    except ApiError as e:
+        return {
+            **analysis,
+            "deep_error": {
+                "code": e.code,
+                "message": e.message,
+                "stage": e.stage,
+            },
+            "deep_detail_loaded": True,
+        }
+    return merge_deep_result(analysis, deep)
+
 
 def pending_analyses(batch_data):
     """아직 종료되지 않은 분석만 고른다."""
@@ -856,15 +934,15 @@ def refresh_batch(batch_data):
             still_running = True
             continue
 
-        status = full.get("status") or analysis.get("status") or "QUEUED"
-        if status == "COMPLETED":
-            # 완료된 건만 상세 뷰 모델로 옮긴다. refresh_pending과 같은 기준이다.
-            batch_data["analyses"][index] = to_view(full, analysis)
-        else:
-            analysis["status"] = status
-            analysis["error"] = full.get("error")
-            if status != "FAILED":
-                still_running = True
+        # batch 응답은 진행 중에도 GET /analyses/{id}와 같은 누적 결과를 준다.
+        # 따라서 terminal 전에도 Initial/JRR/SHAP/deep status를 뷰에 반영한다.
+        updated = to_view(full, analysis)
+        status = updated.get("status") or "QUEUED"
+        if deep_result_ready(updated):
+            updated = load_deep_result_once(updated)
+        if status not in TERMINAL_STATUSES:
+            still_running = True
+        batch_data["analyses"][index] = updated
 
     return still_running
 
@@ -931,7 +1009,7 @@ def group_batch_analyses(analyses):
 
 def deep_analysis_status_text(analysis):
     """Summarize tool states for the Needs Review result table."""
-    statuses = analysis["deep_analysis_status"]
+    statuses = analysis.get("deep_analysis_status") or {}
     for tool_name, key in (
         ("Speakeasy", "speakeasy"),
         ("FLOSS", "floss"),
@@ -945,6 +1023,214 @@ def deep_analysis_status_text(analysis):
     ):
         return "COMPLETED"
     return "QUEUED"
+
+
+def initial_detail_available(analysis):
+    """Initial Analysis 상세를 안전하게 그릴 수 있을 만큼 저장되었는지 확인한다."""
+    return bool(analysis.get("initial_verdict") and analysis.get("route")) and all(
+        analysis.get(key) is not None for key in DETAIL_REQUIRED_FIELDS
+    )
+
+
+def is_progressive_result(analysis):
+    return (
+        analysis.get("initial_verdict") == "HIGH_RISK_UNCERTAIN"
+        and analysis.get("route") == "DEEP_ANALYSIS"
+        and initial_detail_available(analysis)
+    )
+
+
+def deep_analysis_state(analysis):
+    """종합 Deep 상태가 없는 batch 응답에서도 표시 상태를 안전하게 계산한다."""
+    explicit = analysis.get("deep_status")
+    if explicit in {"QUEUED", "RUNNING", "COMPLETED", "FAILED", "NOT_REQUIRED"}:
+        return explicit
+    if analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN":
+        return "NOT_REQUIRED"
+    if analysis.get("status") == "FAILED":
+        return "FAILED"
+
+    statuses = analysis.get("deep_analysis_status") or {}
+    selected = [
+        statuses.get(key)
+        for key in ("capa", "floss", "speakeasy")
+        if statuses.get(key) != "NOT_REQUIRED"
+    ]
+    if "RUNNING" in selected:
+        return "RUNNING"
+    if "QUEUED" in selected:
+        has_finished_tool = any(
+            value in {"COMPLETED", "FAILED"} for value in selected
+        )
+        return "RUNNING" if has_finished_tool else "QUEUED"
+    if selected and all(value in {"COMPLETED", "FAILED"} for value in selected):
+        return "COMPLETED"
+    if analysis.get("status") == "COMPLETED":
+        return "COMPLETED"
+    return "QUEUED"
+
+
+def _metric_text(value, pattern):
+    if value is None:
+        return "-"
+    try:
+        return pattern.format(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def render_progressive_result(analysis, target=st):
+    """HIGH_RISK_UNCERTAIN의 Initial과 Deep 영역을 독립적으로 렌더링한다."""
+    context, action = target.columns([6, 1], gap="medium")
+    context.caption(
+        f"{analysis.get('filename') or '(이름 없음)'} · "
+        f"SHA-256 {truncate_hash(analysis.get('sha256') or '-')}"
+    )
+    if action.button(
+        "새 파일 분석", key="progressive_new_file_analysis", width="stretch"
+    ):
+        reset_analysis_session()
+        st.rerun()
+
+    target.subheader("Initial Analysis")
+    initial = target.container(border=True, key="progressive_initial_analysis")
+    verdict_col, route_col = initial.columns(2, gap="medium")
+    verdict_col.markdown(
+        "**Initial Verdict**  "
+        + verdict_badge_markup(analysis.get("initial_verdict") or "Pending"),
+        unsafe_allow_html=True,
+    )
+    route_col.markdown(
+        "**Route**  " + route_badge_markup(analysis.get("route") or "-"),
+        unsafe_allow_html=True,
+    )
+
+    probability, raw, disagreement, ood, difficulty = initial.columns(5)
+    probability.metric(
+        "Calibrated Probability",
+        _metric_text(analysis.get("calibrated_probability"), "{:.1%}"),
+    )
+    raw.metric(
+        "Raw Probability",
+        _metric_text(analysis.get("raw_probability"), "{:.1%}"),
+    )
+    disagreement.metric(
+        "Disagreement", _metric_text(analysis.get("disagreement"), "{:.3f}")
+    )
+    ood.metric("OOD Score", _metric_text(analysis.get("ood_score"), "{:.3f}"))
+    difficulty.metric(
+        "Difficulty Score",
+        _metric_text(analysis.get("difficulty_score"), "{:.1f}"),
+    )
+    initial.markdown(f"**Reason**  \n{analysis.get('reason') or '-'}")
+    signals = analysis.get("triggered_signals")
+    initial.markdown(
+        "**Triggered Signals**  \n" + (", ".join(signals) if signals else "None")
+    )
+    features = analysis.get("top_features") or []
+    initial.markdown("**SHAP / Top Features**")
+    if features:
+        render_shap_chart(initial, features)
+    else:
+        initial.info("표시할 SHAP 특성이 없습니다.")
+
+    target.subheader("Deep Analysis")
+    deep = target.container(border=True, key="progressive_deep_analysis")
+    status = deep_analysis_state(analysis)
+    deep.markdown(f"**Status: {status}**")
+    if status == "QUEUED":
+        deep.info("심층 분석 대기 중입니다. 완료되면 결과가 자동으로 갱신됩니다.")
+    elif status == "RUNNING":
+        deep.info("심층 분석이 진행 중입니다. 완료되면 결과가 자동으로 갱신됩니다.")
+    elif status == "FAILED":
+        error = analysis.get("deep_error") or analysis.get("error") or {}
+        deep.error(
+            "심층 분석에 실패했습니다. "
+            + (error.get("message") or "오류 정보를 확인할 수 없습니다.")
+        )
+        if error.get("code"):
+            deep.caption(
+                f"코드 {error['code']} · 단계 {error.get('stage') or analysis.get('current_stage') or '-'}"
+            )
+    elif status == "COMPLETED":
+        deep.success("심층 분석이 완료되었습니다.")
+    else:
+        deep.info("이 분석에는 심층 분석이 필요하지 않습니다.")
+
+    if status != "FAILED" and analysis.get("deep_error"):
+        error = analysis["deep_error"]
+        deep.warning(
+            "심층 분석 상세 결과를 불러오지 못했습니다. "
+            + (error.get("message") or "잠시 후 다시 확인해주세요.")
+        )
+
+    statuses = analysis.get("deep_analysis_status") or {}
+    deep.markdown(deep_analysis_status_markup(statuses), unsafe_allow_html=True)
+
+    # 완료·실패 시점에 존재하는 결과만 보여 준다. 일부 필드가 없어도 나머지
+    # 결과와 Initial Analysis는 계속 렌더링한다.
+    capa = analysis.get("capa") or {}
+    capa_box = deep.expander("CAPA", expanded=bool(capa))
+    capabilities = capa.get("capabilities") or []
+    if capabilities:
+        capa_box.dataframe(capabilities, hide_index=True, width="stretch")
+    else:
+        capa_box.caption(f"Status: {statuses.get('capa', 'NOT_REQUIRED')}")
+
+    floss = analysis.get("floss") or {}
+    floss_box = deep.expander("FLOSS", expanded=bool(floss))
+    strings = floss.get("strings") or {}
+    string_rows = [
+        {"Type": kind, "String": value}
+        for kind, values in strings.items()
+        for value in (values or [])
+    ]
+    if string_rows:
+        floss_box.dataframe(string_rows, hide_index=True, width="stretch")
+    else:
+        floss_box.caption(f"Status: {statuses.get('floss', 'NOT_REQUIRED')}")
+
+    speakeasy = analysis.get("speakeasy") or {}
+    speakeasy_box = deep.expander("Speakeasy", expanded=bool(speakeasy))
+    behavior = speakeasy.get("behavior") or {}
+    if behavior:
+        speakeasy_box.json(behavior)
+    else:
+        speakeasy_box.caption(
+            f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}"
+        )
+
+    evidence = analysis.get("evidence") or []
+    evidence_box = deep.expander("MITRE Evidence", expanded=bool(evidence))
+    if evidence:
+        evidence_box.dataframe(evidence, hide_index=True, width="stretch")
+    else:
+        evidence_box.caption("표시할 MITRE ATT&CK 근거가 없습니다.")
+
+    llm = analysis.get("llm_summary") or {}
+    llm_box = deep.expander("LLM Summary", expanded=bool(llm))
+    if llm:
+        llm_box.write(llm.get("summary") or "-")
+        behaviors = llm.get("suspicious_behaviors") or []
+        if behaviors:
+            llm_box.markdown("\n".join(f"- {item}" for item in behaviors))
+        if llm.get("analyst_notes"):
+            llm_box.caption(llm["analyst_notes"])
+    else:
+        llm_box.caption(f"Status: {analysis.get('llm_status') or '결과 없음'}")
+
+    assessment = analysis.get("final_assessment") or {}
+    assessment_box = deep.expander("Final Assessment", expanded=bool(assessment))
+    if assessment:
+        assessment_box.write(
+            f"**Final Verdict:** {assessment.get('final_verdict') or analysis.get('final_verdict') or '-'}"
+        )
+        assessment_box.write(
+            f"**Disposition:** {assessment.get('disposition') or '-'}"
+        )
+        assessment_box.write(assessment.get("reason") or "-")
+    else:
+        assessment_box.caption("최종 평가가 아직 없습니다.")
 
 
 def commit_receipt(batch_data):
@@ -1059,7 +1345,10 @@ def detail_blocker(analysis):
     이 경우 목록 표시까지만 하고 전환을 막는다.
     """
     status = analysis.get("status")
-    if status != "COMPLETED":
+    # 심층 분석 실패는 Initial Analysis까지 숨길 이유가 아니다. 검색 이력에서도
+    # 초기 결과가 완전한 HIGH_RISK_UNCERTAIN이면 실패 상태와 함께 열 수 있다.
+    progressive_failure = status == "FAILED" and is_progressive_result(analysis)
+    if status != "COMPLETED" and not progressive_failure:
         return f"완료된 분석만 상세 화면으로 열 수 있습니다. (상태: {status or '알 수 없음'})"
 
     missing = [key for key in DETAIL_REQUIRED_FIELDS if analysis.get(key) is None]
@@ -1136,6 +1425,9 @@ def open_search_result(analysis_id):
     )
     if selected is None or detail_blocker(selected):
         return False
+
+    if selected.get("initial_verdict") == "HIGH_RISK_UNCERTAIN":
+        selected = load_deep_result_once(selected)
 
     reset_analysis_result()
     clear_hash_search()
@@ -1622,6 +1914,16 @@ def render_polling_panel(batch_data, auto_refresh):
     render_intake_notice(st, batch_data)
 
 
+def render_progressive_batch_result(batch_data):
+    """polling fragment 안에서 최신 선택 결과를 함께 보여 준다."""
+    if not any(analysis.get("initial_verdict") for analysis in batch_data["analyses"]):
+        return
+    render_batch_triage(batch_data)
+    selected = st.session_state.get("analysis_result") or {}
+    if is_progressive_result(selected):
+        render_progressive_result(selected)
+
+
 @st.fragment(run_every=POLL_INTERVAL_SECONDS)
 def polling_fragment():
     """이 함수 안에서만 재실행된다.
@@ -1646,12 +1948,14 @@ def polling_fragment():
         st.rerun()
 
     render_polling_panel(batch_data, auto_refresh=True)
+    render_progressive_batch_result(batch_data)
 
 
 def render_polling_view(batch_data):
     """진행 중 화면. 시간 초과 뒤에는 자동 갱신 없이 같은 패널을 그린다."""
     if st.session_state.get("poll_timed_out"):
         render_polling_panel(batch_data, auto_refresh=False)
+        render_progressive_batch_result(batch_data)
         st.warning(
             f"{POLL_TIMEOUT_SECONDS // 60}분 안에 분석이 끝나지 않아 자동 갱신을 "
             "멈췄습니다. 백엔드 처리 상태를 확인한 뒤 다시 조회하세요."
@@ -2170,6 +2474,10 @@ else:
         result = st.session_state.analysis_result
 
     status = result.get("status")
+    if is_progressive_result(result):
+        render_progressive_result(result)
+        st.stop()
+
     if status != "COMPLETED":
         if status == "FAILED":
             error = result.get("error") or {}
