@@ -83,6 +83,8 @@ LightGBM artifact에는 원본 feature name이나 EMBER index가 없고 `Column_
 | `model_input_index` | 500차원 모델 입력에서의 위치, `0..499` |
 | `source_index` | 원본 2568차원 EMBER 벡터에서의 위치 |
 
+> `ShapContribution.to_dict()`에는 `display_name`이 없다. 표시용 라벨은 API 경계(`backend_api/initial_analysis._explain`)에서 `trust_triage.feature_names.display_name()`으로 덧붙이며, 이 모듈은 이름 생성·해석에 관여하지 않는다.
+
 `group`은 이름 prefix만 반환한다. hashed bucket의 구체적인 의미는 복원하거나 추정하지 않는다.
 
 `data/top_feature_indices_500.npy`는 데이터 artifact이므로 source checkout에 없을 수 있다. 공식 artifact 통합 테스트는 파일이 없을 때 manifest의 `source_indices`로 임시 `.npy`를 만들고, manifest에 고정된 SHA-256과 byte 단위로 일치할 때만 사용한다. 운영 explainer는 이런 fallback을 사용하지 않으며 실제 `.npy`가 없거나 hash/order가 다르면 초기화에 실패한다.

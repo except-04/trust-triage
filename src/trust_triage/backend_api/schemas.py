@@ -185,6 +185,15 @@ class TopFeature(APIModel):
     """한 Feature가 LightGBM 원출력에 미친 SHAP 영향입니다."""
 
     feature_name: str = Field(description="모델 입력 Schema에 정의된 특성 이름입니다.")
+    display_name: str | None = Field(
+        default=None,
+        description=(
+            "사람이 읽는 표시용 이름입니다. feature_name이 식별자이며 이 값은 참고용입니다. "
+            "해시된 특성은 그룹 수준(예: Import API hash bucket #k)으로만 표기하고, "
+            "라벨을 붙일 수 없으면 feature_name과 같은 값을 돌려줍니다. "
+            "이 필드가 도입되기 전 기록은 null입니다."
+        ),
+    )
     feature_value: float | None = Field(
         default=None,
         allow_inf_nan=False,

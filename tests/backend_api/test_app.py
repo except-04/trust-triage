@@ -131,6 +131,46 @@ def test_all_result_routes_preserve_recorded_signals_and_legacy_unknown(api, sig
 
 
 @pytest.mark.parametrize(
+    "stored,expected",
+    [
+        (
+            {"feature_name": "header[9]", "display_name": "Major Linker Version"},
+            "Major Linker Version",
+        ),
+        # display_name 도입 이전에 저장된 기록은 null 로 나간다
+        ({"feature_name": "header[9]"}, None),
+    ],
+    ids=["labeled", "legacy"],
+)
+def test_top_features_expose_display_name_as_an_additive_field(api, stored, expected):
+    client, service = api
+    identity = upload(client).json()["analysis_id"]
+    initial = initial_result("AUTO_BENIGN")
+    initial["top_features"] = [
+        {**stored, "feature_value": 14.0, "shap_value": 0.25, "direction": "MALICIOUS"}
+    ]
+    claim = service.repository.claim(identity, 600)
+    assert service.repository.save_initial(identity, claim.token, initial, False)
+
+    for suffix in ("", "/xai"):
+        response = client.get(f"/analyses/{identity}{suffix}")
+        assert response.status_code == 200, response.text
+        feature = response.json()["top_features"][0]
+        assert feature["feature_name"] == "header[9]"  # 식별자는 그대로
+        assert feature["display_name"] == expected
+    listed = client.get("/analyses").json()["analyses"][0]["top_features"][0]
+    assert listed["display_name"] == expected
+
+
+def test_openapi_documents_display_name_as_optional(api):
+    schema = api[0].get("/openapi.json").json()
+    top_feature = schema["components"]["schemas"]["TopFeature"]
+    assert "display_name" in top_feature["properties"]
+    assert "display_name" not in top_feature.get("required", [])
+    assert "feature_name" in top_feature["required"]
+
+
+@pytest.mark.parametrize(
     "route",
     [
         "/analyses/missing",
