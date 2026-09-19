@@ -36,6 +36,20 @@ def main():
     p3_fn = ((y == 1) & (routes == 'AUTO_BENIGN')).sum()
     p3_fp = ((y == 0) & (routes == 'AUTO_MALICIOUS')).sum()
     
+    n = len(y)
+    n_mal = (y == 1).sum()
+    n_ben = (y == 0).sum()
+    r_ben = (routes == 'AUTO_BENIGN').sum()
+    r_mal = (routes == 'AUTO_MALICIOUS').sum()
+    r_unc = (routes == 'HIGH_RISK_UNCERTAIN').sum()
+    
+    print("=== 데이터 개요 ===")
+    print(f"총 평가 데이터: {n:,}건 (악성 {n_mal:,}건, 정상 {n_ben:,}건)")
+    print(f"[JRR 라우팅 분배 비율 (Policy 3 기준)]")
+    print(f"  AUTO_BENIGN (자동 정상): {r_ben:,}건 ({(r_ben/n*100):.2f}%)")
+    print(f"  AUTO_MALICIOUS (자동 악성): {r_mal:,}건 ({(r_mal/n*100):.2f}%)")
+    print(f"  HIGH_RISK_UNCERTAIN (심층분석 보류): {r_unc:,}건 ({(r_unc/n*100):.2f}%)\n")
+    
     print("=== 비교 분석 ===")
     print(f"[Policy 1: No Deferral]")
     print(f"FN (미탐): {p1_fn:,}")
