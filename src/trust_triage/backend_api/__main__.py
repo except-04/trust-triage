@@ -158,8 +158,13 @@ def main(argv: list[str] | None = None) -> int:
                             raise
                     stop.wait(config.poll_seconds)
             finally:
-                for sig, handler in previous.items():
-                    signal.signal(sig, handler)
+                try:
+                    close = getattr(processor, "close", None)
+                    if close is not None:
+                        close()
+                finally:
+                    for sig, handler in previous.items():
+                        signal.signal(sig, handler)
         return 0
     except BackendError as exc:
         print(json.dumps({"error": exc.to_dict()}, ensure_ascii=False))
