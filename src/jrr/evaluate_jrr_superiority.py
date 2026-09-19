@@ -2,7 +2,8 @@ import numpy as np
 from pathlib import Path
 
 def main():
-    root = Path(__file__).resolve().parents[1]
+    # 현재 파일 위치: src/jrr/evaluate_jrr_superiority.py
+    root = Path(__file__).resolve().parents[2]
     data_dir = root / 'data'
     
     # 데이터 로드
@@ -12,6 +13,13 @@ def main():
     
     if p.ndim == 2: 
         p = p[:, 1]
+        
+    # 데이터 유효성 검증
+    assert len(y) == len(p) == len(routes), "데이터 배열들의 길이가 일치하지 않습니다."
+    assert set(np.unique(y)).issubset({0, 1}), "y_eval 배열은 0과 1로만 구성되어야 합니다."
+    assert not np.isnan(p).any(), "확률 배열에 결측치(NaN)가 포함되어 있습니다."
+    valid_routes = {'FINAL', 'AUTO_BENIGN', 'AUTO_MALICIOUS', 'HIGH_RISK_UNCERTAIN'}
+    assert set(np.unique(routes)).issubset(valid_routes), "routes 배열에 유효하지 않은 값이 있습니다."
     
     tau_low = 0.65
     tau_high = 0.983645
@@ -48,9 +56,13 @@ def main():
 | **심층분석 보류 (Deferral)** | {p1_deferred:,}건 ({p1_deferred/n*100:.2f}%) | {p2_deferred:,}건 ({p2_deferred/n*100:.2f}%) | {p3_deferred:,}건 ({p3_deferred/n*100:.2f}%) |
 
 ## 인사이트
-1. **단순 보류의 효과 (① -> ②)**: 확률의 애매한 구간($0.65 < p < 0.983$)만 보류해도, 전체 데이터의 {(p2_deferred/n)*100:.2f}%를 심층분석으로 보내며 자동판정 미탐(FN)을 {p1_fn:,}건에서 {p2_fn:,}건으로 대폭 줄입니다.
+1. **단순 보류의 효과 (① -> ②)**: 확률의 애매한 구간(${tau_low} < p < {tau_high:.6f}$)만 보류해도, 전체 데이터의 {(p2_deferred/n)*100:.2f}%를 심층분석으로 보내며 자동판정 미탐(FN)을 {p1_fn:,}건에서 {p2_fn:,}건으로 대폭 줄입니다.
 2. **JRR 다중 신호의 추가 확보 효과 (② -> ③)**: JRR은 여기에 OOD, 불일치도, 난이도를 추가하여 {(p3_deferred/n)*100:.2f}%를 보류합니다. 그 결과 **단순 보류(②) 정책 대비 악성의 자동 정상 판정 {p2_fn - p3_fn:,}건과 정상의 자동 악성 판정 {p2_fp - p3_fp:,}건을 추가로 방지하고 심층분석 대상으로 확보**했습니다.
 3. **결론**: 추가 위험 신호 적용을 통해 보류율은 {(p2_deferred/n)*100:.2f}%에서 {(p3_deferred/n)*100:.2f}%로 증가하지만, 그만큼 AI 모델의 근본적인 맹점에서 발생하는 자동판정 오류를 심층분석 큐로 안전하게 전환하는 효과가 있음을 보여줍니다.
+
+> [!WARNING]
+> **평가 한계점**
+> 이 결과는 현재 임계값에서의 자동판정 오류 감소를 보여주며, 동일 보류량에서의 우월성이나 후속 심층분석의 최종 탐지 성능을 입증하지 않습니다. (본 평가는 Eval 세트를 사용한 개발용 평가입니다.)
 """
     output_path = Path(__file__).parent / 'jrr_superiority_report.md'
     output_path.write_text(md_content, encoding='utf-8')

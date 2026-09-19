@@ -2,13 +2,20 @@ import numpy as np
 from pathlib import Path
 
 def main():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     data_dir = root / 'data'
     
     y = np.load(data_dir / 'y_eval.npy')
     p = np.load(data_dir / 'jrr_calibrated_proba.npy')
     routes = np.load(data_dir / 'jrr_routes.npy')
     if p.ndim == 2: p = p[:, 1]
+    
+    # 데이터 유효성 검증
+    assert len(y) == len(p) == len(routes), "데이터 배열들의 길이가 일치하지 않습니다."
+    assert set(np.unique(y)).issubset({0, 1}), "y_eval 배열은 0과 1로만 구성되어야 합니다."
+    assert not np.isnan(p).any(), "확률 배열에 결측치(NaN)가 포함되어 있습니다."
+    valid_routes = {'FINAL', 'AUTO_BENIGN', 'AUTO_MALICIOUS', 'HIGH_RISK_UNCERTAIN'}
+    assert set(np.unique(routes)).issubset(valid_routes), "routes 배열에 유효하지 않은 값이 있습니다."
     
     tau_low = 0.65
     tau_high = 0.983645
