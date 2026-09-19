@@ -14,7 +14,7 @@ def main():
     assert len(y) == len(p) == len(routes), "데이터 배열들의 길이가 일치하지 않습니다."
     assert set(np.unique(y)).issubset({0, 1}), "y_eval 배열은 0과 1로만 구성되어야 합니다."
     assert not np.isnan(p).any(), "확률 배열에 결측치(NaN)가 포함되어 있습니다."
-    valid_routes = {'FINAL', 'AUTO_BENIGN', 'AUTO_MALICIOUS', 'HIGH_RISK_UNCERTAIN'}
+    valid_routes = {'AUTO_BENIGN', 'AUTO_MALICIOUS', 'HIGH_RISK_UNCERTAIN'}
     assert set(np.unique(routes)).issubset(valid_routes), "routes 배열에 유효하지 않은 값이 있습니다."
     
     tau_low = 0.65
@@ -42,6 +42,7 @@ def main():
     r_ben = (routes == 'AUTO_BENIGN').sum()
     r_mal = (routes == 'AUTO_MALICIOUS').sum()
     r_unc = (routes == 'HIGH_RISK_UNCERTAIN').sum()
+    assert r_ben + r_mal + r_unc == n, "Total valid routes do not match dataset length"
     
     output_text = f"""=== 평가 목적 ===
 확률만으로 판정할 때와 JRR을 사용할 때,

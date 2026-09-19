@@ -9,6 +9,7 @@ from sklearn.metrics import roc_auc_score, brier_score_loss, confusion_matrix
 def compute_ece(y_true, y_prob, n_bins=10):
     bins = np.linspace(0., 1., n_bins + 1)
     binids = np.digitize(y_prob, bins) - 1
+    binids = np.clip(binids, 0, n_bins - 1)
     
     ece = 0.0
     for i in range(n_bins):
@@ -46,7 +47,16 @@ def main():
     n = len(y)
     assert len(p) == n and len(routes) == n and len(ood) == n and len(diff) == n and len(dis) == n, "Array lengths mismatch"
     assert set(np.unique(y)).issubset({0, 1}), "y must be 0 or 1"
-    assert not np.isnan(p).any(), "NaN in probabilities"
+    
+    # Fail-Closed 및 유효성 엄격 검증
+    assert not np.isnan(p).any() and not np.isinf(p).any(), "NaN or Inf in probabilities"
+    assert (p >= 0).all() and (p <= 1).all(), "Probabilities out of range (0~1)"
+    assert not np.isnan(ood).any() and not np.isinf(ood).any(), "NaN or Inf in OOD scores"
+    assert not np.isnan(diff).any() and not np.isinf(diff).any(), "NaN or Inf in Difficulty scores"
+    assert not np.isnan(dis).any() and not np.isinf(dis).any(), "NaN or Inf in Disagreement scores"
+    
+    valid_routes = {'AUTO_BENIGN', 'AUTO_MALICIOUS', 'HIGH_RISK_UNCERTAIN'}
+    assert set(np.unique(routes)).issubset(valid_routes), "routes contains invalid values (e.g. FINAL)"
     
     n_mal = (y == 1).sum()
     n_ben = (y == 0).sum()
@@ -147,7 +157,11 @@ def main():
             'n_total': int(n), 'n_mal': int(n_mal), 'n_ben': int(n_ben),
             'hashes': {
                 'y_eval': get_file_hash(y_path),
-                'proba': get_file_hash(p_path)
+                'proba': get_file_hash(p_path),
+                'routes': get_file_hash(routes_path),
+                'ood': get_file_hash(data_dir / 'jrr_ood_scores.npy'),
+                'diff': get_file_hash(data_dir / 'jrr_difficulty_scores.npy'),
+                'dis': get_file_hash(data_dir / 'model_disagreement.npy')
             },
             'thresholds': {'tau_low': tau_low, 'tau_high': tau_high, 'dis': 0.3, 'ood': 0, 'diff': 6}
         },
@@ -174,7 +188,7 @@ def main():
 
 > [!WARNING]
 > **평가 한계점 (Limitation)**
-> 본 보고서는 이미 모델 개발 및 임계값 튜닝에 사용된 Eval 세트에서의 고정 정책 평가입니다. 따라서 완전히 독립적인 검증 데이터(Test set)에서의 성능을 대변하지 않으며, 보류된 파일들의 실제 동적 심층분석 후 '최종 탐지 성능'을 담고 있지 않습니다. 본 평가는 오직 "JRR이 심층분석 전에 자동판정 오류를 얼마나 안전하게 보류(Deferral)시켰는가"에 집중합니다.
+> 본 보고서는 개발 과정에서 반복 확인한 Eval 세트에서의 고정 정책 평가입니다. 따라서 완전히 독립적인 검증 데이터(Test set)에서의 성능을 대변하지 않으며, 보류된 파일들의 실제 동적 심층분석 후 '최종 탐지 성능'을 담고 있지 않습니다. 본 평가는 오직 "JRR이 심층분석 전에 자동판정 오류를 얼마나 안전하게 보류(Deferral)시켰는가"에 집중합니다.
 
 ## 1. 평가 개요 및 데이터 확인
 * **실행 시각**: {output_data['metadata']['timestamp']}
@@ -205,13 +219,16 @@ def main():
 각 신호가 독립적으로 감지한 전체 파일 수와, 그 중에서 **"단순 확률 정책이었으면 오판했을 오류를 심층분석으로 구출해 낸(방지한) 건수"**입니다.
 (한 파일이 여러 신호에 중복으로 걸릴 수 있으므로, 합계는 전체 보류량과 다릅니다.)
 
-| 신호 (Signal) | 해당 파일 수 | 악성 | 정상 | 자동 정상 오판을 보류시킨 악성 (Saved FN) | 자동 악성 오판을 보류시킨 정상 (Saved FP) |
+| 신호 (Signal) | 해당 파일 수 | 악성 | 정상 | 자동 정상 오판을 보류시킨 악성 (Saved FN)¹ | 자동 악성 오판을 보류시킨 정상 (Saved FP)² |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 """
     for k, v in breakdown.items():
         md += f"| {k} | {v['n_flagged']:,} | {v['n_mal']:,} | {v['n_ben']:,} | {v['saved_fn']:,} | {v['saved_fp']:,} |\n"
         
-    md += """
+    md += f"""
+<small>¹ 자동 정상 오판을 보류시킨 악성 (Saved FN): 악성이면서 확률이 `tau_low`({tau_low}) 이하인 파일. (확률 구간 신호의 특성상 이 항목은 0이 됩니다.)</small><br>
+<small>² 자동 악성 오판을 보류시킨 정상 (Saved FP): 정상이면서 확률이 `tau_high`({tau_high:.6f}) 이상인 파일.</small>
+
 ## 5. 신호 조합별 보류 건수 (Mutually Exclusive)
 동시에 여러 신호에 걸린 교집합 내역입니다. (총합은 JRR 전체 보류 건수인 {p3_def:,}건과 일치합니다.)
 ```text

@@ -1,12 +1,16 @@
 {
   "metadata": {
-    "timestamp": "2026-09-19T16:04:08.113451Z",
+    "timestamp": "2026-09-19T16:16:20.285800Z",
     "n_total": 480000,
     "n_mal": 240000,
     "n_ben": 240000,
     "hashes": {
       "y_eval": "4f011b2e2c0f705c393c604e7551085f989ed925460bd73c9bc92fdfed98c5f0",
-      "proba": "66b8b3a1aec3816c8b3aaa8e0335d810ba2026f8f87dde8368d81dd69658f68e"
+      "proba": "66b8b3a1aec3816c8b3aaa8e0335d810ba2026f8f87dde8368d81dd69658f68e",
+      "routes": "cb3bed3fb70e4121050493f02401eb91b0bd1d9082637a37545c351fefd86cef",
+      "ood": "6850444cee5484474eae9ca15e251a37b32248bef7e2f410e192309c4e9c73c4",
+      "diff": "ef9d7a3a823d15a9fc6dbe3862ae19ad98e391230b0371e8da8163e9cc2dba2f",
+      "dis": "ce6c2d966a079e042e02f74a9a6b54d372d1c94e6d155338f8831c3a9545dca5"
     },
     "thresholds": {
       "tau_low": 0.65,
@@ -19,7 +23,7 @@
   "model_performance": {
     "auc": 0.9977833205208333,
     "brier": 0.016252598660943068,
-    "ece": 0.0031028218042846224,
+    "ece": 0.003102821804284616,
     "tpr_high": 0.8776583333333333,
     "fpr_high": 0.0009916666666666667
   },
