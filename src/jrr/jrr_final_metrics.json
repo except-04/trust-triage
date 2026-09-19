@@ -1,0 +1,111 @@
+{
+  "metadata": {
+    "timestamp": "2026-09-19T15:50:12.234739Z",
+    "n_total": 480000,
+    "n_mal": 240000,
+    "n_ben": 240000,
+    "hashes": {
+      "y_eval": "4f011b2e2c0f705c393c604e7551085f989ed925460bd73c9bc92fdfed98c5f0",
+      "proba": "66b8b3a1aec3816c8b3aaa8e0335d810ba2026f8f87dde8368d81dd69658f68e"
+    },
+    "thresholds": {
+      "tau_low": 0.65,
+      "tau_high": 0.983645,
+      "dis": 0.3,
+      "ood": 0,
+      "diff": 6
+    }
+  },
+  "model_performance": {
+    "auc": 0.9977833205208333,
+    "brier": 0.016252598660943068,
+    "ece": 0.0031028218042846224,
+    "tpr_high": 0.8776583333333333,
+    "fpr_high": 0.0009916666666666667
+  },
+  "policy_comparison": {
+    "p1": {
+      "fn": 29362,
+      "fp": 238,
+      "def": 0
+    },
+    "p2": {
+      "fn": 7910,
+      "fp": 238,
+      "def": 24046
+    },
+    "p3": {
+      "fn": 6662,
+      "fp": 198,
+      "def": 55114
+    },
+    "match_rate": 1.0
+  },
+  "signal_breakdown": {
+    "Prob Margin": {
+      "n_flagged": 24046,
+      "n_mal": 21452,
+      "n_ben": 2594,
+      "saved_fn": 0,
+      "saved_fp": 0
+    },
+    "OOD": {
+      "n_flagged": 3384,
+      "n_mal": 562,
+      "n_ben": 2822,
+      "saved_fn": 130,
+      "saved_fp": 2
+    },
+    "Disagreement": {
+      "n_flagged": 11728,
+      "n_mal": 7102,
+      "n_ben": 4626,
+      "saved_fn": 1040,
+      "saved_fp": 4
+    },
+    "Difficulty": {
+      "n_flagged": 23240,
+      "n_mal": 21016,
+      "n_ben": 2224,
+      "saved_fn": 108,
+      "saved_fp": 36
+    }
+  },
+  "combinations": {
+    "Difficulty": 21558,
+    "Disagreement": 6090,
+    "Disagreement+Difficulty": 218,
+    "OOD": 3112,
+    "OOD+Difficulty": 64,
+    "OOD+Disagreement": 26,
+    "Prob Margin": 17170,
+    "Prob Margin+Difficulty": 1334,
+    "Prob Margin+Disagreement": 5296,
+    "Prob Margin+Disagreement+Difficulty": 64,
+    "Prob Margin+OOD": 146,
+    "Prob Margin+OOD+Difficulty": 2,
+    "Prob Margin+OOD+Disagreement": 34
+  },
+  "ablation": {
+    "Prob Margin": {
+      "fn": 21766,
+      "fp": 198,
+      "def": 37944
+    },
+    "OOD": {
+      "fn": 6778,
+      "fp": 200,
+      "def": 52002
+    },
+    "Disagreement": {
+      "fn": 7678,
+      "fp": 200,
+      "def": 49024
+    },
+    "Difficulty": {
+      "fn": 6748,
+      "fp": 232,
+      "def": 33556
+    }
+  }
+}
