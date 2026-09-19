@@ -401,7 +401,7 @@ GET /batches/batch_abc123/analyses?verdict=HIGH_RISK_UNCERTAIN&limit=20&offset=0
 
 LightGBM의 원래 출력에 대한 SHAP 설명을 조회한다. `explained_output`은 `LIGHTGBM_RAW_OUTPUT`이다.
 
-`top_features`의 각 항목은 `feature_name`, `feature_value`, `shap_value`, `direction`으로 구성된다. `direction`은 악성 방향 `MALICIOUS`, 정상 방향 `BENIGN`, 중립 `NEUTRAL` 중 하나다. 기본 반환 개수는 5개이며 설정으로 변경할 수 있다.
+`top_features`의 각 항목은 `feature_name`, `display_name`, `feature_value`, `shap_value`, `direction`으로 구성된다. `feature_name`은 모델 입력 Schema의 식별자(`header[9]` 형식)이고 `display_name`은 사람이 읽는 표시용 이름(`Major Linker Version`)이다. 해시된 특성은 `Import API hash bucket #k`처럼 그룹 수준으로만 표기하며, 라벨을 붙일 수 없으면 `display_name`은 `feature_name`과 같다. 이 필드가 추가되기 전에 기록된 분석에서는 `null`이다. `direction`은 악성 방향 `MALICIOUS`, 정상 방향 `BENIGN`, 중립 `NEUTRAL` 중 하나다. 기본 반환 개수는 5개이며 설정으로 변경할 수 있다.
 
 설명 생성이 실패하면 이 응답은 `FAILED`와 오류를 반환할 수 있다. 이미 저장한 초기 모델 예측과 JRR 결과는 유지된다.
 

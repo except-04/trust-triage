@@ -264,6 +264,7 @@ def response_examples() -> dict:
     top_features = [
         {
             "feature_name": "general[0]",
+            "display_name": "File Size (bytes)",
             "feature_value": 14848.0,
             "shap_value": -0.42,
             "direction": "BENIGN",
@@ -743,6 +744,7 @@ LightGBM 원출력에 대한 SHAP 기여도를 영향도가 큰 특성 순으로
 
 경로 매개변수 `analysis_id`에는 접수 응답에서 반환된 분석 식별자를 사용합니다.
 `top_features`의 `feature_name`은 스키마 특성명, `feature_value`는 관측값, `shap_value`는 모델 원출력에 대한 기여도입니다.
+`display_name`은 사람이 읽는 표시용 이름이며 `feature_name`이 식별자입니다. 해시된 특성은 `Import API hash bucket #k`처럼 그룹 수준으로만 표기하고, 라벨을 붙일 수 없으면 `feature_name`과 같은 값이 들어갑니다. 이 필드가 도입되기 전에 기록된 분석은 `null`입니다.
 `direction`은 기여 방향을 `MALICIOUS`, `BENIGN`, `NEUTRAL`로 정규화합니다.
 
 ### 해석 범위

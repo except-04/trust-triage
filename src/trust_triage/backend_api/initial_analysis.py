@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from trust_triage.feature_names import display_name
+
 from .errors import BackendError
 from .model_bundle import ModelBundle, ModelBundleConfig, _file_sha256
 from .schemas import TriggeredSignals
@@ -322,9 +324,13 @@ def _explain(
 ) -> list[dict[str, Any]]:
     if explainer is None:
         explainer = _build_explainer(bundle)
+    # display_name은 표시용 라벨이고 feature_name이 식별자다. 라벨 표는 라이브
+    # Feature Schema 버전에 종속되므로, 버전이 다르면 raw 이름이 그대로 들어간다.
+    schema_version = bundle.selector.source_schema.version
     return [
         {
             "feature_name": item.name,
+            "display_name": display_name(item.name, schema_version=schema_version),
             "feature_value": float(vector[item.model_input_index]),
             "shap_value": float(item.contribution),
             "direction": item.direction,
