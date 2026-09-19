@@ -555,20 +555,36 @@ SHAP은 **LightGBM 모델의 판정 근거**를 설명합니다.
   "analysis_id": "a_20260907_000001",
   "top_features": [
     {
-      "feature_name": "feature_102",
-      "feature_value": 1.34,
+      "feature_name": "header[9]",
+      "display_name": "Major Linker Version",
+      "feature_value": 14.0,
       "shap_value": 0.281,
       "direction": "MALICIOUS"
     },
     {
-      "feature_name": "feature_031",
-      "feature_value": 0.22,
+      "feature_name": "imports[300]",
+      "display_name": "Import API hash bucket #42",
+      "feature_value": 1.0,
       "shap_value": -0.194,
       "direction": "BENIGN"
     }
   ]
 }
 ```
+
+| 필드 | 의미 |
+|---|---|
+| `feature_name` | 모델 입력 Schema의 **식별자**. `그룹명[그룹 내 위치]` 형식(`ember_v3._build_schema`가 생성, selection manifest를 거쳐 그대로 전달). 불변. |
+| `display_name` | 사람이 읽는 **표시용 이름**. 선택 필드(additive)이며 클라이언트는 없거나 `null`이면 `feature_name`을 쓴다. |
+| `feature_value` | 관측된 모델 입력값(raw). |
+| `shap_value` | LightGBM 원출력에 대한 기여도. 확률·백분율이 아니다. |
+| `direction` | `MALICIOUS` / `BENIGN` / `NEUTRAL`. |
+
+`display_name` 규칙 (`src/trust_triage/feature_names.py`):
+- 라벨 표는 고정된 thrember 커밋과 `source_schema_version`(`ember2024-v3-pe-873e612248d4`)에 종속된다. 라이브 Schema 버전이 다르면 라벨을 추측하지 않고 `feature_name`과 같은 값을 돌려준다.
+- feature hashing을 거친 특성(section 이름별 통계, import/export 이름, Rich header 쌍)은 원본을 복원할 수 없으므로 `Import API hash bucket #k`처럼 **그룹 수준**으로만 표기한다. 특정 API·section 이름으로 표현하지 않는다.
+- `pefilewarnings[k]`는 해시가 아니라 `thrember/pefile_warnings.txt` 줄 순서 one-hot이므로 경고 문구를 정확히 표기한다(`PE Warning: Suspicious flags set for section`).
+- 이 필드가 도입되기 전에 저장된 분석은 `null`이다.
 
 > **Critical**  
 > SHAP은 **Raw LightGBM 출력에 대한 모델 설명**입니다.  

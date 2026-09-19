@@ -228,15 +228,21 @@ def deep_analysis_status_markup(statuses):
     )
 
 
+def shap_feature_label(feature):
+    """차트 y축 라벨. 백엔드가 준 표시용 이름을 우선 쓰고 없으면 raw 이름을 쓴다.
+
+    display_name은 선택 필드라 이 필드가 생기기 전 기록이나 목업에는 없다.
+    feature_name은 식별자이므로 그대로 두고 라벨만 바꾼다.
+    """
+    return feature.get("display_name") or feature.get(
+        "feature_name",
+        feature.get("feature", feature.get("SHAP 특성", "Unknown")),
+    )
+
+
 def render_shap_chart(target, features):
     chart_features = features[:5]
-    names = [
-        feature.get(
-            "feature_name",
-            feature.get("feature", feature.get("SHAP 특성", "Unknown")),
-        )
-        for feature in chart_features
-    ]
+    names = [shap_feature_label(feature) for feature in chart_features]
     values = [
         float(
             feature.get(
