@@ -1046,6 +1046,90 @@ def is_progressive_result(analysis):
     )
 
 
+def evidence_visible(analysis):
+    """MITRE/위협 근거를 보여줄 시점.
+
+    백엔드는 심층 분석이 진행 중인 스냅샷에도 evidence를 실어 보낼 수 있다
+    (progressive 계약). 표시 시점은 프론트가 정한다: 완료면 항상, 실패면
+    확보된 부분 근거가 있을 때만, 대기·진행·불필요면 보여주지 않는다.
+    """
+    state = deep_analysis_state(analysis)
+    if state == "COMPLETED":
+        return True
+    if state == "FAILED":
+        return bool(analysis.get("evidence"))
+    return False
+
+
+def evidence_card_markup(evidence, capa_behaviors):
+    """위협 근거 카드 HTML. 줄바꿈 없이 한 줄로 만든다.
+
+    st.markdown은 본문을 dedent한 뒤 CommonMark로 파싱한다. 여러 줄 템플릿에서
+    항목이 비어 단독 줄이 빈 줄이 되면 <div> HTML 블록이 거기서 끝나고, 뒤따르는
+    들여쓴 줄은 코드 블록으로 렌더돼 '</div>' 같은 조각이 화면에 그대로 찍혔다.
+    줄바꿈 자체를 없애면 블록이 쪼개질 수 없다. 값은 전부 escape한다.
+    """
+    mitre_items = "".join(
+        '<div class="evidence-item"><span class="technique-id">'
+        f'{escape(technique.get("technique_id", technique.get("id", "")))}'
+        "</span> "
+        f'{escape(technique.get("technique_name", technique.get("name", "")))}'
+        " · "
+        f'{escape(technique.get("tactic", ", ".join(technique.get("sources", []))))}'
+        "</div>"
+        for technique in evidence
+    )
+    capa_items = "".join(
+        f'<div class="evidence-item">· {escape(behavior)}</div>'
+        for behavior in capa_behaviors
+    )
+
+    def section(title, items, empty_text):
+        body = items or f'<div class="evidence-item">{escape(empty_text)}</div>'
+        return (
+            '<div class="evidence-section">'
+            f'<div class="evidence-title">{title}</div>{body}</div>'
+        )
+
+    return (
+        '<div class="evidence-grid">'
+        + section("MITRE ATT&amp;CK", mitre_items, "표시할 MITRE ATT&CK 근거가 없습니다.")
+        + section("CAPA Behavior", capa_items, "표시할 CAPA 행위가 없습니다.")
+        + "</div>"
+    )
+
+
+def evidence_layout(target, result):
+    """완료 화면의 근거/SHAP 영역 배치. SHAP을 그릴 컨테이너를 돌려준다.
+
+    심층 분석이 불필요한 자동 판정(AUTO_*)이나 아직 끝나지 않은 경우에는 위협
+    근거 카드를 그리지 않고 SHAP이 전체 폭을 쓴다.
+    """
+    if not evidence_visible(result):
+        return target.container()
+    evidence_col, explainability_col = target.columns(2, gap="medium")
+    render_evidence_card(evidence_col, result)
+    return explainability_col
+
+
+def render_evidence_card(target, result):
+    """완료 화면의 '위협 근거' 카드. 표시 여부는 호출자가 evidence_visible로 정한다."""
+    target.subheader("위협 근거")
+    card = target.container(
+        border=True,
+        key="evidence-card",
+        height="stretch",
+        vertical_alignment="center",
+    )
+    card.markdown(
+        evidence_card_markup(
+            result.get("evidence") or result.get("mitre_attack") or [],
+            result.get("capa_behaviors") or [],
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def deep_analysis_state(analysis):
     """종합 Deep 상태가 없는 batch 응답에서도 표시 상태를 안전하게 계산한다."""
     explicit = analysis.get("deep_status")
@@ -1206,12 +1290,18 @@ def render_progressive_result(analysis, target=st):
             f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}"
         )
 
-    evidence = analysis.get("evidence") or []
-    evidence_box = deep.expander("MITRE Evidence", expanded=bool(evidence))
-    if evidence:
-        evidence_box.dataframe(evidence, hide_index=True, width="stretch")
-    else:
-        evidence_box.caption("표시할 MITRE ATT&CK 근거가 없습니다.")
+    # 근거·해석·최종 평가는 심층 분석이 끝난 뒤에만 그린다. 대기·진행 중에는 위의
+    # 상태 안내만 남긴다. 실패 시 MITRE는 확보된 부분 근거가 있을 때만 보여 준다.
+    if evidence_visible(analysis):
+        evidence = analysis.get("evidence") or []
+        evidence_box = deep.expander("MITRE Evidence", expanded=bool(evidence))
+        if evidence:
+            evidence_box.dataframe(evidence, hide_index=True, width="stretch")
+        else:
+            evidence_box.caption("표시할 MITRE ATT&CK 근거가 없습니다.")
+
+    if status != "COMPLETED":
+        return
 
     llm = analysis.get("llm_summary") or {}
     llm_box = deep.expander("LLM Summary", expanded=bool(llm))
@@ -2669,51 +2759,7 @@ else:
         )
 
     # Evidence and explainability
-    evidence_col, explainability_col = st.columns(2, gap="medium")
-
-    with evidence_col:
-        st.subheader("위협 근거")
-        evidence = st.container(
-            border=True,
-            key="evidence-card",
-            height="stretch",
-            vertical_alignment="center",
-        )
-        mitre_items = "".join(
-            (
-                '<div class="evidence-item">'
-                '<span class="technique-id">'
-                f'{escape(technique.get("technique_id", technique.get("id", "")))}'
-                "</span> "
-                f'{escape(technique.get("technique_name", technique.get("name", "")))}'
-                " · "
-                f'{escape(technique.get("tactic", ", ".join(technique.get("sources", []))))}'
-                "</div>"
-            )
-            for technique in result.get(
-                "evidence",
-                result.get("mitre_attack", []),
-            )
-        )
-        capa_items = "".join(
-            f'<div class="evidence-item">· {escape(behavior)}</div>'
-            for behavior in result.get("capa_behaviors", [])
-        )
-        evidence.markdown(
-            f"""
-            <div class="evidence-grid">
-                <div class="evidence-section">
-                    <div class="evidence-title">MITRE ATT&CK</div>
-                    {mitre_items}
-                </div>
-                <div class="evidence-section">
-                    <div class="evidence-title">CAPA Behavior</div>
-                    {capa_items}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    explainability_col = evidence_layout(st, result)
 
     with explainability_col:
         st.subheader("설명 가능성")
