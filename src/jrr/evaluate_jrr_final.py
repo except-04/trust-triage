@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import hashlib
 import time
+import subprocess
 from datetime import datetime
 from sklearn.metrics import roc_auc_score, brier_score_loss, confusion_matrix
 
@@ -26,6 +27,15 @@ def get_file_hash(filepath):
         h.update(f.read())
     return h.hexdigest()
 
+def get_git_info(cwd):
+    try:
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
+        status = subprocess.check_output(['git', 'status', '--porcelain'], cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
+        is_dirty = len(status) > 0
+        return commit, is_dirty
+    except Exception:
+        return "unknown", False
+
 def main():
     root = Path(__file__).resolve().parents[2]
     data_dir = root / 'data'
@@ -45,10 +55,10 @@ def main():
     if p.ndim == 2: p = p[:, 1]
     
     n = len(y)
-    assert len(p) == n and len(routes) == n and len(ood) == n and len(diff) == n and len(dis) == n, "Array lengths mismatch"
+    assert y.shape == (n,) and p.shape == (n,) and routes.shape == (n,) and ood.shape == (n,) and diff.shape == (n,) and dis.shape == (n,), f"Array shapes must be 1D ({n},)"
     assert set(np.unique(y)).issubset({0, 1}), "y must be 0 or 1"
     
-    # Fail-Closed 및 유효성 엄격 검증
+    # 입력 데이터 유효성 엄격 검증
     assert not np.isnan(p).any() and not np.isinf(p).any(), "NaN or Inf in probabilities"
     assert (p >= 0).all() and (p <= 1).all(), "Probabilities out of range (0~1)"
     assert not np.isnan(ood).any() and not np.isinf(ood).any(), "NaN or Inf in OOD scores"
@@ -151,9 +161,11 @@ def main():
         }
         
     # Output JSON
+    git_commit, git_dirty = get_git_info(root)
     output_data = {
         'metadata': {
             'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'git': {'commit': git_commit, 'is_dirty': git_dirty},
             'n_total': int(n), 'n_mal': int(n_mal), 'n_ben': int(n_ben),
             'hashes': {
                 'y_eval': get_file_hash(y_path),

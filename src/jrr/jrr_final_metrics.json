@@ -1,6 +1,10 @@
 {
   "metadata": {
-    "timestamp": "2026-09-19T16:16:20.285800Z",
+    "timestamp": "2026-09-19T16:22:30.515193Z",
+    "git": {
+      "commit": "27feb970046717ad0611cbcd0b87c304deec1f15",
+      "is_dirty": true
+    },
     "n_total": 480000,
     "n_mal": 240000,
     "n_ben": 240000,
