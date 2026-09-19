@@ -89,6 +89,30 @@ def test_artifact_settings_and_total_stage_budget(monkeypatch, tmp_path):
         runtime.initial_config(replace(BackendConfig(), operation_timeout_seconds=300))
 
 
+def test_model_reuse_defaults_and_environment(monkeypatch):
+    config = runtime.initial_config(BackendConfig())
+    assert config.reuse_models and config.model_worker_max_jobs == 100
+    monkeypatch.setenv("BACKEND_REUSE_MODELS", "false")
+    monkeypatch.setenv("BACKEND_MODEL_WORKER_MAX_JOBS", "25")
+    config = runtime.initial_config(BackendConfig())
+    assert not config.reuse_models and config.model_worker_max_jobs == 25
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("BACKEND_REUSE_MODELS", "yes"),
+        ("BACKEND_REUSE_MODELS", "1"),
+        ("BACKEND_MODEL_WORKER_MAX_JOBS", "0"),
+        ("BACKEND_MODEL_WORKER_MAX_JOBS", "10001"),
+    ],
+)
+def test_invalid_model_reuse_configuration_rejected(monkeypatch, key, value):
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        runtime.initial_config(BackendConfig())
+
+
 def test_create_service_local_wires_no_network(monkeypatch, tmp_path):
     captured = []
     monkeypatch.setattr(
@@ -191,9 +215,10 @@ def test_run_once_and_cleanup_modes(monkeypatch, capsys):
         cleanup=lambda **kwargs: calls.append(kwargs) or {"deleted_ids": []},
     )
     processor = SimpleNamespace(
+        close=lambda: calls.append("close"),
         resume_ready=lambda limit, *, should_stop: (
             calls.append((limit, should_stop())) or []
-        )
+        ),
     )
     monkeypatch.setattr(runtime, "create_service", lambda config: service)
     monkeypatch.setattr(runtime, "create_processor", lambda service: processor)
@@ -201,6 +226,7 @@ def test_run_once_and_cleanup_modes(monkeypatch, capsys):
     assert cli.main(["run", "--once", "--limit", "2"]) == 0
     assert signal.getsignal(signal.SIGINT) == previous
     assert (2, False) in calls
+    assert calls.count("close") == 1
     assert cli.main(["cleanup"]) == 0
     assert calls[-1] == {"limit": 100, "delete": False}
     assert cli.main(["cleanup", "--delete", "--limit", "3"]) == 0

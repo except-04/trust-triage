@@ -1,6 +1,10 @@
 # SQLite 스키마 설계
 
-> `[INFRA] SQLite 스키마 설계` 이슈용. 검토 이력 관리 + 해시 조회 두 가지 용도.
+> [!WARNING]
+> **이 문서는 폐기된 초안(Legacy)입니다.**
+> 
+> 현재 서비스 데이터베이스는 PostgreSQL 기반으로 변경되었습니다.
+> 최신 DB 구조는 `docs/backend-api/storage.md`와 `src/trust_triage/backend_api/schema.sql` 파일을 참조하십시오.
 
 ## 왜 필요한가
 
@@ -28,8 +32,7 @@ CREATE TABLE analysis_records (
     sha256 TEXT REFERENCES feature_cache(sha256),
     model_verdict TEXT NOT NULL,          -- '정상' | '악성'
     calibrated_probability REAL NOT NULL,
-    risk_score REAL,
-    route TEXT NOT NULL,                  -- '자동_정상' | '자동_악성' | '심층분석' | '분석가_검토'
+    route TEXT NOT NULL,                  -- 'AUTO_BENIGN' | 'AUTO_MALICIOUS' | 'HIGH_RISK_UNCERTAIN'
     priority_rank INTEGER,                -- 검토 큐 내 순위 (해당 시)
     top_features_json TEXT,               -- SHAP 근거 (상위 5개, {name, contribution, direction})
     review_status TEXT DEFAULT 'N/A',     -- 'N/A' | '대기중' | '완료'
@@ -41,7 +44,6 @@ CREATE TABLE analysis_records (
 );
 
 CREATE INDEX idx_review_status ON analysis_records(review_status);
-CREATE INDEX idx_risk_score ON analysis_records(risk_score DESC);
 ```
 
 ### 3. `emulation_results` — 확장안(Speakeasy) 결과 (선택 확장안 구현 시 사용)

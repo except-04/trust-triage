@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from trust_triage.feature_names import display_name
+
 from .errors import BackendError
 from .model_bundle import ModelBundle, ModelBundleConfig, _file_sha256
 from .schemas import TriggeredSignals
@@ -27,6 +29,8 @@ class InitialAnalysisConfig:
     xai_timeout_seconds: float = 30.0
     shap_top_k: int = 5
     max_file_size_bytes: int = 50 * 1024 * 1024
+    reuse_models: bool = True
+    model_worker_max_jobs: int = 100
 
     def __post_init__(self) -> None:
         for value in (
@@ -50,6 +54,14 @@ class InitialAnalysisConfig:
             or self.max_file_size_bytes <= 0
         ):
             raise ValueError("max_file_size_bytes must be a positive integer.")
+        if not isinstance(self.reuse_models, bool):
+            raise TypeError("reuse_models must be a boolean.")
+        if (
+            isinstance(self.model_worker_max_jobs, bool)
+            or not isinstance(self.model_worker_max_jobs, int)
+            or not 1 <= self.model_worker_max_jobs <= 10000
+        ):
+            raise ValueError("model_worker_max_jobs must be between 1 and 10000.")
 
 
 def _failure(
@@ -278,7 +290,7 @@ def _predict_initial(
     }, vector
 
 
-def _explain(bundle: ModelBundle, vector: Any, top_k: int) -> list[dict[str, Any]]:
+def _build_explainer(bundle: ModelBundle) -> Any:
     import numpy as np
 
     from trust_triage.explanation import LightGBMShapExplainer
@@ -304,9 +316,21 @@ def _explain(bundle: ModelBundle, vector: Any, top_k: int) -> list[dict[str, Any
             "SHAP artifacts changed after initial model input validation.",
             "XAI",
         )
+    return explainer
+
+
+def _explain(
+    bundle: ModelBundle, vector: Any, top_k: int, *, explainer: Any = None
+) -> list[dict[str, Any]]:
+    if explainer is None:
+        explainer = _build_explainer(bundle)
+    # display_name은 표시용 라벨이고 feature_name이 식별자다. 라벨 표는 라이브
+    # Feature Schema 버전에 종속되므로, 버전이 다르면 raw 이름이 그대로 들어간다.
+    schema_version = bundle.selector.source_schema.version
     return [
         {
             "feature_name": item.name,
+            "display_name": display_name(item.name, schema_version=schema_version),
             "feature_value": float(vector[item.model_input_index]),
             "shap_value": float(item.contribution),
             "direction": item.direction,
@@ -442,8 +466,32 @@ class InitialAnalysisService:
         self.config = config or InitialAnalysisConfig()
         self._context = process_context or multiprocessing.get_context("spawn")
         self._clock = clock
+        self._reusable = None
+        if self.config.reuse_models:
+            from .initial_worker import ReusableInitialAnalysis
+
+            self._reusable = ReusableInitialAnalysis(
+                self.config, self._context, self._clock
+            )
 
     def analyze(
+        self, path: Path, *, sha256: str, check: Callable[[], None] | None = None
+    ) -> dict[str, Any]:
+        if self._reusable is not None:
+            return self._reusable.analyze(path, sha256=sha256, check=check)
+        return self._analyze_once(path, sha256=sha256, check=check)
+
+    def close(self) -> None:
+        if self._reusable is not None:
+            self._reusable.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def _analyze_once(
         self, path: Path, *, sha256: str, check: Callable[[], None] | None = None
     ) -> dict[str, Any]:
         if check is not None:

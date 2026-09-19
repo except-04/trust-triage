@@ -302,6 +302,8 @@ def test_shap_maps_the_selected_model_position_to_value(components, monkeypatch)
     assert values == [
         {
             "feature_name": "f[2]",
+            # 합성 스키마는 라벨 표에 없으므로 추측하지 않고 raw 이름을 그대로 쓴다
+            "display_name": "f[2]",
             "feature_value": 11,
             "shap_value": -0.4,
             "direction": "BENIGN",
@@ -309,6 +311,66 @@ def test_shap_maps_the_selected_model_position_to_value(components, monkeypatch)
     ]
     assert calls["constructor"][0][0] is bundle.lgbm
     assert calls["constructor"][1]["expected_source_schema_version"] == "synthetic-v1"
+
+
+@pytest.mark.parametrize(
+    "name,label",
+    [
+        ("header[9]", "Major Linker Version"),
+        ("pefilewarnings[67]", "PE Warning: Suspicious flags set for section"),
+        ("imports[300]", "Import API hash bucket #42"),
+    ],
+)
+def test_shap_display_name_follows_the_live_schema_version(
+    components, monkeypatch, name, label
+):
+    """라이브 Schema 가 라벨 표의 버전이면 표시용 이름이 붙고, feature_name 은 그대로다."""
+    from trust_triage.feature_names import SCHEMA_VERSION
+
+    _, bundle = components
+    schema = FeatureSchema(SCHEMA_VERSION, ("f[0]", name, "pefilewarnings[0]"))
+    selector = FeatureSelector.from_feature_names(schema, ("f[0]", name))
+
+    class ExplainerDouble:
+        def __init__(self, *args, **kwargs):
+            self.feature_names = selector.selected_feature_names
+            self.source_indices = selector.source_indices
+
+        def explain(self, vector, *, top_k):
+            return [
+                SimpleNamespace(
+                    name=name,
+                    contribution=0.25,
+                    direction="MALICIOUS",
+                    model_input_index=1,
+                    source_index=1,
+                )
+            ]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "trust_triage.explanation",
+        SimpleNamespace(LightGBMShapExplainer=ExplainerDouble),
+    )
+    bundle = replace(
+        bundle,
+        selector=selector,
+        artifact_sha256={
+            "selection_manifest_path": "d" * 64,
+            "top_indices_path": "d" * 64,
+        },
+    )
+    monkeypatch.setattr(module, "_file_sha256", lambda path: "d" * 64)
+    values = module._explain(bundle, np.array([3, 14], dtype=np.float32), 5)
+    assert values == [
+        {
+            "feature_name": name,
+            "display_name": label,
+            "feature_value": 14,
+            "shap_value": 0.25,
+            "direction": "MALICIOUS",
+        }
+    ]
 
 
 @pytest.mark.parametrize("mismatch", ["names", "indices", "hash"])
@@ -446,6 +508,7 @@ def _service(monkeypatch, messages=(), *, alive=True, ignores_terminate=False):
     ticks = iter(index * 0.2 for index in range(100))
     service = InitialAnalysisService(
         InitialAnalysisConfig(
+            reuse_models=False,
             extraction_timeout_seconds=1,
             inference_timeout_seconds=1,
             xai_timeout_seconds=0.5,

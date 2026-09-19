@@ -25,8 +25,11 @@ def parser() -> argparse.ArgumentParser:
         help="명시적으로 읽을 설정 파일. 생략하면 .env 파일을 자동으로 읽지 않습니다.",
     )
     commands = result.add_subparsers(dest="command", required=True)
-    commands.add_parser(
+    initialize = commands.add_parser(
         "init-db", help="API 테이블을 생성합니다. 기존 데이터는 유지합니다."
+    )
+    initialize.add_argument(
+        "--deep", action="store_true", help="동일 DB에 심층 분석·Worker 테이블도 생성"
     )
     probe = commands.add_parser("check", help="DB와 파일 저장소 연결을 확인합니다.")
     probe.add_argument(
@@ -92,6 +95,16 @@ def main(argv: list[str] | None = None) -> int:
         service = create_service(config)
         if args.command == "init-db":
             service.repository.initialize()
+            if args.deep:
+                from trust_triage.deep_analysis.service_repository import (
+                    PostgresDeepAnalysisRepository,
+                )
+                from trust_triage.speakeasy_worker.repository import (
+                    PostgresJobRepository,
+                )
+
+                PostgresJobRepository(config.database_url).initialize()
+                PostgresDeepAnalysisRepository(config.database_url).initialize()
             print('{"status":"initialized"}')
         elif args.command == "check":
             print(json.dumps(check(service, analysis=args.analysis, deep=args.deep)))
@@ -145,8 +158,13 @@ def main(argv: list[str] | None = None) -> int:
                             raise
                     stop.wait(config.poll_seconds)
             finally:
-                for sig, handler in previous.items():
-                    signal.signal(sig, handler)
+                try:
+                    close = getattr(processor, "close", None)
+                    if close is not None:
+                        close()
+                finally:
+                    for sig, handler in previous.items():
+                        signal.signal(sig, handler)
         return 0
     except BackendError as exc:
         print(json.dumps({"error": exc.to_dict()}, ensure_ascii=False))

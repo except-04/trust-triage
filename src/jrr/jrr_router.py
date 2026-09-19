@@ -19,8 +19,10 @@ class JointRiskRouter:
 
     def route_sample(self, p_calib: float, disagreement: float, ood_score: float, difficulty_score: float) -> dict:
         """단일 파일에 대한 3-Way 분기 판정"""
-        
-        if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isnan(difficulty_score):
+
+        if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isnan(difficulty_score) or \
+           np.isinf(p_calib) or np.isinf(disagreement) or np.isinf(ood_score) or np.isinf(difficulty_score) or \
+           p_calib < 0.0 or p_calib > 1.0:
             return {
                 "initial_verdict": "HIGH_RISK_UNCERTAIN",
                 "route": "DEEP_ANALYSIS",
@@ -31,7 +33,7 @@ class JointRiskRouter:
                 "reason": "System Error: NaN values detected (Fail-Closed)",
                 "triggered_signals": []
             }
-            
+
         decision = None
         reason = None
         triggered_signals = []
@@ -41,25 +43,25 @@ class JointRiskRouter:
             decision = "HIGH_RISK_UNCERTAIN"
             if not reason: reason = f"OOD Detected (Score: {ood_score:.4f})"
             triggered_signals.append("OOD")
-            
+
         # 2. 불일치도가 크면 고확신 오판 방지를 위해 심층 분석으로 격상
         if disagreement >= self.tau_disagree:
             decision = "HIGH_RISK_UNCERTAIN"
             if not reason: reason = f"High Model Disagreement ({disagreement:.4f})"
             triggered_signals.append("DISAGREEMENT")
-            
+
         # 3. 분석 난이도가 높으면(PE 파싱 경고 등) 심층 분석으로 격상
         if difficulty_score >= self.tau_difficulty:
             decision = "HIGH_RISK_UNCERTAIN"
             if not reason: reason = f"High Analysis Difficulty (Score: {difficulty_score:.1f})"
             triggered_signals.append("DIFFICULTY")
-            
+
         # 4. 확률이 애매한 그레이존인 경우
         if self.tau_low < p_calib < self.tau_high:
             decision = "HIGH_RISK_UNCERTAIN"
             if not reason: reason = f"Uncertain Probability ({p_calib:.4f})"
             triggered_signals.append("UNCERTAIN_PROBABILITY")
-            
+
         # 5, 6. 위험 신호가 없는 경우 (확신도에 따라 정상/악성 분기)
         if decision is None:
             if p_calib >= self.tau_high:
@@ -68,7 +70,7 @@ class JointRiskRouter:
             else:
                 decision = "AUTO_BENIGN"
                 reason = f"High Benign Confidence ({p_calib:.4f})"
-            
+
         route = (
             "DEEP_ANALYSIS"
             if decision == "HIGH_RISK_UNCERTAIN"
@@ -88,17 +90,23 @@ class JointRiskRouter:
 
     def route_batch(self, p_calib_arr, disagreement_arr, ood_score_arr, difficulty_score_arr):
         """48만 건 전체 데이터셋 일괄 라우팅"""
+        if not (len(p_calib_arr) == len(disagreement_arr) == len(ood_score_arr) == len(difficulty_score_arr)):
+            raise ValueError(
+                f"입력 배열들의 길이가 일치하지 않습니다. "
+                f"(p_calib: {len(p_calib_arr)}, diff: {len(disagreement_arr)}, "
+                f"ood: {len(ood_score_arr)}, difficulty: {len(difficulty_score_arr)})"
+            )
         return [self.route_sample(p, d, o, diff) for p, d, o, diff in zip(p_calib_arr, disagreement_arr, ood_score_arr, difficulty_score_arr)]
 
 
 if __name__ == "__main__":
     import joblib
     DATA_DIR = os.path.join("data")
-    
+
     # 1. 데이터 로드 (Eval 평가 데이터셋)
     p_eval = np.load(os.path.join(DATA_DIR, "jrr_calibrated_proba.npy"))
     disagreement = np.load(os.path.join(DATA_DIR, "model_disagreement.npy"))
-    
+
     if p_eval.ndim == 2:
         p_eval = p_eval[:, 1]
     if disagreement.ndim == 2:
@@ -109,15 +117,15 @@ if __name__ == "__main__":
     risk_signals = joblib.load(os.path.join(DATA_DIR, 'jrr_risk_signals.pkl'))
     ood_model = risk_signals['ood_model']
     difficulty_indices = risk_signals['difficulty_indices']
-    
+
     top_500_idx = np.load(os.path.join(DATA_DIR, 'top_feature_indices_500.npy'))
     X_eval_raw = np.load(os.path.join(DATA_DIR, 'X_eval.npy'), mmap_mode='r')
     X_eval_500 = X_eval_raw[:, top_500_idx]
-    
+
     print("OOD Score (Isolation Forest) 산출 중... (시간이 다소 소요될 수 있습니다)")
     ood_scores = ood_model.decision_function(X_eval_500)
     np.save(os.path.join(DATA_DIR, 'jrr_ood_scores.npy'), ood_scores)
-    
+
     print("Analysis Difficulty Score 산출 중...")
     # PEFormatWarnings 피처들의 값을 합산하여 난이도 점수로 사용
     difficulty_scores = np.sum(X_eval_500[:, difficulty_indices], axis=1)

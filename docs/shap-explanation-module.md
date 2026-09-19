@@ -13,7 +13,7 @@ TRUST-Triage에서는 모델 점수만 제시하는 대신, 영향이 큰 featur
 - calibration 이후의 `calibrated_probability`는 설명하지 않는다.
 - positive class는 모델의 `classes_ == [0, 1]`, `objective == "binary"`를 검사하며, class `1`을 악성으로 해석한다.
 - XGBoost는 모델 간 disagreement 계산용이며 이 모듈의 SHAP 대상이 아니다.
-- 단일 `(500,)` 또는 `(1, 500)` 벡터만 지원한다. 기존 inference, Calibration, JRR 동작과는 연결되어 있지 않다.
+- 단일 `(500,)` 또는 `(1, 500)` 벡터만 지원한다. 현재 백엔드가 모델 예측 및 SHAP 모듈에 `bundle.lgbm`을 전달하도록 연동되어 있다.
 
 저장소의 공식 artifact 위치는 `models/`이지만 현재 JRR inference 스크립트는 같은 파일명을 `data/` 아래에서 staging해 로드한다. 서비스 통합 시 SHAP에는 별도 모델을 다시 선택하지 말고 inference가 `data/baseline_model_lightgbm_tuned_500_4way.pkl`에서 로드한 동일 `LGBMClassifier` 인스턴스를 전달한다.
 
@@ -82,6 +82,8 @@ LightGBM artifact에는 원본 feature name이나 EMBER index가 없고 `Column_
 | `group` | `group[index]` 이름에서 구조적으로 분리한 group 이름 |
 | `model_input_index` | 500차원 모델 입력에서의 위치, `0..499` |
 | `source_index` | 원본 2568차원 EMBER 벡터에서의 위치 |
+
+> `ShapContribution.to_dict()`에는 `display_name`이 없다. 표시용 라벨은 API 경계(`backend_api/initial_analysis._explain`)에서 `trust_triage.feature_names.display_name()`으로 덧붙이며, 이 모듈은 이름 생성·해석에 관여하지 않는다.
 
 `group`은 이름 prefix만 반환한다. hashed bucket의 구체적인 의미는 복원하거나 추정하지 않는다.
 

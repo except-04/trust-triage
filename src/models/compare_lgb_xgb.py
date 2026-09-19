@@ -1,11 +1,12 @@
 """
 LightGBM vs XGBoost 500개 모델 성능 비교 (disagreement 계산 전 검증용)
 
-두 모델 성능이 비슷해야 disagreement 신호가 
-"진짜 애매한 케이스"를 가리키는 것으로 신뢰할 수 있다. 
+두 모델 성능이 비슷해야 disagreement 신호가
+"진짜 애매한 케이스"를 가리키는 것으로 신뢰할 수 있다.
 한쪽이 확연히 못하면 disagreement가 왜곡될 수 있다.
 """
 
+import joblib
 import numpy as np
 import mlflow
 from sklearn.metrics import roc_auc_score, roc_curve
@@ -13,14 +14,14 @@ from sklearn.metrics import roc_auc_score, roc_curve
 TARGET_FPR = 0.001
 
 # --- 데이터 로드 ---
-DATA_DIR = "D:\KISIA_laptop\out\dev"  
+DATA_DIR = "data"
 
 X_calib = np.load(f"{DATA_DIR}/X_calib.npy", mmap_mode="r")
 y_calib = np.load(f"{DATA_DIR}/y_calib.npy")
 X_eval = np.load(f"{DATA_DIR}/X_eval.npy", mmap_mode="r")
 y_eval = np.load(f"{DATA_DIR}/y_eval.npy")
 
-top_indices = np.load("top_feature_indices_500.npy")
+top_indices = np.load(f"{DATA_DIR}/top_feature_indices_500.npy")
 top_indices = np.sort(top_indices)
 X_calib_500 = X_calib[:, top_indices]
 X_eval_500 = X_eval[:, top_indices]
@@ -50,16 +51,10 @@ def evaluate(model, X_calib, y_calib, X_eval, y_eval, target_fpr=TARGET_FPR):
     return {"roc_auc": roc_auc, "tpr_at_fpr": tpr, "threshold": threshold}
 
 
-# --- MLflow에서 두 모델 불러오기 ---
-mlflow.set_experiment("trust-triage-baseline")
-runs = mlflow.search_runs(order_by=["start_time"])
-print(runs[["run_id", "tags.feature_set", "tags.top_n", "tags.model_type", "start_time"]])
-
-lgb_run_id = "69a92b2033d346ac930fe2ec889199a2"
-xgb_run_id = "4ae56feb534e46f59c78a901c7c89783"
-
-model_lgb = mlflow.lightgbm.load_model(f"runs:/{lgb_run_id}/model")
-model_xgb = mlflow.xgboost.load_model(f"runs:/{xgb_run_id}/model")
+# --- 모델 로드 ---
+print("로컬 모델 파일을 직접 불러옵니다...")
+model_lgb = joblib.load(f"{DATA_DIR}/baseline_model_lightgbm_tuned_500_4way.pkl")
+model_xgb = joblib.load(f"{DATA_DIR}/baseline_model_xgb_500_4way_1000cap.pkl")
 
 
 # --- 비교 ---

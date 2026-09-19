@@ -48,7 +48,7 @@ Python launcher를 사용해야 하는 환경에서는 실행 파일 prefix를 �
 
 ```python
 config = CapaConfig(
-    executable=r".venv\Scripts\python.exe",
+    executable=r"trust-triage-env\Scripts\python.exe",
     executable_args=("-m", "capa.main"),
 )
 ```

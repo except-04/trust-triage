@@ -1,0 +1,7 @@
+# -*- coding: utf-8 -*-
+-r requirements-worker.txt
+-r requirements-backend-dev.txt
+pytest>=8,<10
+ruff>=0.6,<1
+# Backend 계약 및 기존 dynamic/deep-analysis 회귀 테스트에서 사용한다.
+requests>=2.31

@@ -8,7 +8,15 @@
 
 HTTP 서버와 분석 처리기는 별도 프로세스로 실행합니다. 실제 모델 파일과 심층 분석 서비스는 해당 모듈의 준비가 필요하며, 미설정 상태에서 가짜 분석 결과를 반환하지 않습니다.
 
+`backend_api run`은 기본적으로 초기 모델·SHAP 객체를 제한된 자식 프로세스에 한 번 준비해 여러 파일 분석에 재사용합니다. 모델 파일 변경이나 오류가 감지되면 프로세스를 교체하며, 필요하면 `BACKEND_REUSE_MODELS=false`로 이전 동작을 선택할 수 있습니다.
+
 DB·S3 등의 설정 예시는 루트의 [.env.backend.example](.env.backend.example)에 있습니다. 처음 설정할 때 이 파일을 `.env`로 복사해 실제 값을 채우고, 백엔드 실행 명령에 `--env-file .env`를 지정합니다.
+
+## Speakeasy Worker
+
+SQS 요청 수신, S3 원본 확인, 기존 Speakeasy 분석기 호출, PostgreSQL 상태·결과 저장을 담당하는 별도 프로세스입니다. 중복 수신 방지, 작업 점유 갱신, 재시도·DLQ 처리와 SHA-256 경로의 정규화 리포트 보관을 제공합니다.
+
+[실행 방법](docs/worker/speakeasy-worker.md), [Backend 연결·실행 절차](docs/worker/backend-integration.md), [요청·결과 계약](docs/worker/contracts.md), [환경변수 예시](.env.worker.example)를 참고하세요. Backend 처리기가 CAPA/FLOSS 결과를 저장하고 필요한 작업을 SQS에 전달하며, Worker 결과를 수신하면 저장된 단계에서 증거 반영·선택적 LLM 요약·전체 상태 갱신을 이어간다. Worker 완료는 Speakeasy 단계의 완료를 뜻한다. 실제 AWS 환경과 승인된 PE를 통한 검증은 배포 환경에서 수행해야 한다.
 
 ## 개발 환경 설정
 
@@ -62,18 +70,18 @@ py --version
 프로젝트 루트 디렉터리에서 다음 명령어를 실행합니다.
 
 ```bash
-python -m venv .venv
+python -m venv trust-triage-env
 ```
 
 `python` 명령어가 작동하지 않고 `py`만 작동하는 경우에는 다음과 같이 실행합니다.
 
 ```bash
-py -m venv .venv
+py -m venv trust-triage-env
 ```
 
-가상환경을 생성하면 프로젝트 폴더 내부에 `.venv` 디렉터리가 생성됩니다.
+가상환경을 생성하면 프로젝트 폴더 내부에 `trust-triage-env` 디렉터리가 생성됩니다.
 
-`.venv`는 개인별 로컬 개발 환경이므로 GitHub 저장소에는 업로드하지 않습니다.
+`trust-triage-env`는 개인별 로컬 개발 환경이므로 GitHub 저장소에는 업로드하지 않습니다.
 
 ---
 
@@ -82,25 +90,25 @@ py -m venv .venv
 #### Windows CMD
 
 ```cmd
-.venv\Scripts\activate
+trust-triage-env\Scripts\activate
 ```
 
 #### Windows PowerShell
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\trust-triage-env\Scripts\Activate.ps1
 ```
 
 #### Git Bash
 
 ```bash
-source .venv/Scripts/activate
+source trust-triage-env/Scripts/activate
 ```
 
-가상환경이 정상적으로 활성화되면 터미널 경로 앞에 `(.venv)`가 표시됩니다.
+가상환경이 정상적으로 활성화되면 터미널 경로 앞에 `(trust-triage-env)`가 표시됩니다.
 
 ```text
-(.venv) C:\Users\사용자명\trust-triage>
+(trust-triage-env) C:\Users\사용자명\trust-triage>
 ```
 
 ---
@@ -177,7 +185,7 @@ Ctrl + C
 deactivate
 ```
 
-터미널 경로 앞에 표시되던 `(.venv)`가 사라지면 가상환경이 정상적으로 종료된 것입니다.
+터미널 경로 앞에 표시되던 `(trust-triage-env)`가 사라지면 가상환경이 정상적으로 종료된 것입니다.
 
 ---
 
@@ -189,7 +197,7 @@ deactivate
 
 ```bash
 cd trust-triage
-.venv\Scripts\activate
+trust-triage-env\Scripts\activate
 git pull origin main
 python -m pip install -r requirements.txt
 mlflow server --port 5000

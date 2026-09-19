@@ -49,20 +49,7 @@ def ensure_writable(path: Path) -> None:
         path.chmod(path.stat().st_mode | stat.S_IWUSR)
 
 
-def npy_shape(path: Path) -> tuple | None:
-    """
-    .npy의 shape만 헤더에서 읽는다 (없으면 None).
 
-    데이터는 건드리지 않으므로 21GB 파일에도 비용이 없다. memmap을 열고
-    바로 닫는 이유는, Windows에서 열린 매핑이 남아 있으면 같은 경로를
-    open_memmap(mode="w+")으로 다시 만들 때 실패하기 때문이다.
-    """
-    if not path.is_file():
-        return None
-    arr = np.load(path, mmap_mode="r")
-    shape = tuple(int(v) for v in arr.shape)
-    del arr
-    return shape
 
 
 def copy_rows(X_src, idx: np.ndarray, out_path: Path, dim: int,
@@ -119,7 +106,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="최종 .npy 산출물 생성")
     add_root_arg(ap)
     ap.add_argument("--chunk", type=int, default=DEFAULT_CHUNK)
-    ap.add_argument("--force", action="store_true", help="이미 있는 산출물도 덮어씀")
     ap.add_argument("--verify", action="store_true",
                     help="무작위 표본으로 원본과의 일치를 검증")
     ap.add_argument("--verify-n", type=int, default=200,
@@ -160,28 +146,10 @@ def main() -> int:
         np.save(y_out, y_train[idx].astype(np.int32))
         np.save(a_out, arch_train[idx].astype(np.int8))
 
-        # 이미 있는 파일이 지금의 인덱스와 맞는지 shape로 확인한다.
-        # 분할 경계를 바꾼 뒤(예: train 0–39 → tr 0–33 + val 34–39) 그냥
-        # 재실행하면, 예전 기준으로 만든 X_tr.npy가 "이미 존재"로 스킵되어
-        # 인덱스와 어긋난 채 남는다. 조용한 불일치는 --force를 깜빡한 사람의
-        # 실수가 아니라 파이프라인의 결함이므로, 행 수가 다르면 경고와 함께
-        # 무조건 다시 만든다.
-        want = (int(idx.size), dim)
-        have = npy_shape(x_out)
-        stale = have is not None and have != want
-
-        if have is not None and not args.force and not stale:
-            log.info("스킵: %s (이미 존재, shape %s 일치 — --force로 덮어쓰기)",
-                     x_out.name, have)
-        else:
-            if stale:
-                log.warning("%s의 shape가 %s인데 현재 인덱스는 %s입니다 — "
-                            "분할 경계가 바뀐 산출물이므로 다시 만듭니다.",
-                            x_out.name, have, want)
-            est = idx.size * dim * 4
-            log.info("%s: %d행 → 예상 %s", x_out.name, idx.size, fmt_bytes(est))
-            with Timer(log, f"X_{split}.npy 생성"):
-                copy_rows(X_train, idx, x_out, dim, args.chunk, log)
+        est = idx.size * dim * 4
+        log.info("%s: %d행 → 예상 %s", x_out.name, idx.size, fmt_bytes(est))
+        with Timer(log, f"X_{split}.npy 생성"):
+            copy_rows(X_train, idx, x_out, dim, args.chunk, log)
 
         if args.verify:
             with Timer(log, f"X_{split}.npy 표본 검증"):
@@ -222,13 +190,10 @@ def main() -> int:
             if mask_path.is_file():
                 np.save(m_out, np.load(mask_path))
 
-            if x_out.is_file() and not args.force:
-                log.info("스킵: %s (이미 존재)", x_out.name)
-            else:
-                log.info("%s: %d행 → 예상 %s (필터링 없이 전체 복사)",
-                         x_out.name, n, fmt_bytes(n * dim * 4))
-                with Timer(log, f"X_{subset}.npy 생성"):
-                    copy_all(X_src, n, x_out, dim, args.chunk, log)
+            log.info("%s: %d행 → 예상 %s (필터링 없이 전체 복사)",
+                     x_out.name, n, fmt_bytes(n * dim * 4))
+            with Timer(log, f"X_{subset}.npy 생성"):
+                copy_all(X_src, n, x_out, dim, args.chunk, log)
 
             manifest_rows[f"X_{subset}"] = {
                 "path": str(x_out), "shape": [int(n), dim], "dtype": "float32",
