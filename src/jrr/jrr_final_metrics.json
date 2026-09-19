@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "timestamp": "2026-09-19T15:50:12.234739Z",
+    "timestamp": "2026-09-19T16:04:08.113451Z",
     "n_total": 480000,
     "n_mal": 240000,
     "n_ben": 240000,
@@ -42,7 +42,7 @@
     "match_rate": 1.0
   },
   "signal_breakdown": {
-    "Prob Margin": {
+    "확률 구간": {
       "n_flagged": 24046,
       "n_mal": 21452,
       "n_ben": 2594,
@@ -56,14 +56,14 @@
       "saved_fn": 130,
       "saved_fp": 2
     },
-    "Disagreement": {
+    "모델 불일치": {
       "n_flagged": 11728,
       "n_mal": 7102,
       "n_ben": 4626,
       "saved_fn": 1040,
       "saved_fp": 4
     },
-    "Difficulty": {
+    "분석 난이도": {
       "n_flagged": 23240,
       "n_mal": 21016,
       "n_ben": 2224,
@@ -72,22 +72,22 @@
     }
   },
   "combinations": {
-    "Difficulty": 21558,
-    "Disagreement": 6090,
-    "Disagreement+Difficulty": 218,
+    "분석 난이도": 21558,
+    "모델 불일치": 6090,
+    "모델 불일치+분석 난이도": 218,
     "OOD": 3112,
-    "OOD+Difficulty": 64,
-    "OOD+Disagreement": 26,
-    "Prob Margin": 17170,
-    "Prob Margin+Difficulty": 1334,
-    "Prob Margin+Disagreement": 5296,
-    "Prob Margin+Disagreement+Difficulty": 64,
-    "Prob Margin+OOD": 146,
-    "Prob Margin+OOD+Difficulty": 2,
-    "Prob Margin+OOD+Disagreement": 34
+    "OOD+분석 난이도": 64,
+    "OOD+모델 불일치": 26,
+    "확률 구간": 17170,
+    "확률 구간+분석 난이도": 1334,
+    "확률 구간+모델 불일치": 5296,
+    "확률 구간+모델 불일치+분석 난이도": 64,
+    "확률 구간+OOD": 146,
+    "확률 구간+OOD+분석 난이도": 2,
+    "확률 구간+OOD+모델 불일치": 34
   },
   "ablation": {
-    "Prob Margin": {
+    "확률 구간": {
       "fn": 21766,
       "fp": 198,
       "def": 37944
@@ -97,12 +97,12 @@
       "fp": 200,
       "def": 52002
     },
-    "Disagreement": {
+    "모델 불일치": {
       "fn": 7678,
       "fp": 200,
       "def": 49024
     },
-    "Difficulty": {
+    "분석 난이도": {
       "fn": 6748,
       "fp": 232,
       "def": 33556

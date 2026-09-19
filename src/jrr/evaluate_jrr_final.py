@@ -97,10 +97,10 @@ def main():
     
     # 5. Signal Breakdown
     signals = {
-        'Prob Margin': is_margin,
+        '확률 구간': is_margin,
         'OOD': is_ood,
-        'Disagreement': is_dis,
-        'Difficulty': is_diff
+        '모델 불일치': is_dis,
+        '분석 난이도': is_diff
     }
     
     breakdown = {}
@@ -119,10 +119,10 @@ def main():
         cnt = (bitmask == val).sum()
         if cnt > 0:
             names = []
-            if val & 8: names.append('Prob Margin')
+            if val & 8: names.append('확률 구간')
             if val & 4: names.append('OOD')
-            if val & 2: names.append('Disagreement')
-            if val & 1: names.append('Difficulty')
+            if val & 2: names.append('모델 불일치')
+            if val & 1: names.append('분석 난이도')
             comb_results['+'.join(names)] = int(cnt)
             
     # 6. Ablation (Leave-one-out)
