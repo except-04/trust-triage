@@ -43,28 +43,57 @@ def main():
     r_mal = (routes == 'AUTO_MALICIOUS').sum()
     r_unc = (routes == 'HIGH_RISK_UNCERTAIN').sum()
     
-    print("=== 데이터 개요 ===")
-    print(f"총 평가 데이터: {n:,}건 (악성 {n_mal:,}건, 정상 {n_ben:,}건)")
-    print(f"[JRR 라우팅 분배 비율 (Policy 3 기준)]")
-    print(f"  AUTO_BENIGN (자동 정상): {r_ben:,}건 ({(r_ben/n*100):.2f}%)")
-    print(f"  AUTO_MALICIOUS (자동 악성): {r_mal:,}건 ({(r_mal/n*100):.2f}%)")
-    print(f"  HIGH_RISK_UNCERTAIN (심층분석 보류): {r_unc:,}건 ({(r_unc/n*100):.2f}%)\n")
+    output_text = f"""=== 평가 목적 ===
+확률만으로 판정할 때와 JRR을 사용할 때,
+자동판정 오류와 심층분석 대상이 얼마나 달라지는지 비교합니다.
+
+※ 심층분석 실행 전의 라우팅 평가입니다.
+   보류된 파일은 정답으로 처리한 것이 아닙니다.
+   아래 미탐·오탐은 자동판정된 파일에서 발생한 오류입니다.
+
+=== 평가 데이터 ===
+전체 {n:,}건
+- 실제 악성: {n_mal:,}건
+- 실제 정상: {n_ben:,}건
+
+=== 비교 정책 ===
+① 확률로 바로 판정
+   악성 확률 ≥ {tau_high:.6f} → 악성, 나머지 → 정상
+
+② 확률의 애매한 구간만 보류
+   악성 확률 ≤ {tau_low} → 정상
+   {tau_low} < 악성 확률 < {tau_high:.6f} → 심층분석
+   악성 확률 ≥ {tau_high:.6f} → 악성
+
+③ JRR
+   ②의 확률 기준에 OOD·모델 불일치·분석 난이도를 추가하여,
+   위험 신호가 있으면 자동판정 대신 심층분석으로 전환
+
+=== 자동판정 결과 ===
+                               ① 확률 판정   ② 확률 구간 보류   ③ JRR
+악성을 정상으로 자동판정          {p1_fn:>7,}건          {p2_fn:>7,}건       {p3_fn:>7,}건
+정상을 악성으로 자동판정             {p1_fp:>5,}건            {p2_fp:>5,}건         {p3_fp:>5,}건
+심층분석으로 보류                      {p1_deferred:>5,}건         {p2_deferred:>7,}건      {p3_deferred:>7,}건
+전체 중 보류 비율                    {(p1_deferred/n*100):>4.2f}%            {(p2_deferred/n*100):>4.2f}%        {(p3_deferred/n*100):>5.2f}%
+
+=== JRR이 추가로 보류시킨 자동판정 오류 ===
+[① 확률로 바로 판정하는 방식 대비]
+- 악성의 자동 정상 판정 {p1_fn - p3_fn:,}건을 심층분석으로 전환
+- 정상의 자동 악성 판정 {p1_fp - p3_fp:,}건을 심층분석으로 전환
+
+[② 확률의 애매한 구간만 보류하는 방식 대비]
+- 악성의 자동 정상 판정 {p2_fn - p3_fn:,}건을 추가로 심층분석으로 전환
+- 정상의 자동 악성 판정 {p2_fp - p3_fp:,}건을 추가로 심층분석으로 전환
+- 심층분석 대상은 {p3_deferred - p2_deferred:,}건 증가: 보류율 {(p2_deferred/n*100):.2f}% → {(p3_deferred/n*100):.2f}%
+
+=== 해석 ===
+현재 임계값에서 JRR은 확률 단독 정책보다
+잘못된 자동판정을 더 많이 보류시켰습니다.
+
+다만 보류된 {p3_deferred:,}건의 최종 판정은 이 평가에 포함되지 않았습니다.
+전체 시스템의 최종 미탐·오탐 감소 여부는 심층분석 후 확인해야 합니다."""
     
-    print("=== 비교 분석 ===")
-    print(f"[Policy 1: No Deferral]")
-    print(f"FN (미탐): {p1_fn:,}")
-    print(f"FP (오탐): {p1_fp:,}")
-    print(f"보류(심층분석): {p1_deferred:,} ({(p1_deferred/len(y)*100):.2f}%)")
-    
-    print(f"\n[Policy 2: Prob Margin]")
-    print(f"FN (미탐): {p2_fn:,}")
-    print(f"FP (오탐): {p2_fp:,}")
-    print(f"보류(심층분석): {p2_deferred:,} ({(p2_deferred/len(y)*100):.2f}%)")
-    
-    print(f"\n[Policy 3: JRR]")
-    print(f"FN (미탐): {p3_fn:,}")
-    print(f"FP (오탐): {p3_fp:,}")
-    print(f"보류(심층분석): {p3_deferred:,} ({(p3_deferred/len(y)*100):.2f}%)")
+    print(output_text)
 
 if __name__ == '__main__':
     main()
