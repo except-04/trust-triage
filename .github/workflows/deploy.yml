@@ -40,6 +40,18 @@ jobs:
             exit 1
           fi
 
+      # Temporary diagnostics: print only non-secret repository IDs and ref.
+      - name: Show OIDC repository identifiers
+        env:
+          OIDC_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
+          OIDC_REPOSITORY_ID: ${{ github.repository_id }}
+          OIDC_REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          printf 'github.repository_owner_id=%s\n' "$OIDC_REPOSITORY_OWNER_ID"
+          printf 'github.repository_id=%s\n' "$OIDC_REPOSITORY_ID"
+          printf 'github.ref=%s\n' "$OIDC_REF"
+
       - name: Assume AWS role through GitHub OIDC
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
