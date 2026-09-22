@@ -122,49 +122,79 @@ jobs:
                      "--ignore-submodules=none").stdout:
                   raise RuntimeError("Dirty working tree: deployment refused; no files removed.")
 
-          def blocked_reason(path):
-              p = PurePosixPath(path.lower())
+          # Exact runtime inputs, not directories containing related application code.
+          DB_SCHEMA_PATHS = {
+              "src/trust_triage/backend_api/schema.sql",
+              "src/trust_triage/deep_analysis/service_schema.sql",
+              "src/trust_triage/speakeasy_worker/schema.sql",
+          }
+          # No migration directory currently exists; register real migration roots here.
+          DB_MIGRATION_DIRS = ()
+          # References: docs/shap-explanation-module.md, src/jrr/generate_raw_probas.py,
+          # src/jrr/train_calibrator.py and src/jrr/jrr_router.py. Backend paths are
+          # configurable via BACKEND_*_PATH: register any custom deployment paths here
+          # before allowing Git to manage those files. Do not read or print .env values.
+          RUNTIME_MODEL_PATHS = {
+              "models/baseline_model_lightgbm_tuned_500_4way.pkl",
+              "data/baseline_model_lightgbm_tuned_500_4way.pkl",
+              "data/baseline_model_xgb_500_4way_1000cap.pkl",
+              "data/jrr_calibrator_4way.pkl",
+              "data/jrr_risk_signals.pkl",
+              "data/top_feature_indices_500.npy",
+              "docs/feature-extraction/feature-selection-ember-v3-top500.json",
+          }
+
+          def blocked_reason(path, old_mode, new_mode, status):
+              p = PurePosixPath(path)
               name = p.name
-              if (fnmatch.fnmatchcase(name, "requirements*.txt") or name in {
-                  "pyproject.toml", "setup.py", "setup.cfg", "pipfile", "pipfile.lock",
-                  "poetry.lock", "uv.lock",
-              }):
+              if fnmatch.fnmatchcase(name, "requirements*.txt") or name == "pyproject.toml":
                   return "dependency change requires a manual release"
-              if (name.startswith(".env") or str(p).startswith(("venv/", ".venv/", "env/"))
-                      or str(p) == ".streamlit/secrets.toml"):
+              virtualenvs = ("venv", ".venv", "env")
+              if str(p) in virtualenvs or str(p).startswith(tuple(root + "/" for root in virtualenvs)):
                   return "runtime environment must be preserved"
-              if (p.suffix == ".sql" or name == "alembic.ini"
-                      or any(part.startswith("migration") or part == "alembic" for part in p.parts)
-                      or name in {"schema.py", "schemas.py"}):
+              is_template = name.endswith((".example", ".template"))
+              if not is_template and (
+                  name == ".env" or name.startswith(".env.") or name.endswith(".env")
+                  or str(p) in {".streamlit", ".streamlit/secrets.toml"}
+              ):
+                  return "runtime environment must be preserved"
+              if (str(p) in DB_SCHEMA_PATHS
+                      or any(str(p) == root or str(p).startswith(root + "/") for root in DB_MIGRATION_DIRS)):
                   return "schema/migration change requires a manual release"
-              # Conservative first-release boundary: includes model producers/consumers.
-              prefixes = (
-                  "models/", "data/", "artifacts/", "mlartifacts/", "mlruns/", "ember2024/",
-                  "src/models/", "src/jrr/", "src/preprocessing/",
-                  "src/trust_triage/feature_extraction/", "src/trust_triage/explanation/",
-                  "docs/feature-extraction/",
-              )
-              contracts = {
-                  "ember2024", "src/trust_triage/feature_names.py",
-                  "src/trust_triage/backend_api/model_bundle.py",
-                  "src/trust_triage/backend_api/initial_analysis.py",
-                  "src/trust_triage/backend_api/initial_worker.py",
-                  "src/trust_triage/backend_api/config.py",
-                  "src/trust_triage/backend_api/runtime.py",
-                  "src/trust_triage/backend_api/repository.py",
-                  "src/trust_triage/deep_analysis/service_repository.py",
-                  "src/trust_triage/speakeasy_worker/repository.py",
-                  "docs/feature_schema.md",
-              }
-              if (str(p).startswith(prefixes) or str(p) in {prefix.rstrip("/") for prefix in prefixes}
-                      or str(p) in contracts
-                      or p.suffix in {".pkl", ".pickle", ".joblib", ".npy", ".npz", ".onnx",
-                                      ".pt", ".pth", ".h5", ".hdf5", ".safetensors", ".model", ".bin"}
-                      or (p.suffix == ".json" and any(word in name for word in (
-                          "model", "manifest", "contract", "selection", "calibrat", "risk_signal",
-                      )))):
+              if (str(p) in RUNTIME_MODEL_PATHS
+                      or any(model.startswith(str(p) + "/") for model in RUNTIME_MODEL_PATHS)):
+                  # Also reject replacing a parent directory with a symlink/gitlink.
                   return "model artifact/contract change requires a manual release"
+              if "160000" in {old_mode, new_mode}:
+                  if path == "EMBER2024" and (old_mode, new_mode, status) == ("160000", "000000", "D"):
+                      return None  # Remove only the stale gitlink; not a model replacement.
+                  return "submodule change requires review of its actual contents"
               return None
+
+          def protected_changes(previous, target):
+              # Raw metadata distinguishes gitlinks from files. With rename detection
+              # disabled, a move checks both the deletion and addition paths.
+              raw = git("diff", "--raw", "--no-abbrev", "--no-renames", "-z", previous, target, "--").stdout
+              if not raw:
+                  return []
+              records = raw.split("\0")
+              if records.pop() != "" or len(records) % 2:
+                  raise RuntimeError("Invalid Git change metadata; deployment refused.")
+              blocked = []
+              for header, path in zip(records[::2], records[1::2]):
+                  fields = header.split()
+                  if len(fields) != 5 or not fields[0].startswith(":") or not path:
+                      raise RuntimeError("Invalid Git change metadata; deployment refused.")
+                  old_mode, new_mode = fields[0][1:], fields[1]
+                  status = fields[4]
+                  if (old_mode not in {"000000", "100644", "100755", "120000", "160000"}
+                          or new_mode not in {"000000", "100644", "100755", "120000", "160000"}
+                          or status not in {"A", "D", "M", "T"}):
+                      raise RuntimeError("Unsupported Git change metadata; deployment refused.")
+                  reason = blocked_reason(path, old_mode, new_mode, status)
+                  if reason:
+                      blocked.append((path, reason))
+              return blocked
 
           def http_health(label, url, *, backend=False):
               # Ignore proxy environment for loopback probes; never print response bodies.
@@ -220,10 +250,7 @@ jobs:
                   if git("merge-base", "--is-ancestor", previous, target, required=False).returncode:
                       raise RuntimeError("Update is not fast-forward; deployment refused.")
                   print("Stage: protected-path validation", flush=True)
-                  # Disable rename detection so both old and new paths are checked, including deletions.
-                  paths = git("diff", "--name-only", "--no-renames", "-z", previous, target, "--").stdout
-                  blocked = [(p, blocked_reason(p)) for p in paths.split("\0") if p]
-                  blocked = [(p, reason) for p, reason in blocked if reason]
+                  blocked = protected_changes(previous, target)
                   if blocked:
                       for path, reason in blocked:
                           print(f"BLOCKED {json.dumps(path)}: {reason}", flush=True)
