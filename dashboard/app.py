@@ -255,7 +255,8 @@ def render_shap_chart(target, features):
     colors = ["#dc2626" if value >= 0 else "#2563eb" for value in values]
     limit = max((abs(value) for value in values), default=0.1) * 1.22
 
-    figure, axis = plt.subplots(figsize=(6.2, 2.15))
+    # Keep full-width labels, with ~300–350px height in the wide result panel.
+    figure, axis = plt.subplots(figsize=(6.2, 1.4))
     positions = list(range(len(names)))
     axis.barh(positions, values, color=colors, height=0.55)
     axis.axvline(0, color="#64748b", linewidth=1.1, zorder=0)
@@ -264,7 +265,7 @@ def render_shap_chart(target, features):
     axis.invert_yaxis()
     axis.xaxis.grid(True, color="#e2e8f0", linewidth=0.7)
     axis.set_axisbelow(True)
-    axis.tick_params(axis="both", labelsize=8, colors="#475569")
+    axis.tick_params(axis="both", labelsize=7.5, colors="#475569")
 
     for position, value in zip(positions, values):
         offset = limit * 0.025
@@ -274,7 +275,7 @@ def render_shap_chart(target, features):
             f"{value:+.2f}",
             va="center",
             ha="left" if value >= 0 else "right",
-            fontsize=8,
+            fontsize=7.5,
             color="#334155",
         )
 
@@ -284,7 +285,7 @@ def render_shap_chart(target, features):
         "← Benign contribution",
         transform=axis.transAxes,
         color="#2563eb",
-        fontsize=8,
+        fontsize=7.5,
         fontweight="bold",
     )
     axis.text(
@@ -293,7 +294,7 @@ def render_shap_chart(target, features):
         "Malicious contribution →",
         transform=axis.transAxes,
         color="#dc2626",
-        fontsize=8,
+        fontsize=7.5,
         fontweight="bold",
         ha="right",
     )
@@ -301,7 +302,7 @@ def render_shap_chart(target, features):
     for spine in axis.spines.values():
         spine.set_visible(False)
 
-    axis.set_xlabel("SHAP value", fontsize=8, color="#64748b")
+    axis.set_xlabel("SHAP value", fontsize=7.5, color="#64748b")
     figure.patch.set_facecolor("#ffffff")
     axis.set_facecolor("#ffffff")
     figure.tight_layout(pad=0.55)

@@ -7,6 +7,8 @@ display_name 은 백엔드가 덧붙이는 선택 필드다. 이 필드가 생�
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 
@@ -74,3 +76,60 @@ def test_chart_uses_display_names_and_keeps_raw_names_untouched(app):
         "section[3]",
         "header[43]",
     ]
+
+
+def test_compact_chart_preserves_top_five_values_order_and_label_space(app):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    class Target:
+        def pyplot(self, figure, **kwargs):
+            self.figure = figure
+            self.options = kwargs
+
+    features = [
+        feature("header[9]", "Major Linker Version", 0.4),
+        feature("pefilewarnings[67]", "PE Warning: Suspicious flags set for section", 0.2),
+        feature("section[3]", "Read/Execute Section Count", -0.1),
+        feature("imports[300]", "Import API hash bucket #42", -0.3),
+        feature("header[43]", value=0.05),
+        feature("excluded", "Not in the existing Top 5", 0.9),
+    ]
+    original = deepcopy(features)
+    target = Target()
+    app.render_shap_chart(target, features)
+
+    figure = target.figure
+    axis = figure.axes[0]
+    assert target.options == {"width": "stretch"}
+    assert tuple(figure.get_size_inches()) == pytest.approx((6.2, 1.4))
+    assert [bar.get_width() for bar in axis.patches] == pytest.approx(
+        [0.4, 0.2, -0.1, -0.3, 0.05]
+    )
+    assert [tick.get_text() for tick in axis.get_yticklabels()] == [
+        app.shap_feature_label(item) for item in features[:5]
+    ]
+    assert axis.yaxis_inverted()
+    assert axis.get_xlim() == pytest.approx((-0.4 * 1.22, 0.4 * 1.22))
+    assert features == original
+
+    canvas = FigureCanvasAgg(figure)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    label_boxes = [tick.get_window_extent(renderer) for tick in axis.get_yticklabels()]
+    for box in label_boxes:
+        assert box.x0 >= figure.bbox.x0
+        assert box.x1 <= figure.bbox.x1
+        assert box.y0 >= figure.bbox.y0
+        assert box.y1 <= figure.bbox.y1
+    for upper, lower in zip(label_boxes, label_boxes[1:]):
+        assert upper.y0 > lower.y1
+
+    benign, malicious = axis.texts[-2:]
+    assert benign.get_window_extent(renderer).x1 < malicious.get_window_extent(renderer).x0
+
+    # Streamlit saves with bbox_inches="tight" and Matplotlib's default padding.
+    bounds = figure.get_tightbbox(renderer)
+    padding = app.plt.rcParams["savefig.pad_inches"] * 2
+    aspect_ratio = (bounds.height + padding) / (bounds.width + padding)
+    for container_width in (1320, 1450):
+        assert 300 <= container_width * aspect_ratio <= 350
