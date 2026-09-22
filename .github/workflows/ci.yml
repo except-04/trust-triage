@@ -37,17 +37,21 @@ jobs:
           python-version: "3.12.3"
           cache: pip
           cache-dependency-path: |
+            requirements.txt
             requirements-backend.txt
             requirements-backend-dev.txt
             .github/workflows/ci.yml
 
-      # Dashboard tests stub Streamlit but import requests and matplotlib.
+      # Dashboard tests use both Streamlit stubs and real AppTest rendering.
+      # Reuse only the Streamlit runtime requirement from requirements.txt.
       # pytest.ini adds src to pythonpath; no production install or .env is needed.
       # Do not install the full ML/Feature Extraction/Worker requirements here.
       - name: Install test dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-backend-dev.txt "requests>=2.31" "matplotlib>=3.8"
+          python -m pip install -r requirements-backend-dev.txt "requests>=2.31" "matplotlib>=3.8" \
+            -r <(grep -E '^streamlit[<>=!~]' requirements.txt)
           python -m pip check
 
       - name: Run initial CI gate
