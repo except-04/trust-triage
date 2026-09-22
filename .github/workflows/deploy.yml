@@ -1,4 +1,4 @@
-name: CD connection test (read-only)
+name: Manual deploy
 
 on:
   workflow_dispatch:
@@ -7,16 +7,21 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: trust-triage-manual-deploy
+  cancel-in-progress: false
+
 jobs:
-  connection-test:
+  deploy:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 25
     # No environment: the IAM trust policy expects the main-branch OIDC subject.
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
       AWS_PAGER: ""
       AWS_MAX_ATTEMPTS: "2"
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Validate branch and configuration
@@ -26,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Run this connection test from main only."
+            echo "::error::Run this deployment from main only."
             exit 1
           fi
           for variable in AWS_DEPLOY_ROLE_ARN AWS_REGION EC2_INSTANCE_ID; do
@@ -39,58 +44,233 @@ jobs:
             echo "::error::EC2_INSTANCE_ID must contain exactly one EC2 instance ID."
             exit 1
           fi
-
-      # Temporary diagnostics: print only non-secret repository IDs and ref.
-      - name: Show OIDC repository identifiers
-        env:
-          OIDC_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
-          OIDC_REPOSITORY_ID: ${{ github.repository_id }}
-          OIDC_REF: ${{ github.ref }}
-        shell: bash
-        run: |
-          printf 'github.repository_owner_id=%s\n' "$OIDC_REPOSITORY_OWNER_ID"
-          printf 'github.repository_id=%s\n' "$OIDC_REPOSITORY_ID"
-          printf 'github.ref=%s\n' "$OIDC_REF"
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid deployment commit SHA."
+            exit 1
+          fi
 
       - name: Assume AWS role through GitHub OIDC
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: GitHubReadOnly-${{ github.run_id }}
-          role-duration-seconds: 900
+          role-session-name: GitHubDeploy-${{ github.run_id }}
+          role-duration-seconds: 1800
           unset-current-credentials: true
 
-      # No checkout, dependency installation, or deployment commands are needed.
-      - name: Run read-only SSM checks and wait for completion
+      # The workflow carries the fixed deployment procedure; no runner checkout needed.
+      - name: Deploy through SSM and verify completion
         shell: bash
         run: |
           python3 - <<'PY'
           import json
           import os
+          import re
+          import shlex
           import subprocess
           import time
 
           instance_id = os.environ["EC2_INSTANCE_ID"]
-          remote_script = """set -u
-          result=0
-          whoami || result=1
-          pwd || result=1
-          if test -d /home/ubuntu/trust-triage; then
-            printf 'Repository directory exists: /home/ubuntu/trust-triage\n'
-            git -c safe.directory=/home/ubuntu/trust-triage -C /home/ubuntu/trust-triage rev-parse --verify HEAD || result=1
-          else
-            printf 'Repository directory missing: /home/ubuntu/trust-triage\n' >&2
-            result=1
-          fi
-          for service in trust-triage-api.service trust-triage-dashboard.service trust-triage-processor.service trust-triage-speakeasy.service; do
-            printf '%s: ' "$service"
-            if ! systemctl is-active "$service"; then
-              result=1
-            fi
-          done
-          exit "$result"
+          target_sha = os.environ["TARGET_SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", target_sha):
+              raise SystemExit("Invalid TARGET_SHA.")
+          print(f"TARGET_SHA={target_sha}", flush=True)
+
+          # Runs under the existing EC2 venv. Git always runs as ubuntu, not SSM root.
+          remote_program = r"""
+          import fcntl
+          import fnmatch
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import subprocess
+          import sys
+          import time
+          import urllib.request
+
+          REPO = "/home/ubuntu/trust-triage"
+          SERVICES = (
+              "trust-triage-speakeasy.service",
+              "trust-triage-processor.service",
+              "trust-triage-api.service",
+              "trust-triage-dashboard.service",
+          )
+
+          def run(args, *, timeout=30, required=True):
+              try:
+                  result = subprocess.run(
+                      args, capture_output=True, text=True, timeout=timeout,
+                      env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0"),
+                  )
+              except subprocess.TimeoutExpired:
+                  raise RuntimeError("Command timed out; no automatic rollback.") from None
+              if required and result.returncode:
+                  # Do not print raw Git errors, remote URLs, environment, or file contents.
+                  raise RuntimeError(f"Command failed (exit {result.returncode}).")
+              return result
+
+          def git(*args, required=True, timeout=30):
+              return run(
+                  ["runuser", "-u", "ubuntu", "--", "git", "-C", REPO,
+                   "-c", "core.hooksPath=/dev/null", *args],
+                  required=required, timeout=timeout,
+              )
+
+          def clean_tree():
+              if git("status", "--porcelain=v1", "--untracked-files=all",
+                     "--ignore-submodules=none").stdout:
+                  raise RuntimeError("Dirty working tree: deployment refused; no files removed.")
+
+          def blocked_reason(path):
+              p = PurePosixPath(path.lower())
+              name = p.name
+              if (fnmatch.fnmatchcase(name, "requirements*.txt") or name in {
+                  "pyproject.toml", "setup.py", "setup.cfg", "pipfile", "pipfile.lock",
+                  "poetry.lock", "uv.lock",
+              }):
+                  return "dependency change requires a manual release"
+              if (name.startswith(".env") or str(p).startswith(("venv/", ".venv/", "env/"))
+                      or str(p) == ".streamlit/secrets.toml"):
+                  return "runtime environment must be preserved"
+              if (p.suffix == ".sql" or name == "alembic.ini"
+                      or any(part.startswith("migration") or part == "alembic" for part in p.parts)
+                      or name in {"schema.py", "schemas.py"}):
+                  return "schema/migration change requires a manual release"
+              # Conservative first-release boundary: includes model producers/consumers.
+              prefixes = (
+                  "models/", "data/", "artifacts/", "mlartifacts/", "mlruns/", "ember2024/",
+                  "src/models/", "src/jrr/", "src/preprocessing/",
+                  "src/trust_triage/feature_extraction/", "src/trust_triage/explanation/",
+                  "docs/feature-extraction/",
+              )
+              contracts = {
+                  "ember2024", "src/trust_triage/feature_names.py",
+                  "src/trust_triage/backend_api/model_bundle.py",
+                  "src/trust_triage/backend_api/initial_analysis.py",
+                  "src/trust_triage/backend_api/initial_worker.py",
+                  "src/trust_triage/backend_api/config.py",
+                  "src/trust_triage/backend_api/runtime.py",
+                  "src/trust_triage/backend_api/repository.py",
+                  "src/trust_triage/deep_analysis/service_repository.py",
+                  "src/trust_triage/speakeasy_worker/repository.py",
+                  "docs/feature_schema.md",
+              }
+              if (str(p).startswith(prefixes) or str(p) in {prefix.rstrip("/") for prefix in prefixes}
+                      or str(p) in contracts
+                      or p.suffix in {".pkl", ".pickle", ".joblib", ".npy", ".npz", ".onnx",
+                                      ".pt", ".pth", ".h5", ".hdf5", ".safetensors", ".model", ".bin"}
+                      or (p.suffix == ".json" and any(word in name for word in (
+                          "model", "manifest", "contract", "selection", "calibrat", "risk_signal",
+                      )))):
+                  return "model artifact/contract change requires a manual release"
+              return None
+
+          def http_health(label, url, *, backend=False):
+              # Ignore proxy environment for loopback probes; never print response bodies.
+              opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+              deadline = time.monotonic() + 60
+              while time.monotonic() < deadline:
+                  try:
+                      with opener.open(url, timeout=5) as response:
+                          body = response.read(4096)
+                          valid = response.status == 200
+                          valid = valid and (
+                              json.loads(body).get("status") == "ok" if backend
+                              else body.strip().lower() == b"ok"
+                          )
+                          if valid:
+                              print(f"{label} health: OK", flush=True)
+                              return True
+                  except (OSError, ValueError, AttributeError):
+                      pass
+                  time.sleep(3)
+              print(f"{label} health: FAILED", flush=True)
+              return False
+
+          def deploy(target):
+              if not re.fullmatch(r"[0-9a-f]{40}", target):
+                  raise RuntimeError("Invalid TARGET_SHA.")
+              if os.geteuid() != 0 or not Path(REPO).is_dir():
+                  raise RuntimeError("SSM root execution and the configured repository are required.")
+              # Host lock also prevents overlap with a still-running, disconnected SSM invocation.
+              with open("/run/lock/trust-triage-deploy.lock", "a") as lock:
+                  try:
+                      fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  except BlockingIOError:
+                      raise RuntimeError("Another deployment is already running.") from None
+                  print("Stage: working-tree preflight", flush=True)
+                  clean_tree()
+                  if git("rev-parse", "--show-toplevel").stdout.strip() != REPO:
+                      raise RuntimeError("Unexpected repository root.")
+                  if git("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip() != "main":
+                      raise RuntimeError("EC2 repository must already be on main.")
+                  previous = git("rev-parse", "--verify", "HEAD").stdout.strip()
+                  if not re.fullmatch(r"[0-9a-f]{40}", previous):
+                      raise RuntimeError("Invalid PREVIOUS_SHA.")
+                  # These lines persist in SSM output, including failures after this point.
+                  print(f"PREVIOUS_SHA={previous}", flush=True)
+                  print(f"TARGET_SHA={target}", flush=True)
+                  print("Stage: fetch and commit validation", flush=True)
+                  git("fetch", "origin", "main", timeout=90)
+                  main_sha = git("rev-parse", "--verify", "FETCH_HEAD^{commit}").stdout.strip()
+                  git("cat-file", "-e", target + "^{commit}")
+                  if git("merge-base", "--is-ancestor", target, main_sha, required=False).returncode:
+                      raise RuntimeError("TARGET_SHA is not a commit on fetched origin/main.")
+                  if git("merge-base", "--is-ancestor", previous, target, required=False).returncode:
+                      raise RuntimeError("Update is not fast-forward; deployment refused.")
+                  print("Stage: protected-path validation", flush=True)
+                  # Disable rename detection so both old and new paths are checked, including deletions.
+                  paths = git("diff", "--name-only", "--no-renames", "-z", previous, target, "--").stdout
+                  blocked = [(p, blocked_reason(p)) for p in paths.split("\0") if p]
+                  blocked = [(p, reason) for p, reason in blocked if reason]
+                  if blocked:
+                      for path, reason in blocked:
+                          print(f"BLOCKED {json.dumps(path)}: {reason}", flush=True)
+                      raise RuntimeError("Protected changes detected; code and services left unchanged.")
+                  clean_tree()
+                  if (git("rev-parse", "HEAD").stdout.strip() != previous
+                          or git("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip() != "main"):
+                      raise RuntimeError("Repository changed during preflight.")
+                  print("Stage: fast-forward update", flush=True)
+                  git("merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", target, timeout=60)
+                  if git("rev-parse", "HEAD").stdout.strip() != target:
+                      raise RuntimeError("HEAD does not equal TARGET_SHA; services not restarted.")
+                  clean_tree()
+                  print("Stage: restart services", flush=True)
+                  failed = False
+                  for service in SERVICES:
+                      result = run(["systemctl", "restart", service], timeout=120, required=False)
+                      print(f"Restart {service}: exit {result.returncode}", flush=True)
+                      failed = failed or result.returncode != 0
+                  for service in SERVICES:
+                      result = run(["systemctl", "is-active", "--quiet", service], required=False)
+                      print(f"Active {service}: {result.returncode == 0}", flush=True)
+                      failed = failed or result.returncode != 0
+                  if not http_health("Backend", "http://127.0.0.1:8000/health", backend=True):
+                      failed = True
+                  if not http_health("Dashboard", "http://127.0.0.1:8501/_stcore/health"):
+                      failed = True
+                  # Catch processes that exited while HTTP probes were running.
+                  for service in SERVICES:
+                      if run(["systemctl", "is-active", "--quiet", service], required=False).returncode:
+                          print(f"Final active check failed: {service}", flush=True)
+                          failed = True
+                  if failed:
+                      raise RuntimeError("Deployment verification failed; no automatic rollback.")
+                  print("Deployment verified.", flush=True)
+
+          try:
+              deploy(sys.argv[1])
+          except (RuntimeError, OSError) as error:
+              # RuntimeError messages above are fixed/safe; suppress arbitrary OS error details.
+              message = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+              print(f"DEPLOYMENT FAILED: {message}", flush=True)
+              sys.exit(1)
           """
+          remote_script = shlex.join([
+              "/home/ubuntu/trust-triage/venv/bin/python", "-B", "-c", remote_program, target_sha,
+          ])
 
           def aws(*args):
               return subprocess.run(
@@ -103,10 +283,10 @@ jobs:
               "ssm", "send-command",
               "--instance-ids", instance_id,
               "--document-name", "AWS-RunShellScript",
-              "--comment", "TRUST-Triage read-only OIDC/SSM connection test",
+              "--comment", f"TRUST-Triage manual deploy {target_sha}",
               "--timeout-seconds", "120",
               "--parameters", json.dumps({
-                  "commands": [remote_script], "executionTimeout": ["60"],
+                  "commands": [remote_script], "executionTimeout": ["900"],
               }),
           )
           if sent.returncode:
@@ -115,7 +295,7 @@ jobs:
 
           command_id = json.loads(sent.stdout)["Command"]["CommandId"]
           print(f"SSM CommandId: {command_id}", flush=True)
-          deadline = time.monotonic() + 300
+          deadline = time.monotonic() + 1080
           while time.monotonic() < deadline:
               invocation = aws(
                   "ssm", "get-command-invocation",
@@ -143,9 +323,9 @@ jobs:
               print("--- EC2 stderr ---")
               print(detail.get("StandardErrorContent", ""), flush=True)
               if status != "Success" or detail.get("ResponseCode") != 0:
-                  raise SystemExit("Read-only EC2 checks failed.")
-              print("Read-only OIDC/SSM connection test passed.")
+                  raise SystemExit("EC2 deployment failed; no automatic rollback.")
+              print("Manual deployment passed.")
               break
           else:
-              raise SystemExit("Timed out waiting for SSM command completion (300s).")
+              raise SystemExit("SSM polling timed out (1080s); inspect the command before retrying. No rollback performed.")
           PY
