@@ -144,7 +144,7 @@ def test_pending_progressive_view_keeps_initial_and_shap_but_no_deep_results(
     target = _render(app, result)
 
     subheaders = [args[0] for args in target.named("subheader")]
-    assert subheaders == ["Initial Analysis", "Deep Analysis"]
+    assert subheaders == ["분석 요약", "라우팅 결정", "분석 파이프라인", "설명 가능성", "Deep Analysis"]
     assert target.named("pyplot")  # SHAP 차트는 그대로
     expanders = target.expanders()
     assert "MITRE Evidence" not in expanders
@@ -165,7 +165,7 @@ def test_completed_progressive_view_shows_evidence_llm_and_assessment(app):
     target = _render(app, result)
 
     expanders = target.expanders()
-    assert expanders[-3:] == ["MITRE Evidence", "LLM Summary", "Final Assessment"]
+    assert all(name in expanders for name in ("MITRE Evidence", "LLM Summary", "Final Assessment"))
     frames = [args[0] for args in target.named("dataframe")]
     assert result["evidence"] in frames
 

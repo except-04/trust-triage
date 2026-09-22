@@ -2,6 +2,7 @@ import hashlib
 import api_client
 import re
 import time
+from collections import Counter
 from html import escape
 from uuid import uuid4
 from api_client import ApiError
@@ -38,6 +39,9 @@ DETAIL_REQUIRED_FIELDS = (
 )
 # 검색이 쓰는 session_state 키. 접수/폴링 키와 겹치지 않게 한곳에 모아 둔다.
 HASH_SEARCH_KEYS = ("hash_search", "hash_search_error", "hash_search_selector")
+DETAIL_COLUMN_GAP = "medium"
+DETAIL_CARD_GAP = "small"
+SPEAKEASY_PREVIEW_LIMIT = 10
 
 
 def reset_analysis_result():
@@ -255,8 +259,8 @@ def render_shap_chart(target, features):
     colors = ["#dc2626" if value >= 0 else "#2563eb" for value in values]
     limit = max((abs(value) for value in values), default=0.1) * 1.22
 
-    # Keep full-width labels, with ~300–350px height in the wide result panel.
-    figure, axis = plt.subplots(figsize=(6.2, 1.4))
+    # Keep full-width labels; the tighter figure is ~230-255px in the wide panel.
+    figure, axis = plt.subplots(figsize=(6.2, 1.0))
     positions = list(range(len(names)))
     axis.barh(positions, values, color=colors, height=0.55)
     axis.axvline(0, color="#64748b", linewidth=1.1, zorder=0)
@@ -265,7 +269,7 @@ def render_shap_chart(target, features):
     axis.invert_yaxis()
     axis.xaxis.grid(True, color="#e2e8f0", linewidth=0.7)
     axis.set_axisbelow(True)
-    axis.tick_params(axis="both", labelsize=7.5, colors="#475569")
+    axis.tick_params(axis="both", labelsize=6.5, colors="#475569", pad=1)
 
     for position, value in zip(positions, values):
         offset = limit * 0.025
@@ -275,7 +279,7 @@ def render_shap_chart(target, features):
             f"{value:+.2f}",
             va="center",
             ha="left" if value >= 0 else "right",
-            fontsize=7.5,
+            fontsize=6.5,
             color="#334155",
         )
 
@@ -285,7 +289,7 @@ def render_shap_chart(target, features):
         "← Benign contribution",
         transform=axis.transAxes,
         color="#2563eb",
-        fontsize=7.5,
+        fontsize=6.5,
         fontweight="bold",
     )
     axis.text(
@@ -294,7 +298,7 @@ def render_shap_chart(target, features):
         "Malicious contribution →",
         transform=axis.transAxes,
         color="#dc2626",
-        fontsize=7.5,
+        fontsize=6.5,
         fontweight="bold",
         ha="right",
     )
@@ -302,10 +306,10 @@ def render_shap_chart(target, features):
     for spine in axis.spines.values():
         spine.set_visible(False)
 
-    axis.set_xlabel("SHAP value", fontsize=7.5, color="#64748b")
+    axis.set_xlabel("SHAP value", fontsize=6.5, color="#64748b", labelpad=1)
     figure.patch.set_facecolor("#ffffff")
     axis.set_facecolor("#ffffff")
-    figure.tight_layout(pad=0.55)
+    figure.tight_layout(pad=0.35)
     target.pyplot(figure, width="stretch")
     plt.close(figure)
 
@@ -1133,6 +1137,8 @@ def render_evidence_card(target, result):
 
 def deep_analysis_state(analysis):
     """종합 Deep 상태가 없는 batch 응답에서도 표시 상태를 안전하게 계산한다."""
+    if analysis.get("route") == "FINAL":
+        return "NOT_REQUIRED"
     explicit = analysis.get("deep_status")
     if explicit in {"QUEUED", "RUNNING", "COMPLETED", "FAILED", "NOT_REQUIRED"}:
         return explicit
@@ -1155,7 +1161,7 @@ def deep_analysis_state(analysis):
         )
         return "RUNNING" if has_finished_tool else "QUEUED"
     if selected and all(value in {"COMPLETED", "FAILED"} for value in selected):
-        return "COMPLETED"
+        return "FAILED" if "FAILED" in selected else "COMPLETED"
     if analysis.get("status") == "COMPLETED":
         return "COMPLETED"
     return "QUEUED"
@@ -1170,9 +1176,46 @@ def _metric_text(value, pattern):
         return str(value)
 
 
-def render_progressive_result(analysis, target=st):
-    """HIGH_RISK_UNCERTAIN의 Initial과 Deep 영역을 독립적으로 렌더링한다."""
-    context, action = target.columns([6, 1], gap="medium")
+def result_detail_state(analysis):
+    """Batch 상태가 아닌 현재 파일의 확보된 결과로 표시 여부를 결정한다."""
+    return {
+        "available": initial_detail_available(analysis),
+        "deep": deep_analysis_state(analysis),
+        "tools": {
+            tool: "NOT_REQUIRED" if analysis.get("route") == "FINAL" else
+            (analysis.get("deep_analysis_status") or {}).get(tool)
+            or ("NOT_REQUIRED" if tool == "cape" else "QUEUED")
+            for tool in ("capa", "floss", "speakeasy", "cape")
+        },
+    }
+
+
+def detail_section(target, title, key):
+    """모든 route에서 같은 제목 간격, 카드 폭, 기본 padding을 사용한다."""
+    section = target.container(
+        key=f"detail_{key}_section", height="stretch", gap=DETAIL_CARD_GAP
+    )
+    section.subheader(title)
+    return section.container(
+        border=True, key=f"detail_{key}_card", height="stretch", gap=DETAIL_CARD_GAP
+    )
+
+
+def render_result_detail(analysis, target=st):
+    """완료/진행/실패 결과가 공유하는 상세 shell. API 호출이나 polling은 하지 않는다."""
+    state = result_detail_state(analysis)
+    if not state["available"]:
+        if analysis.get("status") == "FAILED":
+            error = analysis.get("error") or {}
+            target.error("분석 실패: " + (error.get("message") or "원인을 확인할 수 없습니다."))
+            if error.get("code"):
+                target.caption(f"코드 {error['code']} · 단계 {error.get('stage') or '-'}")
+        else:
+            target.info(f"Initial Analysis 결과를 기다리고 있습니다. (상태: {analysis.get('status') or 'QUEUED'})")
+        return
+
+    shell = target.container(key="result_detail_shell", gap=DETAIL_COLUMN_GAP)
+    context, action = shell.columns([6, 1], gap=DETAIL_COLUMN_GAP)
     context.caption(
         f"{analysis.get('filename') or '(이름 없음)'} · "
         f"SHA-256 {truncate_hash(analysis.get('sha256') or '-')}"
@@ -1183,51 +1226,118 @@ def render_progressive_result(analysis, target=st):
         reset_analysis_session()
         st.rerun()
 
-    target.subheader("Initial Analysis")
-    initial = target.container(border=True, key="progressive_initial_analysis")
-    verdict_col, route_col = initial.columns(2, gap="medium")
-    verdict_col.markdown(
-        "**Initial Verdict**  "
-        + verdict_badge_markup(analysis.get("initial_verdict") or "Pending"),
-        unsafe_allow_html=True,
-    )
-    route_col.markdown(
-        "**Route**  " + route_badge_markup(analysis.get("route") or "-"),
-        unsafe_allow_html=True,
-    )
-
-    probability, raw, disagreement, ood, difficulty = initial.columns(5)
-    probability.metric(
-        "Calibrated Probability",
-        _metric_text(analysis.get("calibrated_probability"), "{:.1%}"),
-    )
-    raw.metric(
-        "Raw Probability",
-        _metric_text(analysis.get("raw_probability"), "{:.1%}"),
-    )
-    disagreement.metric(
-        "Disagreement", _metric_text(analysis.get("disagreement"), "{:.3f}")
-    )
-    ood.metric("OOD Score", _metric_text(analysis.get("ood_score"), "{:.3f}"))
-    difficulty.metric(
-        "Difficulty Score",
-        _metric_text(analysis.get("difficulty_score"), "{:.1f}"),
-    )
-    initial.markdown(f"**Reason**  \n{analysis.get('reason') or '-'}")
-    signals = analysis.get("triggered_signals")
+    initial = detail_section(shell, "분석 요약", "summary")
+    verdicts = [
+        ("Initial Verdict", verdict_badge_markup(analysis.get("initial_verdict") or "Pending")),
+        ("Final Verdict", verdict_badge_markup(analysis.get("final_verdict") or "Pending")),
+        ("Route", route_badge_markup(analysis.get("route") or "-")),
+    ]
+    metrics = [
+        ("Raw Probability", "raw_probability", "{:.1%}"),
+        ("Calibrated Probability", "calibrated_probability", "{:.1%}"),
+        ("OOD Score", "ood_score", "{:.3f}"),
+        ("Disagreement", "disagreement", "{:.3f}"),
+        ("Difficulty", "difficulty_score", "{:.1f}"),
+    ]
     initial.markdown(
-        "**Triggered Signals**  \n" + (", ".join(signals) if signals else "None")
+        '<div class="detail-verdicts">' + "".join(
+            f'<div><div class="summary-label">{label}</div>{badge}</div>'
+            for label, badge in verdicts
+        ) + '</div><div class="summary-divider"></div><div class="detail-metrics">'
+        + "".join(
+            f'<div><div class="summary-label">{label}</div>'
+            f'<div class="summary-value">{escape(_metric_text(analysis.get(key), pattern))}</div></div>'
+            for label, key, pattern in metrics
+        ) + '</div>',
+        unsafe_allow_html=True,
     )
-    features = analysis.get("top_features") or []
-    initial.markdown("**SHAP / Top Features**")
-    if features:
-        render_shap_chart(initial, features)
-    else:
-        initial.info("표시할 SHAP 특성이 없습니다.")
 
-    target.subheader("Deep Analysis")
-    deep = target.container(border=True, key="progressive_deep_analysis")
-    status = deep_analysis_state(analysis)
+    decision_col, pipeline_col = shell.columns(2, gap=DETAIL_COLUMN_GAP)
+    routing = detail_section(decision_col, "라우팅 결정", "routing")
+    routing.markdown(route_badge_markup(analysis.get("route") or "-"), unsafe_allow_html=True)
+    routing.write(f"**Reason**  \n{analysis.get('reason') or '-'}")
+    signals = analysis.get("triggered_signals") or []
+    routing.write("**Triggered Signals**  \n" + (", ".join(signals) if signals else "None"))
+    pipeline = detail_section(pipeline_col, "분석 파이프라인", "pipeline")
+    steps = [("ML Triage", "COMPLETED")]
+    steps.extend((label, state["tools"][key]) for label, key in (
+        ("CAPA", "capa"), ("FLOSS", "floss"), ("Speakeasy", "speakeasy"), ("CAPE", "cape")
+    ))
+    steps.append(("Final", analysis.get("status") or "QUEUED"))
+    pipeline.markdown('<div class="detail-pipeline">' + "".join(
+        f'<div class="pipeline-node"><div class="pipeline-name">{label}</div>'
+        f'{pipeline_state_markup(status)}</div>' for label, status in steps
+    ) + '</div>', unsafe_allow_html=True)
+
+    explanation = detail_section(shell, "설명 가능성", "shap")
+    explanation.markdown("**SHAP 주요 특성 Top 5**")
+    features = analysis.get("top_features") or analysis.get("shap_features") or []
+    if features:
+        render_shap_chart(explanation, features)
+    else:
+        explanation.info("표시할 SHAP 특성이 없습니다.")
+
+    deep = detail_section(shell, "Deep Analysis", "deep")
+    render_deep_analysis(analysis, deep, state)
+    technical = shell.expander("기술 세부 정보", expanded=False)
+    technical.write(f"**파일명:** {analysis.get('filename') or '-'}")
+    technical.write(f"**SHA256:** `{analysis.get('sha256') or '-'}`")
+    if analysis.get("analyzed_at"):
+        technical.write(f"**분석 시각:** {analysis['analyzed_at']}")
+
+
+def render_progressive_result(analysis, target=st):
+    """기존 진입점도 동일한 상세 shell을 사용한다."""
+    render_result_detail(analysis, target)
+
+
+def render_speakeasy(target, speakeasy):
+    """실제 반환된 이벤트만 요약하며 행위 의미나 MITRE 매핑은 추측하지 않는다."""
+    behavior = speakeasy.get("behavior") or {}
+    calls = behavior.get("api_calls") or []
+    counts = Counter(str(event["api_name"]) for event in calls if event.get("api_name"))
+    total, unique = target.columns(2, gap=DETAIL_COLUMN_GAP)
+    total.metric("API Calls", len(calls))
+    unique.metric("Unique APIs", len(counts))
+    target.caption(
+        "반환된 이벤트 기준(백엔드 저장 상한 적용) · "
+        "unique 수는 api_name이 있는 호출 기준입니다."
+    )
+    if counts:
+        target.dataframe(
+            [{"API": name, "Calls": count} for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)],
+            hide_index=True, width="stretch",
+        )
+        if len(counts) > SPEAKEASY_PREVIEW_LIMIT:
+            target.caption(f"호출 수 기준 상위 {SPEAKEASY_PREVIEW_LIMIT}개 API 표시")
+    else:
+        target.caption("No API calls detected" if not calls else "API names unavailable")
+
+    for key, title, empty in (
+        ("files", "Files", "No file activity detected"),
+        ("network", "Network", "No network activity detected"),
+        ("registry", "Registry", "No registry activity detected"),
+    ):
+        events = behavior.get(key) or []
+        target.markdown(f"**{title}** · {len(events)} events")
+        if not events:
+            target.caption(empty)
+            continue
+        # 키를 그대로 유지하고 중첩 값은 길이를 제한한 텍스트로 표시한다.
+        rows = [
+            {str(field): str(value)[:200] for field, value in event.items()}
+            for event in events[:SPEAKEASY_PREVIEW_LIMIT]
+        ]
+        target.dataframe(rows, hide_index=True, width="stretch")
+        if len(events) > SPEAKEASY_PREVIEW_LIMIT:
+            target.caption(f"처음 {SPEAKEASY_PREVIEW_LIMIT}개 이벤트 표시 · 전체는 Raw details에서 확인")
+    if speakeasy.get("error"):
+        target.warning((speakeasy["error"].get("message") or "Speakeasy 실행 오류"))
+    target.expander("Raw details", expanded=False).json(speakeasy)
+
+
+def render_deep_analysis(analysis, deep, state):
+    status = state["deep"]
     deep.markdown(f"**Status: {status}**")
     if status == "QUEUED":
         deep.info("심층 분석 대기 중입니다. 완료되면 결과가 자동으로 갱신됩니다.")
@@ -1247,6 +1357,7 @@ def render_progressive_result(analysis, target=st):
         deep.success("심층 분석이 완료되었습니다.")
     else:
         deep.info("이 분석에는 심층 분석이 필요하지 않습니다.")
+        return
 
     if status != "FAILED" and analysis.get("deep_error"):
         error = analysis["deep_error"]
@@ -1255,8 +1366,11 @@ def render_progressive_result(analysis, target=st):
             + (error.get("message") or "잠시 후 다시 확인해주세요.")
         )
 
-    statuses = analysis.get("deep_analysis_status") or {}
+    statuses = state["tools"]
     deep.markdown(deep_analysis_status_markup(statuses), unsafe_allow_html=True)
+
+    if status not in {"COMPLETED", "FAILED"}:
+        return
 
     # 완료·실패 시점에 존재하는 결과만 보여 준다. 일부 필드가 없어도 나머지
     # 결과와 Initial Analysis는 계속 렌더링한다.
@@ -1283,9 +1397,8 @@ def render_progressive_result(analysis, target=st):
 
     speakeasy = analysis.get("speakeasy") or {}
     speakeasy_box = deep.expander("Speakeasy", expanded=bool(speakeasy))
-    behavior = speakeasy.get("behavior") or {}
-    if behavior:
-        speakeasy_box.json(behavior)
+    if speakeasy:
+        render_speakeasy(speakeasy_box, speakeasy)
     else:
         speakeasy_box.caption(
             f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}"
@@ -1305,20 +1418,18 @@ def render_progressive_result(analysis, target=st):
         return
 
     llm = analysis.get("llm_summary") or {}
-    llm_box = deep.expander("LLM Summary", expanded=bool(llm))
     if llm:
+        llm_box = deep.expander("LLM Summary", expanded=True)
         llm_box.write(llm.get("summary") or "-")
         behaviors = llm.get("suspicious_behaviors") or []
         if behaviors:
             llm_box.markdown("\n".join(f"- {item}" for item in behaviors))
         if llm.get("analyst_notes"):
             llm_box.caption(llm["analyst_notes"])
-    else:
-        llm_box.caption(f"Status: {analysis.get('llm_status') or '결과 없음'}")
 
     assessment = analysis.get("final_assessment") or {}
-    assessment_box = deep.expander("Final Assessment", expanded=bool(assessment))
     if assessment:
+        assessment_box = deep.expander("Final Assessment", expanded=True)
         assessment_box.write(
             f"**Final Verdict:** {assessment.get('final_verdict') or analysis.get('final_verdict') or '-'}"
         )
@@ -1326,8 +1437,6 @@ def render_progressive_result(analysis, target=st):
             f"**Disposition:** {assessment.get('disposition') or '-'}"
         )
         assessment_box.write(assessment.get("reason") or "-")
-    else:
-        assessment_box.caption("최종 평가가 아직 없습니다.")
 
 
 def commit_receipt(batch_data):
@@ -1923,6 +2032,9 @@ def render_batch_triage(batch_data):
                 "위 분류에서 건수가 표시된 그룹을 선택하세요."
             )
             st.stop()
+        if not groups[group_key]:
+            # 빈 그룹에서 다른 그룹의 이전 상세 결과를 재사용하지 않는다.
+            st.stop()
         st.markdown(
             '<div class="detail-section-break">선택 파일 상세 분석</div>',
             unsafe_allow_html=True,
@@ -2017,8 +2129,7 @@ def render_progressive_batch_result(batch_data):
         return
     render_batch_triage(batch_data)
     selected = st.session_state.get("analysis_result") or {}
-    if is_progressive_result(selected):
-        render_progressive_result(selected)
+    render_result_detail(selected)
 
 
 @st.fragment(run_every=POLL_INTERVAL_SECONDS)
@@ -2099,6 +2210,54 @@ st.markdown(
 
         .block-container [data-testid="stVerticalBlock"] {
             gap: 1.5rem;
+        }
+
+        /* Result-only spacing: native Streamlit cards retain their common padding. */
+        .st-key-result_detail_shell {
+            --detail-section-gap: 1.5rem;
+            --detail-gap: 1rem;
+            --detail-title-gap: 0.5rem;
+        }
+
+        .block-container .st-key-result_detail_shell {
+            gap: var(--detail-section-gap);
+        }
+
+        .st-key-result_detail_shell [data-testid="stVerticalBlock"] {
+            gap: var(--detail-gap);
+        }
+
+        .st-key-result_detail_shell [class*="_section"] {
+            gap: var(--detail-title-gap);
+        }
+
+        .detail-verdicts, .detail-metrics, .detail-pipeline {
+            display: grid;
+            align-items: start;
+            gap: var(--detail-gap);
+        }
+
+        .detail-verdicts, .detail-pipeline {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .detail-metrics {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
+
+        .detail-verdicts > div, .detail-metrics > div {
+            min-width: 0;
+        }
+
+        .st-key-result_detail_shell .status-badge {
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        @media (max-width: 700px) {
+            .detail-verdicts, .detail-metrics, .detail-pipeline {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
         }
 
         div[data-testid="stVerticalBlockBorderWrapper"] {
@@ -2563,230 +2722,11 @@ else:
         sync_selected_analysis(batch_data)
 
         if pending_analyses(batch_data):
-            # 진행 중에는 폴링 패널만 그린다. 아래 완료 화면은 종료 후에 렌더된다.
+            # 진행 패널과 선택 파일 상세를 같은 fragment에서 갱신한다.
             render_polling_view(batch_data)
             st.stop()
 
         render_batch_triage(batch_data)
         result = st.session_state.analysis_result
 
-    status = result.get("status")
-    if is_progressive_result(result):
-        render_progressive_result(result)
-        st.stop()
-
-    if status != "COMPLETED":
-        if status == "FAILED":
-            error = result.get("error") or {}
-            st.error(f"분석 실패: {error.get('message', '원인을 확인할 수 없습니다.')}")
-            if error.get("code"):
-                st.caption(f"코드 {error['code']} · 단계 {error.get('stage') or '-'}")
-        else:
-            st.info(f"분석이 진행 중입니다. (상태: {status or '대기 중'})")
-        st.stop()
-
-    difficulty_labels = {
-        "Low": "낮음 (Low)",
-        "Medium": "보통 (Medium)",
-        "High": "높음 (High)",
-    }
-    difficulty_level = result.get("difficulty") or difficulty_label(
-        result.get("difficulty_score", 0)
-    )
-    deep_status = result.get(
-        "deep_analysis_status",
-        {
-            "capa": result.get("capa", "Completed"),
-            "floss": "Not Required",
-            "speakeasy": result.get("speakeasy", "Completed"),
-            "cape": result.get("cape", "Not Required"),
-        },
-    )
-    overall_status = result.get("status", "COMPLETED")
-    final_pipeline_status = (
-        "COMPLETED" if overall_status == "COMPLETED" else overall_status
-    )
-    file_type = result.get(
-        "file_type",
-        "PE/DLL" if result["filename"].lower().endswith(".dll") else "PE/EXE",
-    )
-    analyzed_at = result.get("analyzed_at", "2026-09-01 17:04")
-    display_hash = truncate_hash(result["sha256"])
-
-    # Compact file context header
-    context_col, action_col = st.columns([6, 1], gap="medium")
-    with context_col:
-        st.markdown(
-            f"""
-            <div class="file-header">
-                <div>
-                    <div class="file-title">{escape(result['filename'])}</div>
-                    <div class="file-hash">SHA256 · {escape(display_hash)}</div>
-                </div>
-                <div class="file-meta">
-                    <span>File Type · {escape(file_type)}</span>
-                    <span>Analyzed At · {escape(analyzed_at)}</span>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    action_col.button(
-        "새 파일 분석",
-        key="new_file_analysis",
-        on_click=reset_analysis_session,
-        width="stretch",
-    )
-
-    # Analysis summary
-    st.subheader("분석 요약")
-    summary = st.container(border=True)
-    difficulty = difficulty_labels.get(
-        difficulty_level,
-        difficulty_level,
-    )
-    summary.markdown(
-        f"""
-        <div class="summary-top">
-            <div>
-                <div class="summary-label">Initial Verdict</div>
-                {verdict_badge_markup(result.get('initial_verdict', 'High-Risk Uncertain'))}
-            </div>
-            <div class="verdict-arrow">→</div>
-            <div>
-                <div class="summary-label">Final Verdict</div>
-                {verdict_badge_markup(result.get('final_verdict') or 'Pending')}
-            </div>
-            <div>
-                <div class="summary-label">Route</div>
-                {route_badge_markup(result['route'])}
-            </div>
-        </div>
-        <div class="summary-divider"></div>
-        <div class="summary-bottom">
-            <div>
-                <div class="summary-label">Raw Probability</div>
-                <div class="summary-value">{result['raw_probability']:.1%}</div>
-            </div>
-            <div>
-                <div class="summary-label">Calibrated Probability</div>
-                <div class="summary-value">{result['calibrated_probability']:.1%}</div>
-            </div>
-            <div>
-                <div class="summary-label">OOD</div>
-                <div class="summary-value">{'Detected' if is_ood_detected(result) else 'Normal'}</div>
-            </div>
-            <div>
-                <div class="summary-label">Model Disagreement</div>
-                <div class="summary-value">{result['disagreement']:.2f}</div>
-            </div>
-            <div>
-                <div class="summary-label">Difficulty</div>
-                <div class="summary-value">{escape(difficulty_level)}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Routing Decision and Analysis Pipeline
-    decision_col, pipeline_col = st.columns(2, gap="medium")
-
-    with decision_col:
-        st.subheader("라우팅 결정")
-        routing = st.container(
-            border=True,
-            key="routing-card",
-            height=120,
-            vertical_alignment="center",
-        )
-        routing.markdown(
-            f"""
-            <div class="route-focus">
-                <div class="route-label">선택된 분석 경로</div>
-                <div class="route-badge">{escape(route_display_name(result['route']).upper())}</div>
-            </div>
-            <div class="reason-row">
-                <span class="reason-chip">OOD · {'Detected' if is_ood_detected(result) else 'Normal'}</span>
-                <span class="reason-chip">Disagreement · {result['disagreement']:.2f}</span>
-                <span class="reason-chip">Calibrated · {result['calibrated_probability']:.1%}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with pipeline_col:
-        st.subheader("분석 파이프라인")
-        pipeline = st.container(
-            border=True,
-            key="pipeline-card",
-            height=120,
-            vertical_alignment="center",
-        )
-        pipeline.markdown(
-            f"""
-            <span class="pipeline-badge badge-info">
-                Selected · {escape(route_display_name(result['route']))}
-            </span>
-            <div class="pipeline-flow">
-                <div class="pipeline-node">
-                    <div class="pipeline-name">ML Triage</div>
-                    {pipeline_state_markup('Completed')}
-                </div>
-                <span class="pipeline-arrow">→</span>
-                <div class="pipeline-node">
-                    <div class="pipeline-name">CAPA</div>
-                    {pipeline_state_markup(deep_status['capa'])}
-                </div>
-                <span class="pipeline-arrow">→</span>
-                <div class="pipeline-node">
-                    <div class="pipeline-name">Speakeasy</div>
-                    {pipeline_state_markup(deep_status['speakeasy'])}
-                </div>
-                <span class="pipeline-arrow">→</span>
-                <div class="pipeline-node">
-                    <div class="pipeline-name">CAPE</div>
-                    {pipeline_state_markup(deep_status['cape'])}
-                </div>
-                <span class="pipeline-arrow">→</span>
-                <div class="pipeline-node">
-                    <div class="pipeline-name">Final</div>
-                    {pipeline_state_markup(final_pipeline_status)}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    # Evidence and explainability
-    explainability_col = evidence_layout(st, result)
-
-    with explainability_col:
-        st.subheader("설명 가능성")
-        explanation = st.container(
-            border=True,
-            key="explainability-card",
-            height=245,
-            vertical_alignment="top",
-        )
-        explanation.markdown(
-            '<div class="evidence-title">SHAP 주요 특성 Top 5</div>',
-            unsafe_allow_html=True,
-        )
-        render_shap_chart(
-            explanation,
-            result.get("top_features", result.get("shap_features", [])),
-        )
-
-    # Technical Details
-    with st.expander("기술 세부 정보"):
-        detail_col, model_col = st.columns(2, gap="large")
-        detail_col.write(f"**파일명:** {result['filename']}")
-        detail_col.write(f"**SHA256:** `{result['sha256']}`")
-        detail_col.write(f"**분석 난이도:** {difficulty}")
-        model_col.write(f"**원시 확률:** {result['raw_probability']:.3f}")
-        model_col.write(
-            f"**보정 확률:** {result['calibrated_probability']:.3f}"
-        )
-        model_col.write(f"**모델 불일치도:** {result['disagreement']:.2f}")
+    render_result_detail(result)
