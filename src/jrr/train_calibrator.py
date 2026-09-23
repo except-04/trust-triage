@@ -56,6 +56,8 @@ def main() -> int:
         return 1
 
     # MLflow 실험 공간 설정
+    if "MLFLOW_TRACKING_URI" in os.environ:
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
     mlflow.set_experiment("JRR_Calibration")
 
     with mlflow.start_run(run_name="07_Isotonic_Calibration_4way"):

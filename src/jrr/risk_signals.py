@@ -41,6 +41,8 @@ def main() -> int:
         return 1
 
     # MLflow JRR_Calibration 실험 공간에 기록
+    if "MLFLOW_TRACKING_URI" in os.environ:
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
     mlflow.set_experiment("JRR_Calibration")
 
     with mlflow.start_run(run_name="08_Risk_Signals_v2"):
