@@ -2,6 +2,15 @@ name: Manual deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      schema_migration_confirmed:
+        description: "I have applied and verified the production DB migration for the approved SHA."
+        type: boolean
+        default: false
+      schema_approved_sha:
+        description: "Full 40-character commit SHA whose production DB migration was verified."
+        type: string
+        default: ""
   push:
     branches:
       - main
@@ -25,6 +34,8 @@ jobs:
       AWS_PAGER: ""
       AWS_MAX_ATTEMPTS: "2"
       TARGET_SHA: ${{ github.sha }}
+      SCHEMA_MIGRATION_CONFIRMED: ${{ github.event_name == 'workflow_dispatch' && inputs.schema_migration_confirmed == true && 'true' || 'false' }}
+      SCHEMA_APPROVED_SHA: ${{ inputs.schema_approved_sha || '' }}
 
     steps:
       - name: Validate branch and configuration
@@ -50,6 +61,12 @@ jobs:
           if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Invalid deployment commit SHA."
             exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$SCHEMA_MIGRATION_CONFIRMED" == "true" ]]; then
+            if [[ ! "$SCHEMA_APPROVED_SHA" =~ ^[0-9a-f]{40}$ || "$SCHEMA_APPROVED_SHA" != "$TARGET_SHA" ]]; then
+              echo "::error::Schema approval requires the exact full TARGET_SHA whose migration was verified."
+              exit 1
+            fi
           fi
 
       - name: Assume AWS role through GitHub OIDC
@@ -78,6 +95,14 @@ jobs:
           if not re.fullmatch(r"[0-9a-f]{40}", target_sha):
               raise SystemExit("Invalid TARGET_SHA.")
           print(f"TARGET_SHA={target_sha}", flush=True)
+          approval_context = {
+              "event_name": os.environ["GITHUB_EVENT_NAME"],
+              "ref": os.environ["GITHUB_REF"],
+              "confirmed": os.environ.get("SCHEMA_MIGRATION_CONFIRMED") == "true",
+              "approved_sha": os.environ.get("SCHEMA_APPROVED_SHA", ""),
+              "actor": os.environ["GITHUB_ACTOR"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+          }
 
           # Runs under the existing EC2 venv. Git always runs as ubuntu, not SSM root.
           remote_program = r"""
@@ -147,7 +172,21 @@ jobs:
               "docs/feature-extraction/feature-selection-ember-v3-top500.json",
           }
 
-          def blocked_reason(path, old_mode, new_mode, status):
+          def schema_approval(target, context):
+              # An attestation only: this workflow never applies a DB migration.
+              # Recheck the event remotely; push must never inherit a schema exception.
+              if (context.get("event_name") != "workflow_dispatch"
+                      or context.get("ref") != "refs/heads/main"
+                      or context.get("confirmed") is not True):
+                  return False
+              approved_sha = context.get("approved_sha", "")
+              if (not isinstance(approved_sha, str)
+                      or not re.fullmatch(r"[0-9a-f]{40}", approved_sha)
+                      or approved_sha != target):
+                  raise RuntimeError("Schema approval requires the exact full TARGET_SHA whose migration was verified.")
+              return True
+
+          def blocked_reason(path, old_mode, new_mode, status, *, schema_approved=False):
               p = PurePosixPath(path)
               name = p.name
               if fnmatch.fnmatchcase(name, "requirements*.txt") or name == "pyproject.toml":
@@ -161,9 +200,20 @@ jobs:
                   or str(p) in {".streamlit", ".streamlit/secrets.toml"}
               ):
                   return "runtime environment must be preserved"
-              if (str(p) in DB_SCHEMA_PATHS
-                      or any(str(p) == root or str(p).startswith(root + "/") for root in DB_MIGRATION_DIRS)):
-                  return "schema/migration change requires a manual release"
+              if str(p) in DB_SCHEMA_PATHS:
+                  if not schema_approved:
+                      return "schema/migration change requires an approved manual release"
+                  regular_modes = {"100644", "100755"}
+                  ordinary_sql_change = (
+                      (status == "A" and old_mode == "000000" and new_mode in regular_modes)
+                      or (status == "D" and old_mode in regular_modes and new_mode == "000000")
+                      or (status == "M" and old_mode in regular_modes and new_mode in regular_modes)
+                  )
+                  if not ordinary_sql_change:
+                      return "schema approval permits only regular SQL file changes, not symlinks/gitlinks"
+                  # Keep checking every other protected-path rule below.
+              if any(str(p) == root or str(p).startswith(root + "/") for root in DB_MIGRATION_DIRS):
+                  return "schema/migration change requires an approved manual release"
               if (str(p) in RUNTIME_MODEL_PATHS
                       or any(model.startswith(str(p) + "/") for model in RUNTIME_MODEL_PATHS)):
                   # Also reject replacing a parent directory with a symlink/gitlink.
@@ -174,16 +224,18 @@ jobs:
                   return "submodule change requires review of its actual contents"
               return None
 
-          def protected_changes(previous, target):
+          def protected_changes(previous, target, *, schema_approved=False):
               # Raw metadata distinguishes gitlinks from files. With rename detection
               # disabled, a move checks both the deletion and addition paths.
               raw = git("diff", "--raw", "--no-abbrev", "--no-renames", "-z", previous, target, "--").stdout
               if not raw:
+                  print("SCHEMA_MANUAL_APPROVAL_USED=false", flush=True)
                   return []
               records = raw.split("\0")
               if records.pop() != "" or len(records) % 2:
                   raise RuntimeError("Invalid Git change metadata; deployment refused.")
               blocked = []
+              approval_used = False
               for header, path in zip(records[::2], records[1::2]):
                   fields = header.split()
                   if len(fields) != 5 or not fields[0].startswith(":") or not path:
@@ -194,9 +246,13 @@ jobs:
                           or new_mode not in {"000000", "100644", "100755", "120000", "160000"}
                           or status not in {"A", "D", "M", "T"}):
                       raise RuntimeError("Unsupported Git change metadata; deployment refused.")
-                  reason = blocked_reason(path, old_mode, new_mode, status)
+                  reason = blocked_reason(path, old_mode, new_mode, status, schema_approved=schema_approved)
                   if reason:
                       blocked.append((path, reason))
+                  elif path in DB_SCHEMA_PATHS and schema_approved:
+                      approval_used = True
+                      print(f"APPROVED_SCHEMA_PATH={json.dumps(path)}", flush=True)
+              print(f"SCHEMA_MANUAL_APPROVAL_USED={str(approval_used).lower()}", flush=True)
               return blocked
 
           def http_health(label, url, *, backend=False):
@@ -221,9 +277,13 @@ jobs:
               print(f"{label} health: FAILED", flush=True)
               return False
 
-          def deploy(target):
+          def deploy(target, approval_context):
               if not re.fullmatch(r"[0-9a-f]{40}", target):
                   raise RuntimeError("Invalid TARGET_SHA.")
+              print(f"GITHUB_ACTOR={json.dumps(approval_context.get('actor', ''))}", flush=True)
+              print(f"GITHUB_RUN_ID={json.dumps(approval_context.get('run_id', ''))}", flush=True)
+              schema_approved = schema_approval(target, approval_context)
+              print(f"SCHEMA_MANUAL_APPROVAL_VALID={str(schema_approved).lower()}", flush=True)
               if os.geteuid() != 0 or not Path(REPO).is_dir():
                   raise RuntimeError("SSM root execution and the configured repository are required.")
               # Host lock also prevents overlap with a still-running, disconnected SSM invocation.
@@ -253,7 +313,7 @@ jobs:
                   if git("merge-base", "--is-ancestor", previous, target, required=False).returncode:
                       raise RuntimeError("Update is not fast-forward; deployment refused.")
                   print("Stage: protected-path validation", flush=True)
-                  blocked = protected_changes(previous, target)
+                  blocked = protected_changes(previous, target, schema_approved=schema_approved)
                   if blocked:
                       for path, reason in blocked:
                           print(f"BLOCKED {json.dumps(path)}: {reason}", flush=True)
@@ -291,7 +351,7 @@ jobs:
                   print("Deployment verified.", flush=True)
 
           try:
-              deploy(sys.argv[1])
+              deploy(sys.argv[1], json.loads(sys.argv[2]))
           except (RuntimeError, OSError) as error:
               # RuntimeError messages above are fixed/safe; suppress arbitrary OS error details.
               message = str(error) if isinstance(error, RuntimeError) else type(error).__name__
@@ -300,6 +360,7 @@ jobs:
           """
           remote_script = shlex.join([
               "/home/ubuntu/trust-triage/venv/bin/python", "-B", "-c", remote_program, target_sha,
+              json.dumps(approval_context),
           ])
 
           def aws(*args):
