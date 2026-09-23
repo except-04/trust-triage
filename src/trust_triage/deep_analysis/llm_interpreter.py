@@ -173,7 +173,9 @@ def _http_post_process(
     session = requests.Session()
     try:
         sender.send(("ready",))
-        read_timeout = max(0.05, min(1.0, timeout_seconds))
+        # The parent enforces the total deadline. A one-second idle limit
+        # rejects healthy models that need longer to produce their first byte.
+        read_timeout = max(0.05, timeout_seconds)
         connect_timeout = max(0.05, min(5.0, timeout_seconds))
         with session.post(
             url,
@@ -332,30 +334,36 @@ class MonoGPTClaudeInterpreter:
                 ),
             )
 
-        # Keep the complete Evidence collection in DeepAnalysisResult, but
-        # send only a bounded, ranked subset to the external model. This
-        # prevents FLOSS's thousands of ordinary strings from exhausting the
-        # context window or truncating Claude's JSON response.
+        # Count identity and omission metadata in the configured user-message
+        # budget, not only the selected Evidence JSON.
+        empty_content = _user_content(
+            sha256, initial_verdict, [], omitted_count=len(evidence)
+        )
+        if len(empty_content) > self.config.max_input_chars:
+            return self._result(
+                status=LLMInterpretationStatus.INVALID_RESPONSE,
+                started=started,
+                error="MonoGPT input metadata exceeds the configured character limit",
+            )
         selected_evidence = _select_evidence(
             evidence,
             max_items=self.config.max_evidence_items,
-            max_chars=self.config.max_input_chars,
+            max_chars=self.config.max_input_chars - len(empty_content) + 2,
         )
         evidence_payload = _serialize_evidence(selected_evidence)
+        user_content = _user_content(
+            sha256,
+            initial_verdict,
+            evidence_payload,
+            omitted_count=len(evidence) - len(selected_evidence),
+        )
         request_payload = {
             "model": self.config.model,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": json.dumps(
-                        {
-                            "sample_sha256": sha256,
-                            "initial_verdict": initial_verdict,
-                            "evidence": evidence_payload,
-                        },
-                        ensure_ascii=False,
-                    ),
+                    "content": user_content,
                 },
             ],
             "temperature": 0,
@@ -438,7 +446,24 @@ class MonoGPTClaudeInterpreter:
             if technique.technique_id
         }
 
-        verdict = str(payload.get("verdict", "")).upper()
+        required_fields = {
+            "verdict", "confidence", "supporting_evidence_ids",
+            "contradicting_evidence_ids", "attack_techniques", "summary",
+            "manual_review_required",
+        }
+        missing = required_fields - payload.keys()
+        if missing:
+            raise ValueError("response missing required field(s): " + ", ".join(sorted(missing)))
+        if not isinstance(payload["verdict"], str):
+            raise ValueError("verdict must be a string")
+        for field in (
+            "supporting_evidence_ids", "contradicting_evidence_ids",
+            "attack_techniques",
+        ):
+            if not isinstance(payload[field], list):
+                raise ValueError(f"{field} must be a list")
+
+        verdict = payload["verdict"].upper()
         if verdict not in _ALLOWED_VERDICTS:
             raise ValueError("verdict must be BENIGN, MALICIOUS, or UNKNOWN")
 
@@ -468,6 +493,8 @@ class MonoGPTClaudeInterpreter:
                 "response cited unknown evidence_id(s): "
                 + ", ".join(sorted(unknown_evidence_ids))
             )
+        if verdict != "UNKNOWN" and not supporting_ids:
+            raise ValueError("a decisive verdict requires supporting evidence")
 
         attack_techniques = tuple(
             technique_id.upper()
@@ -496,6 +523,8 @@ class MonoGPTClaudeInterpreter:
             field_name="summary",
             max_length=_MAX_SUMMARY_LENGTH,
         )
+        if verdict != "UNKNOWN" and not summary:
+            raise ValueError("a decisive verdict requires a summary")
         return self._result(
             status=LLMInterpretationStatus.SUCCESS,
             started=started,
@@ -560,6 +589,25 @@ Return ONLY one JSON object with exactly these fields:
 """
 
 
+def _user_content(
+    sha256: str,
+    initial_verdict: str | None,
+    evidence_payload: list[dict[str, Any]],
+    *,
+    omitted_count: int,
+) -> str:
+    return json.dumps(
+        {
+            "sample_sha256": sha256,
+            "initial_verdict": initial_verdict,
+            "evidence": evidence_payload,
+            "evidence_omitted_count": omitted_count,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def _select_evidence(
     evidence: Sequence[Evidence],
     *,
@@ -604,7 +652,7 @@ def _select_evidence(
                 separators=(",", ":"),
             )
         )
-        if candidate_chars <= max_chars or not selected:
+        if candidate_chars <= max_chars:
             selected.append(item)
     return tuple(selected)
 
@@ -693,7 +741,10 @@ def _llm_context(item: Evidence) -> dict[str, Any]:
     elif source == "CAPA":
         allowed = ("rule_name", "namespace", "match_count", "attack", "mbc")
     elif source == "SPEAKEASY":
-        allowed = ("observed_apis", "behaviors", "event_categories", "tool_status")
+        allowed = (
+            "observed_apis", "behaviors", "event_categories", "observations",
+            "event_counts", "events_truncated", "tool_status",
+        )
     else:
         allowed = ()
     return {
@@ -709,6 +760,8 @@ def _bounded_context_value(value: Any, *, depth: int = 0) -> Any:
             return _clean_text(
                 value, field_name="context", max_length=_MAX_CONTEXT_TEXT_LENGTH
             )
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
         return str(value)[:_MAX_CONTEXT_TEXT_LENGTH]
     if isinstance(value, str):
         return _clean_text(
@@ -786,7 +839,9 @@ def _string_tuple(value: Any) -> tuple[str, ...]:
         return ()
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise ValueError("expected a list of strings")
-    values = tuple(str(item).strip() for item in value)
+    if any(not isinstance(item, str) for item in value):
+        raise ValueError("expected a list of strings")
+    values = tuple(item.strip() for item in value)
     if any(not item for item in values):
         raise ValueError("list values must not be empty")
     return tuple(dict.fromkeys(values))

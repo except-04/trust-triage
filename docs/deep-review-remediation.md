@@ -37,8 +37,39 @@ python -m trust_triage.backend_api --env-file .env cleanup --delete --after '{"c
   `CreateServiceA/W` 호출만 `T1543.003` 후보가 되며 명시적인 NULL/0 반환은
   매핑하지 않는다.
 
-LLM의 최종 판정 정책과 전문가 검토 정책은 변경하지 않았다. 분석 실패도 악성
+Backend의 최종 판정 정책과 전문가 검토 정책은 변경하지 않았다. 분석 실패도 악성
 Evidence로 변환하지 않는다.
+
+## 2026-09-23 재검토 보완
+
+- MonoGPT의 자식 프로세스 read timeout에서 고정 1초 상한을 제거했다. 부모의
+  전체 호출 기한과 응답 크기 제한은 유지한다. 헤더와 본문이 각각 1.5초 늦는
+  정상 응답을 회귀 테스트에 추가했다.
+- Speakeasy 결과가 4 MiB를 넘으면 중복된 `behavior` 표시 복사본을 먼저
+  줄인다. 원래 이벤트 자체도 상한을 넘으면 일부를 보존하고 원래 개수와
+  생략 여부를 기록한다. 크기 때문에 성공 상태와 분석 객체를 통째로 잃지 않는다.
+- CAPA/FLOSS 개별 상세가 8 MiB를 넘으면 도구 상태와 실제 크기·상한을
+  체크포인트에 남기고 상세만 생략한다. S3 보관 실패도 별도 진단으로 남긴다.
+- 기존 PostgreSQL 테이블에도 `cancellation` JSON 객체 CHECK 제약을 별도
+  마이그레이션으로 추가한다. 위반 데이터가 있으면 제약 검증이 실패하므로
+  배포 전에 해당 행을 조사해야 한다.
+- 동적 분석의 두 할당 API만으로 Process Injection 후보를 만들지 않는다.
+  파일 경로·네트워크 목적지 등 제한된 이벤트 관찰을 Evidence와 LLM 입력에
+  전달한다. 첫 Evidence가 입력 예산을 넘으면 생략하고, 응답의 필수 필드와
+  확정 판정의 근거 ID를 검증한다.
+- 선택적 Speakeasy raw report 저장 오류는 분석 엔진 경고와 분리해 기록한다.
+
+### `5c024f5` 재검토 후 보완
+
+- 큰 Worker 결과의 이벤트를 줄이기 전에 서비스 생성 호출의 반환값과 원래 위치를
+  작은 요약으로 보존한다. 축약 때문에 실패 호출이 사라져도 새 ATT&CK 후보를
+  만들지 않으며, 보존된 명시적 성공 반환은 후보로 사용할 수 있다.
+- Speakeasy 1.5.11의 `network_events.dns`/`traffic`, 위치 기반 API 인자,
+  파일 이벤트의 read/write 구분을 제한된 observations로 변환한다. 보고서
+  본문·헤더·바이너리 데이터는 LLM 입력에 넣지 않는다.
+- 공개 Deep API에 Speakeasy의 원래 이벤트 개수와 생략 여부, CAPA/FLOSS의
+  상세 보관 상태·정제된 오류 코드·크기를 전달한다. Dashboard도 미리보기와
+  상세 생략/보관 실패를 구분해 표시한다. 내부 S3 위치와 예외 메시지는 제외한다.
 
 ## 호환성과 배포
 
@@ -48,7 +79,7 @@ Evidence로 변환하지 않는다.
 REST API와 Dashboard 경로는 최상위 필드를 사용한다.
 
 기존 `deep-checkpoint-v1`과 완료 결과는 그대로 읽는다. PostgreSQL에는 nullable
-`cancellation` 열만 추가한다. 배포 순서는 다음과 같다.
+`cancellation` 열과 JSON 객체 CHECK 제약을 추가한다. 배포 순서는 다음과 같다.
 
 ```bash
 ./venv/bin/python -m trust_triage.backend_api --env-file .env init-db --deep
@@ -65,9 +96,16 @@ sudo systemctl restart trust-triage-dashboard.service
 
 ## 검증 범위
 
-전체 저장소 시험 명령 `$env:MPLBACKEND='Agg'; python -m pytest -q` 결과는
-`1195 passed, 110 skipped`였다. Windows 시험 환경에 Tk/Tcl GUI 라이브러리가
-없어 비대화형 Matplotlib backend를 명시했다.
+이전 커밋의 전체 저장소 시험 결과는 `1195 passed, 110 skipped`였고,
+`5c024f5`에서는 관련 시험 `434 passed, 58 skipped`였다. 이번 보완에서는
+심층분석·Worker·Backend 공개 응답·Dashboard 관련 시험 `476 passed,
+58 skipped`와 수정 파일 Ruff 검사가 통과했다. 고정된 Speakeasy 1.5.11
+형식을 따른 합성 report를 adapter부터 LLM 입력까지 연결했다.
+
+현재 코드의 전체 저장소 시험 `$env:MPLBACKEND='Agg'; python -m pytest -q`
+결과는 `1249 passed, 112 skipped, 3 warnings`였다. 자식 프로세스 시작
+시간과 네트워크 제한을 혼동하던 테스트 시간 측정도 분리했다. 실제 엔진·
+PostgreSQL·AWS는 실행하지 않았다.
 skip에는 `BACKEND_TEST_DATABASE_URL` 또는 `WORKER_TEST_DATABASE_URL`이 필요한
 PostgreSQL 검사, 외부 MonoGPT 자격 증명이 필요한 검사, 공식 LightGBM 모델 산출물이
 필요한 검사가 포함된다. 메모리 저장소 통합시험은 HTTP 접수부터 Deep Analysis,

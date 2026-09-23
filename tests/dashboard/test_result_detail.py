@@ -3,10 +3,8 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-
 from test_evidence_rendering import Tree
 from test_progressive_result import combined_response, deep_response, view
-
 
 SCENARIOS = [
     ("AUTO_BENIGN", "COMPLETED"), ("AUTO_MALICIOUS", "COMPLETED"),
@@ -126,6 +124,49 @@ def test_speakeasy_groups_limits_and_collapsed_raw(app):
     assert target.calls[-1] == ("expander", ("Raw details",), {"expanded": False})
     assert target.children[-1].named("json") == [(payload,)]
     assert payload == original
+
+
+def test_truncated_worker_and_static_detail_notices_are_visible(app):
+    target = Tree()
+    app.render_speakeasy(target, {
+        "behavior": {"api_calls": [{"api_name": "CreateFileW"}] * 8},
+        "behavior_truncated": True,
+        "events_truncated": True,
+        "event_counts": {"api_calls": 100},
+    })
+    captions = [args[0] for args in target.named("caption")]
+    assert any("100개 중 8개" in caption for caption in captions)
+    assert any("일부 상세 이벤트" in caption for caption in captions)
+
+    static = Tree()
+    app.render_static_detail_notice(static, {
+        "details_status": "OMITTED_TOO_LARGE",
+        "details_error": {"actual_bytes": 9_000_000, "limit_bytes": 8_388_608},
+    })
+    app.render_static_detail_notice(static, {
+        "details_status": "ARCHIVE_FAILED",
+        "details_error": {"code": "S3_WRITE_FAILED"},
+    })
+    messages = [args[0] for args in static.named("caption")]
+    assert any("상한을 넘어 생략" in message for message in messages)
+    assert any("보관에 실패" in message for message in messages)
+
+
+def test_adapter_and_worker_truncation_stages_are_explained(app):
+    target = Tree()
+    app.render_speakeasy(target, {
+        "behavior": {"api_calls": [{"api_name": "CreateFileW"}] * 8},
+        "behavior_truncated": True,
+        "events_truncated": True,
+        "adapter_events_truncated": True,
+        "worker_events_truncated": True,
+        "event_counts": {"api_calls": 110},
+    })
+
+    captions = [args[0] for args in target.named("caption")]
+    assert any("110개 중 8개" in caption for caption in captions)
+    assert any("100개를 넘는" in caption for caption in captions)
+    assert any("결과 크기 제한" in caption for caption in captions)
 
 
 @pytest.mark.parametrize("payload", [{}, {"behavior": None}, {"behavior": {

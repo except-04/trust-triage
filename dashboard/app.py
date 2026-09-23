@@ -1,14 +1,14 @@
 import hashlib
-import api_client
 import re
 import time
 from collections import Counter
 from html import escape
 from uuid import uuid4
-from api_client import ApiError
 
+import api_client
 import matplotlib.pyplot as plt
 import streamlit as st
+from api_client import ApiError
 
 # 진행 상황 패널의 자동 갱신 주기. 전체 app rerun이 아니라 fragment만 다시 돈다.
 POLL_INTERVAL_SECONDS = 2
@@ -1294,15 +1294,30 @@ def render_progressive_result(analysis, target=st):
 def render_speakeasy(target, speakeasy):
     """실제 반환된 이벤트만 요약하며 행위 의미나 MITRE 매핑은 추측하지 않는다."""
     behavior = speakeasy.get("behavior") or {}
+    original_counts = speakeasy.get("event_counts")
+    if not isinstance(original_counts, dict):
+        original_counts = {}
     calls = behavior.get("api_calls") or []
     counts = Counter(str(event["api_name"]) for event in calls if event.get("api_name"))
     total, unique = target.columns(2, gap=DETAIL_COLUMN_GAP)
     total.metric("API Calls", len(calls))
     unique.metric("Unique APIs", len(counts))
     target.caption(
-        "반환된 이벤트 기준(백엔드 저장 상한 적용) · "
+        "표시된 이벤트 기준 · "
         "unique 수는 api_name이 있는 호출 기준입니다."
     )
+    if speakeasy.get("behavior_truncated"):
+        original_calls = original_counts.get("api_calls")
+        if isinstance(original_calls, int) and original_calls > len(calls):
+            target.caption(f"API 호출 총 {original_calls}개 중 {len(calls)}개 미리보기")
+        else:
+            target.caption("행동 이벤트는 일부만 미리보기로 표시됩니다.")
+    if speakeasy.get("adapter_events_truncated"):
+        target.caption("Speakeasy 결과 수집 시 카테고리별 100개를 넘는 상세 이벤트가 생략됐습니다.")
+    if speakeasy.get("worker_events_truncated") or speakeasy.get("details_omitted"):
+        target.caption("결과 크기 제한으로 일부 상세 이벤트가 저장되지 않았습니다.")
+    elif speakeasy.get("events_truncated") and not speakeasy.get("adapter_events_truncated"):
+        target.caption("일부 상세 이벤트가 저장되지 않았습니다.")
     if counts:
         target.dataframe(
             [{"API": name, "Calls": count} for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)],
@@ -1319,7 +1334,21 @@ def render_speakeasy(target, speakeasy):
         ("registry", "Registry", "No registry activity detected"),
     ):
         events = behavior.get(key) or []
-        target.markdown(f"**{title}** · {len(events)} events")
+        source_names = {
+            "files": ("file_access", "dropped_files"),
+            "network": ("network_events",),
+            "registry": ("registry_access",),
+        }[key]
+        original_total = sum(
+            count for name in source_names
+            if isinstance((count := original_counts.get(name)), int)
+        )
+        suffix = (
+            f" / 총 {original_total}개 중 미리보기"
+            if speakeasy.get("behavior_truncated") and original_total > len(events)
+            else ""
+        )
+        target.markdown(f"**{title}** · {len(events)} events{suffix}")
         if not events:
             target.caption(empty)
             continue
@@ -1332,8 +1361,22 @@ def render_speakeasy(target, speakeasy):
         if len(events) > SPEAKEASY_PREVIEW_LIMIT:
             target.caption(f"처음 {SPEAKEASY_PREVIEW_LIMIT}개 이벤트 표시 · 전체는 Raw details에서 확인")
     if speakeasy.get("error"):
-        target.warning((speakeasy["error"].get("message") or "Speakeasy 실행 오류"))
+        target.warning(speakeasy["error"].get("message") or "Speakeasy 실행 오류")
     target.expander("Raw details", expanded=False).json(speakeasy)
+
+
+def render_static_detail_notice(target, tool):
+    """Distinguish successful analysis from omitted or unavailable detail storage."""
+    status = tool.get("details_status")
+    diagnostic = tool.get("details_error") or {}
+    if status == "OMITTED_TOO_LARGE":
+        actual, limit = diagnostic.get("actual_bytes"), diagnostic.get("limit_bytes")
+        size = f" ({actual:,} / {limit:,} bytes)" if isinstance(actual, int) and isinstance(limit, int) else ""
+        target.caption(f"분석은 완료됐지만 상세 결과가 저장 상한을 넘어 생략됐습니다{size}.")
+    elif status == "ARCHIVE_FAILED":
+        code = diagnostic.get("code")
+        suffix = f" ({code})" if isinstance(code, str) else ""
+        target.caption(f"분석은 완료됐지만 상세 결과 보관에 실패했습니다{suffix}.")
 
 
 def render_deep_analysis(analysis, deep, state):
@@ -1381,6 +1424,7 @@ def render_deep_analysis(analysis, deep, state):
         capa_box.dataframe(capabilities, hide_index=True, width="stretch")
     else:
         capa_box.caption(f"Status: {statuses.get('capa', 'NOT_REQUIRED')}")
+    render_static_detail_notice(capa_box, capa)
 
     floss = analysis.get("floss") or {}
     floss_box = deep.expander("FLOSS", expanded=bool(floss))
@@ -1394,6 +1438,7 @@ def render_deep_analysis(analysis, deep, state):
         floss_box.dataframe(string_rows, hide_index=True, width="stretch")
     else:
         floss_box.caption(f"Status: {statuses.get('floss', 'NOT_REQUIRED')}")
+    render_static_detail_notice(floss_box, floss)
 
     speakeasy = analysis.get("speakeasy") or {}
     speakeasy_box = deep.expander("Speakeasy", expanded=bool(speakeasy))
@@ -1705,9 +1750,8 @@ def render_hash_search_results(target):
         target.info(blocker)
         return
 
-    if target.button("상세 보기", key="hash_search_open", type="primary"):
-        if open_search_result(selected["analysis_id"]):
-            st.rerun()
+    if target.button("상세 보기", key="hash_search_open", type="primary") and open_search_result(selected["analysis_id"]):
+        st.rerun()
 
 
 def render_hash_search():

@@ -15,6 +15,7 @@ from trust_triage.dynamic_analysis.models import (
     DynamicAnalysisResult,
     DynamicAnalysisStatus,
 )
+from trust_triage.dynamic_analysis.service_call_summary import service_creation_calls
 
 MAX_MESSAGE_BYTES = 16 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
@@ -234,11 +235,115 @@ def result_from_analysis(
     }
     # Worker는 대형 원본 report를 수집하지 않는다. 요약 및 모든 제한된 이벤트는 유지한다.
     payload["analysis"]["raw_report"] = None
+    retained_counts = {
+        name: len(items) for name, items in payload["analysis"]["events"].items()
+    }
+    source_metadata = payload["analysis"]["metadata"]
+    source_counts = source_metadata.get("event_counts")
+    event_counts = dict(retained_counts)
+    if isinstance(source_counts, Mapping):
+        for name, count in source_counts.items():
+            if (
+                isinstance(name, str)
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+                and count >= retained_counts.get(name, 0)
+            ):
+                event_counts[name] = count
+    payload["event_counts"] = event_counts
+    source_metadata["event_counts"] = event_counts
+    adapter_count_loss = any(
+        count > retained_counts.get(name, 0) for name, count in event_counts.items()
+    )
+    if source_metadata.get("events_truncated") is True or adapter_count_loss:
+        payload["events_truncated"] = True
+        payload["behavior_truncated"] = True
+        source_metadata["events_truncated"] = True
+    if source_metadata.get("adapter_events_truncated") is True or adapter_count_loss:
+        payload["adapter_events_truncated"] = True
+        source_metadata["adapter_events_truncated"] = True
+    service_calls = source_metadata.get("service_creation_calls")
+    if not isinstance(service_calls, Mapping):
+        service_calls = service_creation_calls(analysis.events)
+        source_metadata["service_creation_calls"] = service_calls
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    original_bytes = len(encoded.encode("utf-8"))
+    if original_bytes <= MAX_RESULT_BYTES:
+        return json.loads(encoded)
+
+    # The same events are present in both analysis.events and behavior. Keep
+    # the tool outcome and event counts when the display copy pushes the DB
+    # envelope over its limit. The full nested observations take precedence.
+    payload["original_result_bytes"] = original_bytes
+    payload["result_limit_bytes"] = MAX_RESULT_BYTES
+    payload["analysis"]["metadata"] = {
+        **payload["analysis"]["metadata"],
+        "event_counts": event_counts,
+        "behavior_truncated": True,
+        "service_creation_calls": service_calls,
+    }
+    for preview_items in (8, 2, 0):
+        payload["behavior"] = {
+            "processes": events("process_events")[:preview_items],
+            "api_calls": events("api_calls")[:preview_items],
+            "files": events("file_access", "dropped_files")[:preview_items],
+            "registry": events("registry_access")[:preview_items],
+            "network": events("network_events")[:preview_items],
+        }
+        payload["behavior_truncated"] = True
+        encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        if len(encoded.encode("utf-8")) <= MAX_RESULT_BYTES:
+            return json.loads(encoded)
+
+    # If the nested observations alone exceed the limit, retain a bounded
+    # prefix and record how many events were omitted. Never change SUCCESS
+    # into a tool failure merely because the report is large.
+    largest_category = max(retained_counts.values(), default=0)
+    limit = largest_category // 2
+    while limit:
+        payload["analysis"]["events"] = {
+            name: items[:limit] for name, items in analysis.events.items()
+        }
+        payload["events_truncated"] = True
+        payload["analysis"]["metadata"]["events_truncated"] = True
+        payload["worker_events_truncated"] = True
+        payload["analysis"]["metadata"]["worker_events_truncated"] = True
+        encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        if len(encoded.encode("utf-8")) <= MAX_RESULT_BYTES:
+            return json.loads(encoded)
+        limit //= 2
+
+    payload["analysis"]["events"] = {name: [] for name in event_counts}
+    payload["events_truncated"] = True
+    payload["analysis"]["metadata"]["events_truncated"] = True
+    payload["worker_events_truncated"] = True
+    payload["analysis"]["metadata"]["worker_events_truncated"] = True
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    if len(encoded.encode("utf-8")) <= MAX_RESULT_BYTES:
+        return json.loads(encoded)
+
+    # Non-event metadata can also be unexpectedly large. Retain the identity,
+    # tool state and bounded diagnostics, with explicit omission information.
+    payload["analysis"].update(
+        summary=analysis.summary[:1000],
+        observed_apis=list(analysis.observed_apis[:64]),
+        api_call_counts={},
+        behaviors=list(analysis.behaviors[:64]),
+        warnings=[item[:512] for item in analysis.warnings[:8]],
+        errors=[item[:512] for item in analysis.errors[:8]],
+        metadata={
+            "details_omitted": True,
+            "event_counts": event_counts,
+            "events_truncated": True,
+            "adapter_events_truncated": source_metadata.get("adapter_events_truncated") is True,
+            "worker_events_truncated": True,
+            "service_creation_calls": service_calls,
+        },
+    )
+    payload["details_omitted"] = True
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     if len(encoded.encode("utf-8")) > MAX_RESULT_BYTES:
-        return failure_result(
-            job, "RESULT_TOO_LARGE", "Analysis result exceeds the 4 MiB limit"
-        )
+        raise ValueError("Speakeasy result metadata exceeds the 4 MiB limit")
     return json.loads(encoded)
 
 

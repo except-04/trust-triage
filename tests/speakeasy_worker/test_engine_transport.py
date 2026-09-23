@@ -38,6 +38,11 @@ def test_result_pipe_handles_large_output_exit_and_timeout(target, expected):
     process = context.Process(target=target, args=(output,))
     process.start()
     try:
+        if target is _no_message:
+            # Windows spawn can take longer than the one-second receive budget
+            # after the full suite has loaded dashboard/model dependencies.
+            process.join(5)
+            assert not process.is_alive()
         if expected is None:
             message = _receive_worker_message(process, output, 5)
             assert message == "harmless report data " * 100_000

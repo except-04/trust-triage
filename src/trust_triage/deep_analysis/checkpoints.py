@@ -15,11 +15,11 @@ STATIC_CHECKPOINT_VERSION = "deep-static-v1"
 MAX_CHECKPOINT_BYTES = 8 * 1024 * 1024
 
 
-def json_snapshot(value: Any) -> Any:
+def json_snapshot(value: Any, *, max_bytes: int | None = MAX_CHECKPOINT_BYTES) -> Any:
     """JSON으로 복원 가능한 유한 값만 저장하며 내부 객체와 참조를 공유하지 않는다."""
 
     encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
-    if len(encoded.encode("utf-8")) > MAX_CHECKPOINT_BYTES:
+    if max_bytes is not None and len(encoded.encode("utf-8")) > max_bytes:
         raise ValueError("Deep-analysis checkpoint exceeds the 8 MiB limit")
     return json.loads(encoded)
 
@@ -38,7 +38,9 @@ def tool_snapshot(result: Any, status: str) -> dict[str, Any]:
         payload = {"status": status, "sha256": getattr(result, "sha256", "")}
     payload.pop("raw_report", None)
     payload.pop("command", None)
-    return json_snapshot(payload)
+    # The service archives or explicitly omits oversized tool details before
+    # constructing the bounded, durable checkpoint.
+    return json_snapshot(payload, max_bytes=None)
 
 
 @dataclass(frozen=True)

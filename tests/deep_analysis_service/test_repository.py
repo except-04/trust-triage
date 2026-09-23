@@ -181,6 +181,70 @@ def _expire(dsn, analysis_id):
         )
 
 
+def _has_cancellation_check(dsn):
+    with psycopg.connect(dsn) as connection:
+        return connection.execute(
+            """SELECT 1 FROM pg_constraint
+               WHERE conrelid = 'deep_analysis_runs'::regclass
+                 AND conname = 'deep_analysis_runs_cancellation_object_check'"""
+        ).fetchone() is not None
+
+
+@pytest.mark.postgres
+def test_cancellation_check_is_added_to_new_and_upgraded_tables(
+    database, analysis_request
+):
+    repository, dsn = database
+    assert _has_cancellation_check(dsn)
+    repository.register(analysis_request, FINGERPRINT)
+    with psycopg.connect(dsn) as connection:
+        connection.execute(
+            "ALTER TABLE deep_analysis_runs "
+            "DROP CONSTRAINT deep_analysis_runs_cancellation_object_check"
+        )
+    assert not _has_cancellation_check(dsn)
+
+    repository.initialize()
+    repository.initialize()
+    assert _has_cancellation_check(dsn)
+    for invalid_json in ("[]", '"text"', "0"):
+        with pytest.raises(psycopg.errors.CheckViolation), psycopg.connect(dsn) as connection:
+            connection.execute(
+                "UPDATE deep_analysis_runs SET cancellation = %s::jsonb "
+                "WHERE analysis_id = %s",
+                (invalid_json, analysis_request.analysis_id),
+            )
+
+
+@pytest.mark.postgres
+def test_cancellation_migration_rejects_preexisting_invalid_data(
+    database, analysis_request
+):
+    repository, dsn = database
+    repository.register(analysis_request, FINGERPRINT)
+    with psycopg.connect(dsn) as connection:
+        connection.execute(
+            "ALTER TABLE deep_analysis_runs "
+            "DROP CONSTRAINT deep_analysis_runs_cancellation_object_check"
+        )
+        connection.execute(
+            "UPDATE deep_analysis_runs SET cancellation = '[]'::jsonb "
+            "WHERE analysis_id = %s",
+            (analysis_request.analysis_id,),
+        )
+
+    with pytest.raises(RetryableError):
+        repository.initialize()
+    assert not _has_cancellation_check(dsn)
+    with psycopg.connect(dsn) as connection:
+        connection.execute(
+            "UPDATE deep_analysis_runs SET cancellation = NULL WHERE analysis_id = %s",
+            (analysis_request.analysis_id,),
+        )
+    repository.initialize()
+    assert _has_cancellation_check(dsn)
+
+
 @pytest.mark.postgres
 def test_initialize_registration_and_reconnect_are_idempotent(
     database, analysis_request

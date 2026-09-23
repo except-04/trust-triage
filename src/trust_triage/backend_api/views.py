@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from typing import Any
 
 from .repository import AnalysisRecord
@@ -23,6 +25,13 @@ _NO_DEEP = {
     "speakeasy": "NOT_REQUIRED",
     "cape": "NOT_REQUIRED",
 }
+_DETAIL_STATUSES = frozenset(
+    {"ARCHIVED", "OMITTED_TOO_LARGE", "ARCHIVE_FAILED", "INLINE_IN_CHECKPOINT"}
+)
+_DYNAMIC_EVENT_CATEGORIES = (
+    "process_events", "api_calls", "file_access", "dropped_files",
+    "registry_access", "network_events",
+)
 
 
 def identity(record: AnalysisRecord) -> dict[str, Any]:
@@ -114,6 +123,44 @@ def _tool_status(value: Any) -> str:
     if value in {"QUEUED", "RUNNING", "NOT_REQUIRED"}:
         return value
     return "FAILED"
+
+
+def _public_size(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 2**63 - 1:
+        return value
+    return None
+
+
+def _detail_diagnostic(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        return {}
+    result: dict[str, Any] = {}
+    status = raw.get("details_status")
+    if isinstance(status, str) and status in _DETAIL_STATUSES:
+        result["details_status"] = status
+    error = raw.get("details_error")
+    if result.get("details_status") in {"OMITTED_TOO_LARGE", "ARCHIVE_FAILED"} and isinstance(error, Mapping):
+        diagnostic: dict[str, Any] = {}
+        code = error.get("code")
+        if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", code):
+            diagnostic["code"] = code
+        for name in ("actual_bytes", "limit_bytes"):
+            size = _public_size(error.get(name))
+            if size is not None:
+                diagnostic[name] = size
+        if diagnostic:
+            result["details_error"] = diagnostic
+    return result
+
+
+def _public_event_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        category: count
+        for category in _DYNAMIC_EVENT_CATEGORIES
+        if (count := _public_size(value.get(category))) is not None
+    }
 
 
 def _floss_strings(value: Any) -> dict[str, list[str]]:
@@ -237,6 +284,7 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
             "capabilities_truncated": bool(capa_raw.get("capabilities_truncated")),
             "details_available": bool(capa_raw.get("details_reference")),
             "raw_result_location": None,
+            **_detail_diagnostic(capa_raw),
         }
     floss = None
     if floss_raw:
@@ -251,6 +299,7 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
             ),
             "strings_truncated": bool(floss_raw.get("strings_truncated")),
             "details_available": bool(floss_raw.get("details_reference")),
+            **_detail_diagnostic(floss_raw),
         }
     worker = snapshot.get("speakeasy_result")
     speakeasy = None
@@ -270,6 +319,23 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
                 else None
             ),
         }
+        if worker.get("behavior_truncated") is True:
+            speakeasy["behavior_truncated"] = True
+        if worker.get("events_truncated") is True:
+            speakeasy["events_truncated"] = True
+        if worker.get("adapter_events_truncated") is True:
+            speakeasy["adapter_events_truncated"] = True
+        if worker.get("worker_events_truncated") is True:
+            speakeasy["worker_events_truncated"] = True
+        if worker.get("details_omitted") is True:
+            speakeasy["details_omitted"] = True
+        counts = _public_event_counts(worker.get("event_counts"))
+        if counts:
+            speakeasy["event_counts"] = counts
+        for field in ("original_result_bytes", "result_limit_bytes"):
+            size = _public_size(worker.get(field))
+            if size is not None:
+                speakeasy[field] = size
     evidence, evidence_details = _evidence_items(snapshot)
     result = snapshot.get("result") or {}
     llm = result.get("llm_interpretation") or {}

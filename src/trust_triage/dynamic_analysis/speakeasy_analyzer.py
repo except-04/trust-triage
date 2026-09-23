@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import DynamicAnalysisResult, DynamicAnalysisStatus
+from .service_call_summary import ServiceCallAccumulator
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_INSTRUCTIONS = 1_000_000
@@ -43,6 +44,9 @@ class ReportSummary:
     api_call_counts: Mapping[str, int]
     behaviors: tuple[str, ...]
     events: Mapping[str, tuple[Mapping[str, Any], ...]]
+    event_counts: Mapping[str, int]
+    events_truncated: bool
+    service_creation_calls: Mapping[str, Any]
     warnings: tuple[str, ...]
 
 
@@ -201,6 +205,9 @@ def _run_speakeasy_worker(
                 category: list(category_events)
                 for category, category_events in summary.events.items()
             },
+            "event_counts": dict(summary.event_counts),
+            "events_truncated": summary.events_truncated,
+            "service_creation_calls": dict(summary.service_creation_calls),
             "warnings": list(summary.warnings),
         }
 
@@ -214,11 +221,9 @@ def _run_speakeasy_worker(
                 )
                 message["raw_reference"] = str(report_path)
             except OSError as exc:
-                # 분석 자체는 끝났지만 결과 보관에 실패한 경우도 숨기지 않는다.
-                message["warnings"] = [
-                    *summary.warnings,
-                    f"raw_report_error: {exc}",
-                ]
+                # Optional report persistence must not change the engine's
+                # analysis status. Keep the archive failure separately.
+                message["raw_report_error"] = f"{type(exc).__name__}: {exc}"[:512]
 
         _put_worker_message(result_queue, message)
     except Exception as exc:  # noqa: BLE001 - isolate third-party engine failures
@@ -240,6 +245,8 @@ def _summarize_report(report: Mapping[str, Any]) -> ReportSummary:
     observed_apis: set[str] = set()
     behaviors: set[str] = set()
     events: dict[str, list[Mapping[str, Any]]] = {}
+    event_counts: dict[str, int] = {}
+    service_calls = ServiceCallAccumulator()
     warnings: list[str] = []
 
     for entry_point_index, entry_point in enumerate(
@@ -256,6 +263,8 @@ def _summarize_report(report: Mapping[str, Any]) -> ReportSummary:
                 name = str(api_name)
                 observed_apis.add(name)
                 api_call_counts[name] = api_call_counts.get(name, 0) + 1
+            service_calls.observe(api_call, event_counts.get("api_calls", 0))
+            event_counts["api_calls"] = event_counts.get("api_calls", 0) + 1
             _append_event(events, "api_calls", api_call, entry_point_index)
 
         for report_field, behavior_name in _EVENT_FIELDS.items():
@@ -264,6 +273,7 @@ def _summarize_report(report: Mapping[str, Any]) -> ReportSummary:
                 continue
             behaviors.add(behavior_name)
             for event in field_items:
+                event_counts[report_field] = event_counts.get(report_field, 0) + 1
                 _append_event(events, report_field, event, entry_point_index)
 
         if entry_point.get("error"):
@@ -280,6 +290,12 @@ def _summarize_report(report: Mapping[str, Any]) -> ReportSummary:
             category: tuple(category_events)
             for category, category_events in sorted(events.items())
         },
+        event_counts=dict(sorted(event_counts.items())),
+        events_truncated=any(
+            count > len(events.get(category, ()))
+            for category, count in event_counts.items()
+        ),
+        service_creation_calls=service_calls.to_dict(),
         warnings=tuple(warnings),
     )
 
@@ -585,6 +601,25 @@ class SpeakeasyAnalyzer:
             if isinstance(category_events, list)
         }
         warnings = tuple(str(value) for value in message.get("warnings", []))
+        original_counts = message.get("event_counts")
+        if isinstance(original_counts, Mapping):
+            metadata["event_counts"] = {
+                str(category): count
+                for category, count in original_counts.items()
+                if isinstance(count, int) and not isinstance(count, bool) and count >= 0
+            }
+        counts_exceed_events = any(
+            count > len(events.get(category, ()))
+            for category, count in metadata.get("event_counts", {}).items()
+        )
+        if message.get("events_truncated") is True or counts_exceed_events:
+            metadata["events_truncated"] = True
+            metadata["adapter_events_truncated"] = True
+        service_calls = message.get("service_creation_calls")
+        if isinstance(service_calls, Mapping):
+            metadata["service_creation_calls"] = dict(service_calls)
+        if message.get("raw_report_error"):
+            metadata["raw_report_error"] = str(message["raw_report_error"])[:512]
         status = _status_from_report_warnings(warnings)
         if status is DynamicAnalysisStatus.TIMEOUT:
             summary = (

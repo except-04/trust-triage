@@ -5,10 +5,12 @@ import json
 import pytest
 
 from trust_triage.deep_analysis.llm_interpreter import (
+    MonoGPTClaudeInterpreter,
     MonoGPTConfig,
     _select_evidence,
     _serialize_evidence,
 )
+from trust_triage.deep_analysis.models import LLMInterpretationStatus
 from trust_triage.evidence import AttackTechnique, Evidence, EvidenceStatus
 
 
@@ -93,6 +95,76 @@ def test_llm_serialization_bounds_long_text_and_context() -> None:
     assert len(payload["summary"]) == 600
     assert len(payload["context"]["string"]) == 400
     assert len(payload["context"]["tags"]) == 8
+
+
+def test_first_oversized_evidence_is_omitted_from_small_budget() -> None:
+    item = _evidence("large", summary="x" * 5000)
+
+    selected = _select_evidence((item,), max_items=10, max_chars=100)
+
+    assert selected == ()
+
+
+def test_full_user_message_obeys_budget_and_records_omissions(monkeypatch) -> None:
+    captured = {}
+
+    def respond(_config, *, headers, payload):
+        captured["content"] = payload["messages"][1]["content"]
+        answer = {
+            "verdict": "UNKNOWN",
+            "confidence": 0.1,
+            "supporting_evidence_ids": [],
+            "contradicting_evidence_ids": [],
+            "attack_techniques": [],
+            "summary": "Insufficient evidence",
+            "manual_review_required": True,
+        }
+        return ("response", 200, json.dumps({"choices": [{"message": {"content": json.dumps(answer)}}]}).encode())
+
+    monkeypatch.setattr(
+        "trust_triage.deep_analysis.llm_interpreter._bounded_http_post", respond
+    )
+    interpreter = MonoGPTClaudeInterpreter(
+        MonoGPTConfig(
+            api_key="fixture", base_url="http://127.0.0.1:1", model="fixture",
+            max_input_chars=220,
+        )
+    )
+
+    result = interpreter.interpret((_evidence("large", summary="x" * 5000),), sha256="a" * 64)
+
+    assert result.status is LLMInterpretationStatus.SUCCESS
+    assert len(captured["content"]) <= 220
+    assert json.loads(captured["content"])["evidence"] == []
+    assert json.loads(captured["content"])["evidence_omitted_count"] == 1
+
+
+@pytest.mark.parametrize("missing", ["summary", "supporting_evidence_ids", "attack_techniques"])
+def test_llm_response_requires_documented_fields(missing):
+    interpreter = MonoGPTClaudeInterpreter(MonoGPTConfig())
+    answer = {
+        "verdict": "UNKNOWN", "confidence": 0.1,
+        "supporting_evidence_ids": [], "contradicting_evidence_ids": [],
+        "attack_techniques": [], "summary": "Uncertain",
+        "manual_review_required": True,
+    }
+    del answer[missing]
+
+    with pytest.raises(ValueError, match="missing required"):
+        interpreter._validated_result(answer, evidence=(), started=0.0)
+
+
+def test_llm_cannot_return_benign_without_cited_evidence():
+    interpreter = MonoGPTClaudeInterpreter(MonoGPTConfig())
+    answer = {
+        "verdict": "BENIGN", "confidence": 0.5,
+        "supporting_evidence_ids": [], "contradicting_evidence_ids": [],
+        "attack_techniques": [], "summary": "Appears benign",
+        "manual_review_required": False,
+    }
+
+    with pytest.raises(ValueError, match="requires supporting evidence"):
+        interpreter._validated_result(answer, evidence=(), started=0.0)
 
 
 def test_llm_config_has_safe_default_output_and_input_limits() -> None:

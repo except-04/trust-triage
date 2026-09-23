@@ -296,9 +296,18 @@ class DeepAnalysisResponse(AnalysisIdentity):
         default_factory=dict,
         description="원래 도구 상태와 버전. TIMEOUT 등을 완료 상태와 구분합니다.",
     )
-    capa: dict[str, Any] | None = None
-    floss: dict[str, Any] | None = None
-    speakeasy: dict[str, Any] | None = None
+    capa: dict[str, Any] | None = Field(
+        default=None,
+        description="CAPA 미리보기와 개수. details_status/details_error는 도구 상태와 별개의 상세 보관 진단입니다.",
+    )
+    floss: dict[str, Any] | None = Field(
+        default=None,
+        description="FLOSS 문자열 미리보기와 개수. details_status/details_error는 상세 보관 진단입니다.",
+    )
+    speakeasy: dict[str, Any] | None = Field(
+        default=None,
+        description="Speakeasy 행동 미리보기. event_counts는 원본 수집 개수이며 adapter_events_truncated와 worker_events_truncated는 단계별 상세 생략을 나타냅니다.",
+    )
     evidence: list[TechniqueEvidence] = Field(
         default_factory=list,
         description="ATT&CK 기법별로 묶은 분석 증거입니다. SHAP 특성과는 별개입니다.",

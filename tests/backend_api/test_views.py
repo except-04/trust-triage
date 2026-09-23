@@ -15,7 +15,13 @@ import pytest
 from trust_triage.backend_api import views
 from trust_triage.backend_api.repository import AnalysisRecord
 from trust_triage.backend_api.schemas import InitialResult
+from trust_triage.deep_analysis.service_models import DeepAnalysisRequest
+from trust_triage.dynamic_analysis.models import (
+    DynamicAnalysisResult,
+    DynamicAnalysisStatus,
+)
 from trust_triage.evidence import AttackTechnique, Evidence
+from trust_triage.speakeasy_worker.models import result_from_analysis
 from trust_triage.static_analysis import (
     CapaAnalysisResult,
     CapaBackend,
@@ -251,6 +257,102 @@ def test_archived_static_result_preview_discloses_truncation_without_leaking_loc
     assert value.floss["strings_truncated"] is True
     assert value.floss["details_available"] is True
     assert "s3://private" not in value.model_dump_json()
+
+
+def test_public_static_detail_diagnostics_keep_codes_and_sizes_without_private_text(snapshot):
+    snapshot["static_results"]["CAPA"].update(
+        details_status="OMITTED_TOO_LARGE",
+        details_error={
+            "code": "RESULT_TOO_LARGE", "actual_bytes": 9_000_000,
+            "limit_bytes": 8_388_608, "message": PRIVATE_PATH,
+        },
+    )
+    snapshot["static_results"]["FLOSS"].update(
+        details_status="ARCHIVE_FAILED",
+        details_error={
+            "code": "S3_WRITE_FAILED", "actual_bytes": 300_000,
+            "limit_bytes": 8_388_608, "message": PRIVATE_PATH,
+        },
+    )
+
+    value = views.deep_analysis(record(deep_result=snapshot))
+
+    assert value.capa["details_status"] == "OMITTED_TOO_LARGE"
+    assert value.capa["details_error"] == {
+        "code": "RESULT_TOO_LARGE", "actual_bytes": 9_000_000,
+        "limit_bytes": 8_388_608,
+    }
+    assert value.floss["details_status"] == "ARCHIVE_FAILED"
+    assert value.floss["details_error"]["code"] == "S3_WRITE_FAILED"
+    assert PRIVATE_PATH not in value.model_dump_json()
+
+
+def test_large_worker_preview_count_reaches_public_projection(snapshot):
+    request = DeepAnalysisRequest(
+        "analysis-view", SHA256,
+        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+    )
+    event = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
+    analysis = DynamicAnalysisResult(
+        evidence_id="large-worker", sha256=SHA256,
+        source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
+        status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
+        observed_apis=("CreateFileW",),
+        events={"api_calls": tuple(dict(event) for _ in range(100))},
+        metadata={
+            "event_counts": {"api_calls": 110},
+            "events_truncated": True,
+            "adapter_events_truncated": True,
+        },
+    )
+    snapshot["speakeasy_result"] = result_from_analysis(request.worker_job, analysis)
+    snapshot["tool_statuses"]["SPEAKEASY"] = "SUCCESS"
+
+    value = views.deep_analysis(record(deep_result=snapshot))
+
+    assert len(value.speakeasy["behavior"]["api_calls"]) == 8
+    assert value.speakeasy["behavior_truncated"] is True
+    assert value.speakeasy["event_counts"]["api_calls"] == 110
+    assert value.speakeasy["adapter_events_truncated"] is True
+    assert value.speakeasy["original_result_bytes"] > value.speakeasy["result_limit_bytes"]
+    assert "service_creation_calls" not in value.model_dump_json()
+
+
+def test_adapter_and_worker_omissions_reach_public_projection(snapshot):
+    request = DeepAnalysisRequest(
+        "analysis-view", SHA256,
+        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+    )
+    event = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
+    analysis = DynamicAnalysisResult(
+        evidence_id="adapter-worker", sha256=SHA256,
+        source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
+        status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
+        observed_apis=("CreateFileW", "CreateServiceW"),
+        events={
+            "api_calls": tuple(dict(event) for _ in range(100)),
+            "file_access": tuple({"path": "x" * 24576} for _ in range(100)),
+        },
+        metadata={
+            "event_counts": {"api_calls": 110, "file_access": 100},
+            "events_truncated": True,
+            "adapter_events_truncated": True,
+            "service_creation_calls": {
+                "calls": [{"api_name": "createservicew", "event_index": 105, "ret_val": "0x0"}],
+                "total": 1, "complete": True,
+            },
+        },
+    )
+    snapshot["speakeasy_result"] = result_from_analysis(request.worker_job, analysis)
+    snapshot["tool_statuses"]["SPEAKEASY"] = "SUCCESS"
+
+    value = views.deep_analysis(record(deep_result=snapshot))
+
+    assert len(value.speakeasy["behavior"]["api_calls"]) < 100
+    assert value.speakeasy["event_counts"]["api_calls"] == 110
+    assert value.speakeasy["adapter_events_truncated"] is True
+    assert value.speakeasy["worker_events_truncated"] is True
+    assert "service_creation_calls" not in value.model_dump_json()
 
 
 def test_grouped_floss_report_projects_only_known_string_fields(snapshot):
