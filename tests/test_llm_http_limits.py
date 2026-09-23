@@ -34,6 +34,7 @@ def _response_body() -> bytes:
 @pytest.fixture
 def llm_server():
     modes: queue.Queue[str] = queue.Queue()
+    request_received: queue.Queue[float] = queue.Queue()
     response_body = _response_body()
 
     class Handler(BaseHTTPRequestHandler):
@@ -43,6 +44,7 @@ def llm_server():
         def do_POST(self):
             length = int(self.headers.get("Content-Length", "0"))
             self.rfile.read(length)
+            request_received.put(time.monotonic())
             mode = modes.get(timeout=2)
             if mode == "large":
                 body = b"x" * 4096
@@ -69,6 +71,7 @@ def llm_server():
                 pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.request_received = request_received
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -97,12 +100,11 @@ def test_slow_trickle_obeys_total_deadline_and_releases_request_process(llm_serv
     before = {child.pid for child in multiprocessing.active_children()}
     modes.put("slow")
 
-    started = time.monotonic()
     timed_out = interpreter.interpret((), sha256="a" * 64)
-    elapsed = time.monotonic() - started
+    network_elapsed = time.monotonic() - server.request_received.get(timeout=3)
 
     assert timed_out.status is LLMInterpretationStatus.TIMEOUT
-    assert elapsed < 0.7
+    assert network_elapsed < 0.7
     assert {child.pid for child in multiprocessing.active_children()} <= before
 
     modes.put("fast")

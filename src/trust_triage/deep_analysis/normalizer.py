@@ -32,6 +32,8 @@ _SERVICE_CREATION_APIS = {"createservicea", "createservicew"}
 _OBSERVATION_FIELDS = (
     "api_name", "path", "file_path", "src_path", "dst_path", "destination",
     "host", "ip", "port", "url", "key", "ret_val", "retval", "return_value",
+    "event", "query", "response", "server", "proto", "method", "type",
+    "pid", "entry_point",
 )
 _OBSERVATION_CATEGORIES = (
     "network_events", "file_access", "dropped_files", "registry_access",
@@ -113,7 +115,7 @@ def normalize_speakeasy_result(
         if isinstance(metadata, Mapping)
         else False
     )
-    techniques = _observed_techniques(observed_apis, behaviors, events)
+    techniques = _observed_techniques(observed_apis, behaviors, events, metadata)
     tool_status = str(payload.get("status") or "SUCCESS")
 
     evidence: list[Evidence] = []
@@ -182,6 +184,7 @@ def _observed_techniques(
     observed_apis: Sequence[str],
     behaviors: Sequence[str],
     events: Any = None,
+    metadata: Any = None,
 ) -> tuple[Any, ...]:
     labels: list[str] = list(behaviors)
     api_names = {_api_basename(api) for api in observed_apis}
@@ -194,7 +197,7 @@ def _observed_techniques(
         and api_names & _INJECTION_WRITE_APIS
     ):
         labels.append("Process Injection")
-    if _successful_service_creation(api_names, events):
+    if _successful_service_creation(api_names, events, metadata):
         labels.append("Create Service")
 
     return tuple(
@@ -204,9 +207,20 @@ def _observed_techniques(
     )
 
 
-def _successful_service_creation(api_names: set[str], events: Any) -> bool:
+def _successful_service_creation(
+    api_names: set[str], events: Any, metadata: Any = None
+) -> bool:
     if not api_names & _SERVICE_CREATION_APIS:
         return False
+    if isinstance(metadata, Mapping) and metadata.get("events_truncated") is True:
+        # The remaining events may omit a failed call. A compact return-value
+        # record from the full pre-truncation input is the only positive basis.
+        summary = metadata.get("service_creation_calls")
+        calls = summary.get("calls") if isinstance(summary, Mapping) else None
+        return isinstance(calls, list) and any(
+            isinstance(call, Mapping) and _explicit_call_success(call)
+            for call in calls
+        )
     if not isinstance(events, Mapping):
         return True
     api_calls = events.get("api_calls")
@@ -223,6 +237,23 @@ def _successful_service_creation(api_names: set[str], events: Any) -> bool:
     if not matching_calls:
         return True
     return any(not _explicit_call_failure(call) for call in matching_calls)
+
+
+def _explicit_call_success(call: Mapping[str, Any]) -> bool:
+    for name in ("ret_val", "retval", "return_value", "return"):
+        if name not in call:
+            continue
+        value = call[name]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value != 0
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            if re.fullmatch(r"(?:0x[0-9a-f]+|[0-9]+)", normalized):
+                return int(normalized, 16 if normalized.startswith("0x") else 10) != 0
+        return False
+    return False
 
 
 def _explicit_call_failure(call: Mapping[str, Any]) -> bool:
@@ -247,22 +278,64 @@ def _bounded_observations(events: Any) -> list[dict[str, Any]]:
 
     if not isinstance(events, Mapping):
         return []
+    rows: dict[str, list[tuple[Mapping[str, Any], dict[str, Any]]]] = {}
+    for category in _OBSERVATION_CATEGORIES:
+        values = events.get(category)
+        if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+            continue
+        if category != "network_events":
+            rows[category] = [
+                (event, {"event_index": index})
+                for index, event in enumerate(values[:8])
+                if isinstance(event, Mapping)
+            ]
+            continue
+        network_rows: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
+        for event_index, event in enumerate(values):
+            if not isinstance(event, Mapping):
+                continue
+            nested = {
+                kind: items
+                for kind in ("dns", "traffic")
+                if isinstance((items := event.get(kind)), Sequence)
+                and not isinstance(items, (str, bytes, bytearray))
+            }
+            if not nested:
+                network_rows.append((event, {"event_index": event_index}))
+            else:
+                entry_point = event.get("entry_point")
+                for item_index in range(8):
+                    for kind, items in nested.items():
+                        if item_index < len(items) and isinstance(items[item_index], Mapping):
+                            location = {
+                                "event_index": event_index,
+                                "kind": kind,
+                                "item_index": item_index,
+                            }
+                            if isinstance(entry_point, (int, str)):
+                                location["entry_point"] = str(entry_point)[:32]
+                            network_rows.append(
+                                (
+                                    items[item_index],
+                                    location,
+                                )
+                            )
+                        if len(network_rows) >= 8:
+                            break
+                    if len(network_rows) >= 8:
+                        break
+            if len(network_rows) >= 8:
+                break
+        rows[category] = network_rows[:8]
     observations: list[dict[str, Any]] = []
     # Rotate through categories so many API calls cannot hide file/network data.
     for index in range(8):
         for category in _OBSERVATION_CATEGORIES:
-            category_events = events.get(category)
-            if not isinstance(category_events, Sequence) or isinstance(
-                category_events, (str, bytes, bytearray)
-            ) or index >= len(category_events):
+            category_rows = rows.get(category, ())
+            if index >= len(category_rows):
                 continue
-            event = category_events[index]
-            if not isinstance(event, Mapping):
-                continue
-            observation: dict[str, Any] = {
-                "category": category,
-                "event_index": index,
-            }
+            event, location = category_rows[index]
+            observation: dict[str, Any] = {"category": category, **location}
             for field in _OBSERVATION_FIELDS:
                 value = event.get(field)
                 if isinstance(value, (str, int, float, bool)):
@@ -272,11 +345,13 @@ def _bounded_observations(events: Any) -> list[dict[str, Any]]:
                 args, (str, bytes, bytearray)
             ):
                 pairs = []
-                for argument in args[:4]:
+                for arg_index, argument in enumerate(args[:4]):
                     if isinstance(argument, Mapping):
                         name, value = argument.get("name"), argument.get("value")
                         if isinstance(name, str) and isinstance(value, (str, int, float, bool)):
                             pairs.append(f"{name[:40]}={str(value)[:120]}")
+                    elif isinstance(argument, (str, int, float, bool)):
+                        pairs.append(f"arg[{arg_index}]={str(argument)[:120]}")
                 if pairs:
                     observation["arguments"] = "; ".join(pairs)[:400]
             if len(observation) > 2:

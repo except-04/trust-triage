@@ -59,6 +59,18 @@ Evidence로 변환하지 않는다.
   확정 판정의 근거 ID를 검증한다.
 - 선택적 Speakeasy raw report 저장 오류는 분석 엔진 경고와 분리해 기록한다.
 
+### `5c024f5` 재검토 후 보완
+
+- 큰 Worker 결과의 이벤트를 줄이기 전에 서비스 생성 호출의 반환값과 원래 위치를
+  작은 요약으로 보존한다. 축약 때문에 실패 호출이 사라져도 새 ATT&CK 후보를
+  만들지 않으며, 보존된 명시적 성공 반환은 후보로 사용할 수 있다.
+- Speakeasy 1.5.11의 `network_events.dns`/`traffic`, 위치 기반 API 인자,
+  파일 이벤트의 read/write 구분을 제한된 observations로 변환한다. 보고서
+  본문·헤더·바이너리 데이터는 LLM 입력에 넣지 않는다.
+- 공개 Deep API에 Speakeasy의 원래 이벤트 개수와 생략 여부, CAPA/FLOSS의
+  상세 보관 상태·정제된 오류 코드·크기를 전달한다. Dashboard도 미리보기와
+  상세 생략/보관 실패를 구분해 표시한다. 내부 S3 위치와 예외 메시지는 제외한다.
+
 ## 호환성과 배포
 
 `deep-view-v2`는 최상위 필드를 기존과 동일하게 유지한다. 중첩
@@ -84,11 +96,16 @@ sudo systemctl restart trust-triage-dashboard.service
 
 ## 검증 범위
 
-이전 커밋의 전체 저장소 시험 명령 `$env:MPLBACKEND='Agg'; python -m pytest -q`
-결과는 `1195 passed, 110 skipped`였다. 이번 재검토 보완 후에는 심층분석,
-Worker, Backend 연결 관련 시험에서 `434 passed, 58 skipped`였고 수정 파일의
-Ruff 검사가 통과했다. 현재 환경의 전체 저장소 실행은 대시보드 시험 구간에서
-오래 진행되지 않아 중단했으므로 이번 변경의 전체 suite 통과를 주장하지 않는다.
+이전 커밋의 전체 저장소 시험 결과는 `1195 passed, 110 skipped`였고,
+`5c024f5`에서는 관련 시험 `434 passed, 58 skipped`였다. 이번 보완에서는
+심층분석·Worker·Backend 공개 응답·Dashboard 관련 시험 `476 passed,
+58 skipped`와 수정 파일 Ruff 검사가 통과했다. 고정된 Speakeasy 1.5.11
+형식을 따른 합성 report를 adapter부터 LLM 입력까지 연결했다.
+
+현재 코드의 전체 저장소 시험 `$env:MPLBACKEND='Agg'; python -m pytest -q`
+결과는 `1249 passed, 112 skipped, 3 warnings`였다. 자식 프로세스 시작
+시간과 네트워크 제한을 혼동하던 테스트 시간 측정도 분리했다. 실제 엔진·
+PostgreSQL·AWS는 실행하지 않았다.
 skip에는 `BACKEND_TEST_DATABASE_URL` 또는 `WORKER_TEST_DATABASE_URL`이 필요한
 PostgreSQL 검사, 외부 MonoGPT 자격 증명이 필요한 검사, 공식 LightGBM 모델 산출물이
 필요한 검사가 포함된다. 메모리 저장소 통합시험은 HTTP 접수부터 Deep Analysis,

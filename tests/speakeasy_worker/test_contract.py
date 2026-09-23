@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from trust_triage.deep_analysis.normalizer import normalize_speakeasy_result
 from trust_triage.speakeasy_worker.config import WorkerConfig
 from trust_triage.speakeasy_worker.models import (
     MAX_RESULT_BYTES,
@@ -133,6 +134,69 @@ def test_oversized_nested_events_keep_status_counts_and_bounded_prefix(job, tmp_
     assert result["analysis"]["metadata"]["events_truncated"] is True
     assert 0 < len(result["analysis"]["events"]["api_calls"]) < 100
     assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_RESULT_BYTES
+
+
+@pytest.mark.parametrize("failed_index", [0, 50, 90])
+def test_event_compaction_cannot_turn_failed_service_creation_into_attack(
+    job, tmp_path, failed_index
+):
+    path = tmp_path / "test.bin"
+    path.write_bytes(SAMPLE)
+    filler = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
+    calls = [dict(filler) for _ in range(100)]
+    calls[failed_index] = {**filler, "api_name": "CreateServiceW", "ret_val": "0x00000000"}
+    analysis = replace(
+        FakeAnalyzer().analyze(path),
+        observed_apis=("CreateServiceW",),
+        events={
+            "api_calls": tuple(calls),
+            "file_access": tuple({"path": "x" * 24576} for _ in range(100)),
+        },
+    )
+    original_ids = {
+        technique.technique_id
+        for item in normalize_speakeasy_result(analysis)
+        for technique in item.attack_techniques
+    }
+
+    result = result_from_analysis(job, analysis)
+    compacted_ids = {
+        technique.technique_id
+        for item in normalize_speakeasy_result(result["analysis"])
+        for technique in item.attack_techniques
+    }
+
+    assert "T1543.003" not in original_ids
+    assert result["events_truncated"] is True
+    assert len(result["analysis"]["events"]["api_calls"]) < 100
+    assert result["analysis"]["metadata"]["service_creation_calls"]["total"] == 1
+    assert "T1543.003" not in compacted_ids
+
+
+def test_compacted_service_creation_keeps_concrete_success(job, tmp_path):
+    path = tmp_path / "test.bin"
+    path.write_bytes(SAMPLE)
+    filler = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
+    calls = [dict(filler) for _ in range(100)]
+    calls[90] = {**filler, "api_name": "CreateServiceW", "ret_val": "0x1234"}
+    analysis = replace(
+        FakeAnalyzer().analyze(path),
+        observed_apis=("CreateServiceW",),
+        events={
+            "api_calls": tuple(calls),
+            "file_access": tuple({"path": "x" * 24576} for _ in range(100)),
+        },
+    )
+
+    result = result_from_analysis(job, analysis)
+    technique_ids = {
+        technique.technique_id
+        for item in normalize_speakeasy_result(result["analysis"])
+        for technique in item.attack_techniques
+    }
+
+    assert result["events_truncated"] is True
+    assert "T1543.003" in technique_ids
 
 
 def _config_env():

@@ -19,6 +19,8 @@ from trust_triage.dynamic_analysis.models import (
 MAX_MESSAGE_BYTES = 16 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
 RESULT_SCHEMA_VERSION = "speakeasy-result-v1"
+_SERVICE_CREATION_APIS = {"createservicea", "createservicew"}
+_MAX_SERVICE_CALL_SUMMARY = 256
 _JOB_FIELDS = frozenset(
     {"analysis_id", "sha256", "file_location", "requested_stage", "requested_at"}
 )
@@ -252,6 +254,7 @@ def result_from_analysis(
         **payload["analysis"]["metadata"],
         "event_counts": event_counts,
         "behavior_truncated": True,
+        "service_creation_calls": _service_creation_calls(analysis.events),
     }
     for preview_items in (8, 2, 0):
         payload["behavior"] = {
@@ -302,6 +305,7 @@ def result_from_analysis(
             "details_omitted": True,
             "event_counts": event_counts,
             "events_truncated": True,
+            "service_creation_calls": _service_creation_calls(analysis.events),
         },
     )
     payload["details_omitted"] = True
@@ -309,6 +313,41 @@ def result_from_analysis(
     if len(encoded.encode("utf-8")) > MAX_RESULT_BYTES:
         raise ValueError("Speakeasy result metadata exceeds the 4 MiB limit")
     return json.loads(encoded)
+
+
+def _service_creation_calls(events: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain bounded return values before a large event list is shortened."""
+
+    calls = []
+    total = 0
+    for index, event in enumerate(events.get("api_calls", ())):
+        if not isinstance(event, Mapping):
+            continue
+        name = re.sub(
+            r"[^a-z0-9]", "", str(event.get("api_name") or "").casefold().split("!")[-1].split(".")[-1]
+        )
+        if name not in _SERVICE_CREATION_APIS:
+            continue
+        total += 1
+        if len(calls) >= _MAX_SERVICE_CALL_SUMMARY:
+            continue
+        item: dict[str, Any] = {"api_name": name, "event_index": index}
+        for field in ("ret_val", "retval", "return_value", "return"):
+            if field not in event:
+                continue
+            value = event[field]
+            if isinstance(value, (str, int, bool)) or value is None:
+                if isinstance(value, str) and len(value) > 64:
+                    item["return_truncated"] = True
+                else:
+                    item[field] = value
+            break
+        calls.append(item)
+    return {
+        "calls": calls,
+        "total": total,
+        "complete": total <= _MAX_SERVICE_CALL_SUMMARY,
+    }
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
