@@ -13,6 +13,7 @@ import math
 import os
 import re
 import subprocess
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,6 +29,9 @@ DEFAULT_FLOSS_TIMEOUT_SECONDS = 120.0
 DEFAULT_MIN_STRING_LENGTH = 4
 DEFAULT_MAX_EVIDENCE_STRINGS = 64
 DEFAULT_DEOBFUSCATION_LIMIT_BYTES = 16 * 1024 * 1024
+MAX_FLOSS_STDOUT_BYTES = 32 * 1024 * 1024
+MAX_FLOSS_STDERR_BYTES = 1024 * 1024
+_FLOSS_READ_CHUNK_BYTES = 64 * 1024
 _DIAGNOSTIC_LINE_LIMIT = 40
 _MAX_STRING_LENGTH = 512
 _SUSPICIOUS_STRING_PATTERN = re.compile(
@@ -47,6 +51,13 @@ class FlossStatus(str, Enum):
     PARSE_ERROR = "PARSE_ERROR"
     UNSUPPORTED = "UNSUPPORTED"
     TOOL_ERROR = "TOOL_ERROR"
+
+
+class FlossOutputLimitExceeded(ValueError):
+    def __init__(self, stream_name: str, limit_bytes: int) -> None:
+        self.stream_name = stream_name
+        self.limit_bytes = limit_bytes
+        super().__init__(f"FLOSS {stream_name} exceeded the {limit_bytes} byte output limit")
 
 
 @dataclass(frozen=True)
@@ -94,6 +105,8 @@ class FlossConfig:
             if static_option not in {"--only", "--string-type"}:
                 raise ValueError("unknown FLOSS static-only selection option")
             command.extend((static_option, "static"))
+            if static_option == "--only":
+                command.extend(("--language", "none"))
         else:
             command.extend(self.extra_args)
         # End option parsing before the caller-controlled sample path.
@@ -191,6 +204,7 @@ class FlossAnalysisResult:
         )
         sample_key = self.sha256[:16] if self.sha256 else "unknown"
         evidence: list[Evidence] = []
+        limited_scope = _limited_evidence_scope(self.analysis_metadata)
 
         total_strings = sum(self.string_counts.values()) or len(self.strings)
         evidence.append(
@@ -215,8 +229,7 @@ class FlossAnalysisResult:
                     "floss_version": self.floss_version,
                     "string_counts": dict(self.string_counts),
                     "total_strings": total_strings,
-                    "limited_mode": self.analysis_metadata.get("limited_mode") is True,
-                    "limited_reason": self.analysis_metadata.get("limited_reason"),
+                    **limited_scope,
                 },
             )
         )
@@ -257,6 +270,7 @@ class FlossAnalysisResult:
                         "tags": list(item.tags),
                         "decoding_routine": item.decoding_routine,
                         "decoded_at": item.decoded_at,
+                        **limited_scope,
                     },
                 )
             )
@@ -377,20 +391,14 @@ class FlossAnalyzer:
                     sample_size=sample_size,
                 )
             try:
-                completed = subprocess.run(
+                completed = _run_bounded_floss(
                     command,
-                    capture_output=True,
-                    check=False,
                     cwd=(
                         str(self.config.working_directory)
                         if self.config.working_directory is not None
                         else None
                     ),
-                    encoding="utf-8",
-                    errors="replace",
                     env=os.environ.copy(),
-                    shell=False,
-                    text=True,
                     timeout=timeout,
                 )
             except FileNotFoundError as exc:
@@ -423,6 +431,17 @@ class FlossAnalyzer:
                     raw_reference=raw_reference,
                     status=FlossStatus.TIMEOUT,
                     errors=diagnostics or ["FLOSS analysis timed out"],
+                    started=started,
+                    limited_reason=limited_reason,
+                    sample_size=sample_size,
+                )
+            except FlossOutputLimitExceeded as exc:
+                return self._failure_result(
+                    sha256=sample_sha256,
+                    command=command,
+                    raw_reference=raw_reference,
+                    status=FlossStatus.TOOL_ERROR,
+                    error=str(exc),
                     started=started,
                     limited_reason=limited_reason,
                     sample_size=sample_size,
@@ -481,32 +500,6 @@ class FlossAnalyzer:
                 raw_reference=raw_reference,
             )
 
-        if limited_reason is not None and not completed.stdout.strip():
-            # FLOSS can exit successfully without emitting a JSON document
-            # when its static extraction finds no strings.
-            metadata = {
-                **limited_metadata,
-                "execution_mode": "external_process",
-                "analysis_started_at": analysis_started_at,
-                "empty_static_output": True,
-            }
-            return FlossAnalysisResult(
-                sha256=sample_sha256,
-                file_type="UNKNOWN",
-                status=FlossStatus.SUCCESS,
-                string_counts={"static_strings": 0},
-                analysis_metadata=metadata,
-                warnings=[
-                    *limited_warnings,
-                    "FLOSS returned no JSON report; no static strings were recovered",
-                    *stderr,
-                ],
-                returncode=completed.returncode,
-                elapsed_ms=elapsed_ms,
-                command=command,
-                raw_reference=raw_reference,
-            )
-
         try:
             report = json.loads(completed.stdout)
             if not isinstance(report, Mapping):
@@ -514,6 +507,8 @@ class FlossAnalyzer:
             parsed = parse_floss_report(report)
             if parsed.sha256 and parsed.sha256 != sample_sha256:
                 raise ValueError("FLOSS report SHA-256 does not match the input file")
+            if limited_reason is not None:
+                _validate_static_only_report(parsed)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return FlossAnalysisResult(
                 sha256=sample_sha256,
@@ -754,6 +749,98 @@ def _bounded_text(value: str, limit: int) -> str:
     return normalized[: limit - 1] + "…"
 
 
+def _run_bounded_floss(
+    command: tuple[str, ...],
+    *,
+    cwd: str | None,
+    env: Mapping[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    """Drain both pipes concurrently and stop before either output grows unbounded."""
+
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        env=dict(env),
+        shell=False,
+    )
+    assert process.stdout is not None and process.stderr is not None
+    stdout = bytearray()
+    stderr = bytearray()
+    overflow: list[tuple[str, int]] = []
+    read_errors: list[OSError] = []
+    wake = threading.Event()
+
+    def drain(stream: Any, output: bytearray, name: str, limit: int) -> None:
+        try:
+            while chunk := stream.read1(_FLOSS_READ_CHUNK_BYTES):
+                remaining = limit - len(output)
+                if len(chunk) > remaining:
+                    output.extend(chunk[:remaining])
+                    overflow.append((name, limit))
+                    wake.set()
+                    return
+                output.extend(chunk)
+        except (OSError, ValueError) as exc:
+            read_errors.append(OSError(f"FLOSS {name} output could not be read: {exc}"))
+            wake.set()
+
+    readers = [
+        threading.Thread(
+            target=drain,
+            args=(process.stdout, stdout, "stdout", MAX_FLOSS_STDOUT_BYTES),
+            name="floss-stdout-reader",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=drain,
+            args=(process.stderr, stderr, "stderr", MAX_FLOSS_STDERR_BYTES),
+            name="floss-stderr-reader",
+            daemon=True,
+        ),
+    ]
+    deadline = time.monotonic() + timeout
+    started_readers: list[threading.Thread] = []
+    try:
+        for reader in readers:
+            reader.start()
+            started_readers.append(reader)
+        while True:
+            if overflow:
+                raise FlossOutputLimitExceeded(*overflow[0])
+            if read_errors:
+                raise read_errors[0]
+            if process.poll() is not None and all(not reader.is_alive() for reader in readers):
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            wake.wait(min(0.05, remaining))
+        return subprocess.CompletedProcess(
+            command,
+            process.returncode,
+            stdout=stdout.decode("utf-8", errors="replace"),
+            stderr=stderr.decode("utf-8", errors="replace"),
+        )
+    finally:
+        if process.poll() is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        process.wait()
+        for reader in started_readers:
+            reader.join(timeout=1)
+        process.stdout.close()
+        process.stderr.close()
+        for reader in started_readers:
+            if reader.is_alive():
+                reader.join(timeout=1)
+
+
 def _decode_output(value: Any) -> str:
     if value is None:
         return ""
@@ -798,9 +885,51 @@ def _limited_metadata(reason: str | None, sample_size: int) -> dict[str, Any]:
         "file_size_bytes": sample_size,
         "deobfuscation_threshold_bytes": DEFAULT_DEOBFUSCATION_LIMIT_BYTES,
         "skipped_string_types": [
-            "stack_strings", "tight_strings", "decoded_strings"
+            "stack_strings", "tight_strings", "decoded_strings", "language_strings"
         ],
     }
+
+
+def _limited_evidence_scope(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep a small, trusted scope marker on every selectable FLOSS item."""
+
+    if metadata.get("limited_mode") is not True:
+        return {}
+    scope: dict[str, Any] = {"limited_mode": True}
+    reason = metadata.get("limited_reason")
+    if isinstance(reason, str) and reason in {
+        "INPUT_EXCEEDS_16_MIB", "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+    }:
+        scope["limited_reason"] = reason
+    skipped = metadata.get("skipped_string_types")
+    if isinstance(skipped, (list, tuple)):
+        scope["skipped_string_types"] = [
+            name
+            for name in (
+                "stack_strings", "tight_strings", "decoded_strings", "language_strings"
+            )
+            if name in skipped
+        ]
+    return scope
+
+
+def _validate_static_only_report(parsed: ParsedFlossReport) -> None:
+    analysis = parsed.analysis_metadata
+    if analysis.get("enable_static_strings") is not True or any(
+        analysis.get(field) is not False
+        for field in (
+            "enable_stack_strings", "enable_tight_strings", "enable_decoded_strings"
+        )
+    ):
+        raise ValueError("FLOSS report contradicts requested static-only analysis")
+    if analysis.get("enable_language_strings") is True or any(
+        parsed.string_counts.get(group, 0) > 0
+        for group in (
+            "stack_strings", "tight_strings", "decoded_strings",
+            "language_strings", "language_strings_missed",
+        )
+    ):
+        raise ValueError("FLOSS report contains strings outside static-only scope")
 
 
 def _limited_warnings(reason: str | None) -> list[str]:
@@ -811,7 +940,7 @@ def _limited_warnings(reason: str | None) -> list[str]:
     else:
         trigger = "FLOSS rejected deobfuscation because of file size"
     warning = f"FLOSS static-only limited mode selected because {trigger}; "
-    warning += "stack, tight, and decoded strings were skipped"
+    warning += "stack, tight, decoded, and language strings were skipped"
     return [warning]
 
 

@@ -12,6 +12,11 @@ from trust_triage.deep_analysis.llm_interpreter import (
 )
 from trust_triage.deep_analysis.models import LLMInterpretationStatus
 from trust_triage.evidence import AttackTechnique, Evidence, EvidenceStatus
+from trust_triage.static_analysis.floss_analyzer import (
+    FlossAnalysisResult,
+    FlossStatus,
+    FlossString,
+)
 
 
 def _evidence(
@@ -77,6 +82,62 @@ def test_llm_selection_is_bounded_and_keeps_high_value_evidence() -> None:
         "floss-decoded",
     }
     assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) <= 24000
+
+
+def test_floss_limited_scope_survives_when_summary_is_not_selected() -> None:
+    strings = [FlossString("static_strings", f"ordinary-{index:03d}") for index in range(64)]
+    limited = FlossAnalysisResult(
+        sha256="a" * 64, file_type="PE32", status=FlossStatus.SUCCESS,
+        strings=strings, string_counts={"static_strings": 64},
+        analysis_metadata={
+            "limited_mode": True,
+            "limited_reason": "INPUT_EXCEEDS_16_MIB",
+            "skipped_string_types": [
+                "stack_strings", "tight_strings", "decoded_strings", "language_strings"
+            ],
+        },
+    )
+    normal = FlossAnalysisResult(
+        sha256="a" * 64, file_type="PE32", status=FlossStatus.SUCCESS,
+        strings=strings, string_counts={"static_strings": 64},
+    )
+
+    selected = _select_evidence(
+        limited.to_evidence(max_strings=64), max_items=40, max_chars=24000
+    )
+    payload = _serialize_evidence(selected)
+    normal_payload = _serialize_evidence(_select_evidence(
+        normal.to_evidence(max_strings=64), max_items=40, max_chars=24000
+    ))
+
+    assert len(selected) == 40
+    assert all(item.category != "STRING_SUMMARY" for item in selected)
+    assert all(row["context"]["limited_mode"] is True for row in payload)
+    assert all(row["context"]["limited_reason"] == "INPUT_EXCEEDS_16_MIB" for row in payload)
+    assert all(
+        row["context"]["skipped_string_types"] == [
+            "stack_strings", "tight_strings", "decoded_strings", "language_strings"
+        ]
+        for row in payload
+    )
+    assert payload != normal_payload
+
+    mapped = _evidence(
+        "capa-attack", source="CAPA", category="CAPABILITY_MATCH",
+        attack=(AttackTechnique("T1055", "Process Injection"),),
+    )
+    mixed = _select_evidence(
+        (mapped, *limited.to_evidence(max_strings=64)),
+        max_items=10, max_chars=3000,
+    )
+    mixed_payload = _serialize_evidence(mixed)
+    assert any(row["source"] == "CAPA" for row in mixed_payload)
+    assert any(row["source"] == "FLOSS" for row in mixed_payload)
+    assert all(
+        row["context"]["limited_mode"] is True
+        for row in mixed_payload if row["source"] == "FLOSS"
+    )
+    assert len(json.dumps(mixed_payload, ensure_ascii=False, separators=(",", ":"))) <= 3000
 
 
 def test_llm_serialization_bounds_long_text_and_context() -> None:
