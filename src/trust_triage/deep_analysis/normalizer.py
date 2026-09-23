@@ -20,13 +20,23 @@ _INJECTION_APIS = {
     "queueuserapc",
     "setthreadcontext",
 }
-_INJECTION_MEMORY_APIS = {
+_INJECTION_ALLOCATION_APIS = {
     "virtualallocex",
     "ntallocatevirtualmemory",
+}
+_INJECTION_WRITE_APIS = {
     "writeprocessmemory",
     "ntwritevirtualmemory",
 }
 _SERVICE_CREATION_APIS = {"createservicea", "createservicew"}
+_OBSERVATION_FIELDS = (
+    "api_name", "path", "file_path", "src_path", "dst_path", "destination",
+    "host", "ip", "port", "url", "key", "ret_val", "retval", "return_value",
+)
+_OBSERVATION_CATEGORIES = (
+    "network_events", "file_access", "dropped_files", "registry_access",
+    "api_calls", "process_events",
+)
 
 
 def normalize_capa_result(
@@ -96,6 +106,13 @@ def normalize_speakeasy_result(
     observed_apis = _strings(payload.get("observed_apis"))
     behaviors = _strings(payload.get("behaviors"))
     events = payload.get("events")
+    metadata = payload.get("metadata")
+    event_counts = metadata.get("event_counts") if isinstance(metadata, Mapping) else None
+    events_truncated = (
+        metadata.get("events_truncated") is True
+        if isinstance(metadata, Mapping)
+        else False
+    )
     techniques = _observed_techniques(observed_apis, behaviors, events)
     tool_status = str(payload.get("status") or "SUCCESS")
 
@@ -120,6 +137,9 @@ def normalize_speakeasy_result(
                     "observed_apis": list(observed_apis),
                     "behaviors": list(behaviors),
                     "event_categories": _event_categories(events),
+                    "observations": _bounded_observations(events),
+                    "event_counts": event_counts if isinstance(event_counts, Mapping) else {},
+                    "events_truncated": events_truncated,
                     "attack_techniques": [technique.to_dict()],
                 },
                 attack_techniques=(technique,),
@@ -149,6 +169,9 @@ def normalize_speakeasy_result(
                     "observed_apis": list(observed_apis),
                     "behaviors": list(behaviors),
                     "event_categories": _event_categories(events),
+                    "observations": _bounded_observations(events),
+                    "event_counts": event_counts if isinstance(event_counts, Mapping) else {},
+                    "events_truncated": events_truncated,
                 },
             )
         )
@@ -166,7 +189,10 @@ def _observed_techniques(
     # A single generic API is not enough to assert injection.  A thread
     # creation API is a strong direct signal; memory allocation plus writing
     # into another process is treated as a candidate combination.
-    if api_names & _INJECTION_APIS or len(api_names & _INJECTION_MEMORY_APIS) >= 2:
+    if api_names & _INJECTION_APIS or (
+        api_names & _INJECTION_ALLOCATION_APIS
+        and api_names & _INJECTION_WRITE_APIS
+    ):
         labels.append("Process Injection")
     if _successful_service_creation(api_names, events):
         labels.append("Create Service")
@@ -206,15 +232,58 @@ def _explicit_call_failure(call: Mapping[str, Any]) -> bool:
         value = call[name]
         if value is None or value is False or value == 0:
             return True
-        return isinstance(value, str) and value.strip().casefold() in {
-            "",
-            "0",
-            "0x0",
-            "false",
-            "none",
-            "null",
-        }
+        if isinstance(value, str):
+            normalized = value.strip().casefold()
+            if normalized in {"", "false", "none", "null"}:
+                return True
+            if re.fullmatch(r"(?:0x[0-9a-f]+|[0-9]+)", normalized):
+                return int(normalized, 16 if normalized.startswith("0x") else 10) == 0
+        return False
     return False
+
+
+def _bounded_observations(events: Any) -> list[dict[str, Any]]:
+    """Keep a small allowlisted sample of actual dynamic observations."""
+
+    if not isinstance(events, Mapping):
+        return []
+    observations: list[dict[str, Any]] = []
+    # Rotate through categories so many API calls cannot hide file/network data.
+    for index in range(8):
+        for category in _OBSERVATION_CATEGORIES:
+            category_events = events.get(category)
+            if not isinstance(category_events, Sequence) or isinstance(
+                category_events, (str, bytes, bytearray)
+            ) or index >= len(category_events):
+                continue
+            event = category_events[index]
+            if not isinstance(event, Mapping):
+                continue
+            observation: dict[str, Any] = {
+                "category": category,
+                "event_index": index,
+            }
+            for field in _OBSERVATION_FIELDS:
+                value = event.get(field)
+                if isinstance(value, (str, int, float, bool)):
+                    observation[field] = str(value)[:160]
+            args = event.get("args")
+            if isinstance(args, Sequence) and not isinstance(
+                args, (str, bytes, bytearray)
+            ):
+                pairs = []
+                for argument in args[:4]:
+                    if isinstance(argument, Mapping):
+                        name, value = argument.get("name"), argument.get("value")
+                        if isinstance(name, str) and isinstance(value, (str, int, float, bool)):
+                            pairs.append(f"{name[:40]}={str(value)[:120]}")
+                if pairs:
+                    observation["arguments"] = "; ".join(pairs)[:400]
+            if len(observation) > 2:
+                observations.append(observation)
+                if len(observations) == 8:
+                    return observations
+    return observations
 
 
 def _payload(value: Any) -> dict[str, Any]:

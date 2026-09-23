@@ -214,11 +214,9 @@ def _run_speakeasy_worker(
                 )
                 message["raw_reference"] = str(report_path)
             except OSError as exc:
-                # 분석 자체는 끝났지만 결과 보관에 실패한 경우도 숨기지 않는다.
-                message["warnings"] = [
-                    *summary.warnings,
-                    f"raw_report_error: {exc}",
-                ]
+                # Optional report persistence must not change the engine's
+                # analysis status. Keep the archive failure separately.
+                message["raw_report_error"] = f"{type(exc).__name__}: {exc}"[:512]
 
         _put_worker_message(result_queue, message)
     except Exception as exc:  # noqa: BLE001 - isolate third-party engine failures
@@ -585,6 +583,8 @@ class SpeakeasyAnalyzer:
             if isinstance(category_events, list)
         }
         warnings = tuple(str(value) for value in message.get("warnings", []))
+        if message.get("raw_report_error"):
+            metadata["raw_report_error"] = str(message["raw_report_error"])[:512]
         status = _status_from_report_warnings(warnings)
         if status is DynamicAnalysisStatus.TIMEOUT:
             summary = (

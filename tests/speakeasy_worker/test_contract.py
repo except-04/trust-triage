@@ -7,6 +7,7 @@ import pytest
 
 from trust_triage.speakeasy_worker.config import WorkerConfig
 from trust_triage.speakeasy_worker.models import (
+    MAX_RESULT_BYTES,
     InvalidJob,
     SpeakeasyJob,
     result_from_analysis,
@@ -86,6 +87,52 @@ def test_nonfinite_result_is_not_serialized_as_json(job, tmp_path):
     analysis = replace(FakeAnalyzer().analyze(path), metadata={"invalid": float("nan")})
     with pytest.raises(ValueError):
         result_from_analysis(job, analysis)
+
+
+def test_large_duplicate_event_copy_keeps_success_and_full_nested_observations(
+    job, tmp_path
+):
+    path = tmp_path / "test.bin"
+    path.write_bytes(SAMPLE)
+    event = {"api_name": "WriteProcessMemory", "args": ["x" * 4096] * 6}
+    analysis = replace(
+        FakeAnalyzer().analyze(path),
+        events={"api_calls": tuple(dict(event) for _ in range(100))},
+    )
+
+    result = result_from_analysis(job, analysis)
+
+    assert result["status"] == "COMPLETED"
+    assert result["tool_status"] == "SUCCESS"
+    assert result["analysis"] is not None
+    assert len(result["analysis"]["events"]["api_calls"]) == 100
+    assert result["event_counts"]["api_calls"] == 100
+    assert result["behavior_truncated"] is True
+    assert result["analysis"]["metadata"]["event_counts"]["api_calls"] == 100
+    assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_RESULT_BYTES
+
+
+def test_oversized_nested_events_keep_status_counts_and_bounded_prefix(job, tmp_path):
+    path = tmp_path / "test.bin"
+    path.write_bytes(SAMPLE)
+    event = {"api_name": "WriteProcessMemory", "args": ["x" * 4096] * 6}
+    analysis = replace(
+        FakeAnalyzer().analyze(path),
+        events={
+            "api_calls": tuple(dict(event) for _ in range(100)),
+            "file_access": tuple(dict(event) for _ in range(100)),
+        },
+    )
+
+    result = result_from_analysis(job, analysis)
+
+    assert result["status"] == "COMPLETED"
+    assert result["tool_status"] == "SUCCESS"
+    assert result["event_counts"] == {"api_calls": 100, "file_access": 100}
+    assert result["events_truncated"] is True
+    assert result["analysis"]["metadata"]["events_truncated"] is True
+    assert 0 < len(result["analysis"]["events"]["api_calls"]) < 100
+    assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_RESULT_BYTES
 
 
 def _config_env():

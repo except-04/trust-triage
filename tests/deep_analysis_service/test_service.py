@@ -18,7 +18,7 @@ from trust_triage.speakeasy_worker.models import (
     failure_result,
     result_from_analysis,
 )
-from trust_triage.storage import ArtifactReference
+from trust_triage.storage import ArtifactError, ArtifactReference
 
 from .fakes import ServiceHarness, complete_worker, detached, dynamic_result
 
@@ -96,6 +96,59 @@ def test_large_static_tool_result_is_archived_and_get_returns_a_bounded_summary(
     assert "match_details" not in capa
     assert view["static_results"]["CAPA"]["details_reference"] == reference
     assert len(json.dumps(view, ensure_ascii=False).encode("utf-8")) < 1024 * 1024
+
+
+@pytest.mark.parametrize("tool", ["CAPA", "FLOSS"])
+def test_individual_tool_result_over_8_mib_keeps_status_and_size_diagnostic(
+    harness, tool
+):
+    h = harness
+    analyzer = h.capa if tool == "CAPA" else h.floss
+    original = analyzer.result.to_dict
+    detail = (
+        {"match_details": [{"tree": "x" * (8 * 1024 * 1024)}]}
+        if tool == "CAPA"
+        else {"strings": [{"string": "x" * (8 * 1024 * 1024)}]}
+    )
+    analyzer.result.to_dict = lambda: {**original(), **detail}
+
+    waiting = h.service.start(h.request)
+    result = waiting.checkpoint["static"]["tool_results"][tool]
+
+    assert waiting.phase is DeepAnalysisPhase.WAITING_SPEAKEASY
+    assert waiting.checkpoint["static"]["tool_statuses"][tool] == "SUCCESS"
+    assert result["status"] == "SUCCESS"
+    assert result["details_status"] == "OMITTED_TOO_LARGE"
+    assert result["details_error"]["code"] == "RESULT_TOO_LARGE"
+    assert result["details_error"]["actual_bytes"] > 8 * 1024 * 1024
+    assert result["details_error"]["limit_bytes"] == 8 * 1024 * 1024
+    assert "details_reference" not in result
+    assert h.service.get(h.request.analysis_id)["static_results"][tool] == result
+
+
+def test_static_archive_failure_preserves_tool_status_and_diagnostic(
+    harness, monkeypatch
+):
+    h = harness
+    original = h.capa.result.to_dict
+    h.capa.result.to_dict = lambda: {
+        **original(),
+        "match_details": [{"tree": "x" * (256 * 1024)}],
+    }
+
+    def fail_archive(*_args, **_kwargs):
+        raise ArtifactError("S3_WRITE_FAILED", "storage unavailable", retryable=True)
+
+    monkeypatch.setattr(h.artifact_storage, "put_json", fail_archive)
+    waiting = h.service.start(h.request)
+    result = waiting.checkpoint["static"]["tool_results"]["CAPA"]
+
+    assert waiting.phase is DeepAnalysisPhase.WAITING_SPEAKEASY
+    assert waiting.checkpoint["static"]["tool_statuses"]["CAPA"] == "SUCCESS"
+    assert result["status"] == "SUCCESS"
+    assert result["details_status"] == "ARCHIVE_FAILED"
+    assert result["details_error"]["code"] == "S3_WRITE_FAILED"
+    assert result["details_error"]["actual_bytes"] > 128 * 1024
 
 
 def test_large_legacy_static_result_is_compacted_without_mutating_checkpoint(tmp_path):

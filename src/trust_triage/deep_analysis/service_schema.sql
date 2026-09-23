@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS deep_analysis_runs (
     checkpoint jsonb,
     result jsonb,
     last_error jsonb CHECK (last_error IS NULL OR jsonb_typeof(last_error) = 'object'),
-    cancellation jsonb CHECK (cancellation IS NULL OR jsonb_typeof(cancellation) = 'object'),
+    cancellation jsonb CONSTRAINT deep_analysis_runs_cancellation_object_check
+        CHECK (cancellation IS NULL OR jsonb_typeof(cancellation) = 'object'),
     next_retry_at timestamptz,
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     lease_token uuid,
@@ -64,6 +65,26 @@ CREATE TABLE IF NOT EXISTS deep_analysis_runs (
 
 -- Existing installations receive the durable parent-cancellation field in place.
 ALTER TABLE deep_analysis_runs ADD COLUMN IF NOT EXISTS cancellation jsonb;
+
+-- CREATE TABLE IF NOT EXISTS does not update constraints on existing tables.
+-- Add the same check separately for databases upgraded from an older schema.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'deep_analysis_runs'::regclass
+          AND conname = 'deep_analysis_runs_cancellation_object_check'
+    ) THEN
+        ALTER TABLE deep_analysis_runs
+            ADD CONSTRAINT deep_analysis_runs_cancellation_object_check
+            CHECK (cancellation IS NULL OR jsonb_typeof(cancellation) = 'object')
+            NOT VALID;
+    END IF;
+END
+$$;
+
+ALTER TABLE deep_analysis_runs
+    VALIDATE CONSTRAINT deep_analysis_runs_cancellation_object_check;
 
 CREATE INDEX IF NOT EXISTS deep_analysis_runs_pending_idx
     ON deep_analysis_runs (updated_at, analysis_id)

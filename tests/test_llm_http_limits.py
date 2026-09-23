@@ -48,12 +48,17 @@ def llm_server():
                 body = b"x" * 4096
             else:
                 body = response_body
+            if mode == "header_delay":
+                time.sleep(1.5)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             try:
-                if mode == "slow":
+                if mode == "body_delay":
+                    time.sleep(1.5)
+                    self.wfile.write(body)
+                elif mode == "slow":
                     for byte in body:
                         self.wfile.write(bytes((byte,)))
                         self.wfile.flush()
@@ -117,3 +122,14 @@ def test_response_size_limit_rejects_body_and_next_request_still_runs(llm_server
     modes.put("fast")
     recovered = interpreter.interpret((), sha256="a" * 64)
     assert recovered.status is LLMInterpretationStatus.SUCCESS
+
+
+@pytest.mark.parametrize("mode", ["header_delay", "body_delay"])
+def test_healthy_delayed_response_uses_the_configured_deadline(llm_server, mode):
+    server, modes = llm_server
+    interpreter = _interpreter(server, timeout=3.0)
+    modes.put(mode)
+
+    result = interpreter.interpret((), sha256="a" * 64)
+
+    assert result.status is LLMInterpretationStatus.SUCCESS

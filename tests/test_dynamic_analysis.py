@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from trust_triage.dynamic_analysis import (
     DynamicAnalysisResult,
@@ -10,9 +12,52 @@ from trust_triage.dynamic_analysis import (
 )
 from trust_triage.dynamic_analysis.speakeasy_analyzer import (
     _classify_speakeasy_error,
-    _summarize_report,
+    _run_speakeasy_worker,
     _status_from_report_warnings,
+    _summarize_report,
 )
+
+
+def test_optional_raw_report_write_error_does_not_change_engine_status(
+    monkeypatch, tmp_path
+):
+    class FakeSpeakeasy:
+        def __init__(self):
+            self.config = {}
+
+        def load_module(self, *, path):
+            return path
+
+        def run_module(self, _module, *, emulate_children):
+            return None
+
+        def get_report(self):
+            return {"entry_points": [{"apis": [{"api_name": "CreateFileW"}]}]}
+
+    class CaptureQueue:
+        def __init__(self):
+            self.messages = []
+
+        def put(self, value):
+            self.messages.append(json.loads(value))
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("fixture write denied")
+
+    monkeypatch.setitem(sys.modules, "speakeasy", SimpleNamespace(Speakeasy=FakeSpeakeasy))
+    monkeypatch.setattr(Path, "write_text", fail_write)
+    queue = CaptureQueue()
+
+    _run_speakeasy_worker(
+        "harmless-fixture", 2, 100, 100, False,
+        str(tmp_path / "report.json"), queue,
+    )
+
+    message = queue.messages[0]
+    assert message["kind"] == "summary"
+    assert message["warnings"] == []
+    assert "fixture write denied" in message["raw_report_error"]
+    assert _status_from_report_warnings(tuple(message["warnings"])) is DynamicAnalysisStatus.SUCCESS
 
 
 def test_result_is_serialized_as_common_evidence() -> None:

@@ -19,7 +19,7 @@ from ..speakeasy_worker.models import InvalidJob, JobConflict, failure_result, u
 from ..speakeasy_worker.publisher import JobPublisher
 from ..speakeasy_worker.storage import SampleStore
 from ..storage import ArtifactError, ArtifactIdentity
-from .checkpoints import StaticAnalysisCheckpoint, json_snapshot
+from .checkpoints import MAX_CHECKPOINT_BYTES, StaticAnalysisCheckpoint, json_snapshot
 from .models import DeepAnalysisDisposition, DeepAnalysisResult, DeepAnalysisStatus
 from .orchestrator import DeepAnalysisOrchestrator
 from .service_models import DeepAnalysisPhase, DeepAnalysisRecord, DeepAnalysisRequest
@@ -414,6 +414,19 @@ class DeepAnalysisService:
             ).encode("utf-8")
             if len(encoded) <= _INLINE_TOOL_RESULT_BYTES:
                 continue
+            if len(encoded) > MAX_CHECKPOINT_BYTES:
+                results[tool] = _tool_result_preview(
+                    tool,
+                    result,
+                    details_status="OMITTED_TOO_LARGE",
+                    details_error={
+                        "code": "RESULT_TOO_LARGE",
+                        "actual_bytes": len(encoded),
+                        "limit_bytes": MAX_CHECKPOINT_BYTES,
+                    },
+                )
+                changed = True
+                continue
             if self.artifact_storage is None:
                 # Non-runtime service users retain the durable checkpoint; GET
                 # has a legacy compaction path so oversized detail cannot wedge
@@ -434,8 +447,21 @@ class DeepAnalysisService:
                     config_sha256=self.config_fingerprint,
                 )
             except ArtifactError as exc:
-                error_type = RetryableError if exc.retryable else PermanentError
-                raise error_type(exc.code, exc.message) from exc
+                # Archiving parsed details is supplementary. Preserve the
+                # tool's actual status and a bounded diagnostic in the DB.
+                results[tool] = _tool_result_preview(
+                    tool,
+                    result,
+                    details_status="ARCHIVE_FAILED",
+                    details_error={
+                        "code": exc.code,
+                        "message": exc.message[:512],
+                        "actual_bytes": len(encoded),
+                        "limit_bytes": MAX_CHECKPOINT_BYTES,
+                    },
+                )
+                changed = True
+                continue
             results[tool] = _tool_result_preview(
                 tool, result, details_reference=reference.to_dict()
             )
@@ -705,6 +731,7 @@ def _tool_result_preview(
     *,
     details_reference: Mapping[str, Any] | None = None,
     details_status: str | None = None,
+    details_error: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Expose display fields inline and keep full parsed output by reference."""
 
@@ -786,6 +813,8 @@ def _tool_result_preview(
     summary["details_status"] = details_status or "ARCHIVED"
     if details_reference is not None:
         summary["details_reference"] = dict(details_reference)
+    if details_error is not None:
+        summary["details_error"] = dict(details_error)
     return summary
 
 
