@@ -299,6 +299,11 @@ def test_large_worker_preview_count_reaches_public_projection(snapshot):
         status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
         observed_apis=("CreateFileW",),
         events={"api_calls": tuple(dict(event) for _ in range(100))},
+        metadata={
+            "event_counts": {"api_calls": 110},
+            "events_truncated": True,
+            "adapter_events_truncated": True,
+        },
     )
     snapshot["speakeasy_result"] = result_from_analysis(request.worker_job, analysis)
     snapshot["tool_statuses"]["SPEAKEASY"] = "SUCCESS"
@@ -307,8 +312,46 @@ def test_large_worker_preview_count_reaches_public_projection(snapshot):
 
     assert len(value.speakeasy["behavior"]["api_calls"]) == 8
     assert value.speakeasy["behavior_truncated"] is True
-    assert value.speakeasy["event_counts"]["api_calls"] == 100
+    assert value.speakeasy["event_counts"]["api_calls"] == 110
+    assert value.speakeasy["adapter_events_truncated"] is True
     assert value.speakeasy["original_result_bytes"] > value.speakeasy["result_limit_bytes"]
+    assert "service_creation_calls" not in value.model_dump_json()
+
+
+def test_adapter_and_worker_omissions_reach_public_projection(snapshot):
+    request = DeepAnalysisRequest(
+        "analysis-view", SHA256,
+        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+    )
+    event = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
+    analysis = DynamicAnalysisResult(
+        evidence_id="adapter-worker", sha256=SHA256,
+        source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
+        status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
+        observed_apis=("CreateFileW", "CreateServiceW"),
+        events={
+            "api_calls": tuple(dict(event) for _ in range(100)),
+            "file_access": tuple({"path": "x" * 24576} for _ in range(100)),
+        },
+        metadata={
+            "event_counts": {"api_calls": 110, "file_access": 100},
+            "events_truncated": True,
+            "adapter_events_truncated": True,
+            "service_creation_calls": {
+                "calls": [{"api_name": "createservicew", "event_index": 105, "ret_val": "0x0"}],
+                "total": 1, "complete": True,
+            },
+        },
+    )
+    snapshot["speakeasy_result"] = result_from_analysis(request.worker_job, analysis)
+    snapshot["tool_statuses"]["SPEAKEASY"] = "SUCCESS"
+
+    value = views.deep_analysis(record(deep_result=snapshot))
+
+    assert len(value.speakeasy["behavior"]["api_calls"]) < 100
+    assert value.speakeasy["event_counts"]["api_calls"] == 110
+    assert value.speakeasy["adapter_events_truncated"] is True
+    assert value.speakeasy["worker_events_truncated"] is True
     assert "service_creation_calls" not in value.model_dump_json()
 
 

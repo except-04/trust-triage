@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+import trust_triage.dynamic_analysis.speakeasy_analyzer as analyzer_module
 from trust_triage.dynamic_analysis import (
     DynamicAnalysisResult,
     DynamicAnalysisStatus,
@@ -140,6 +143,103 @@ def test_report_summary_extracts_apis_and_behaviors() -> None:
     assert summary.events["api_calls"][0]["entry_point"] == 0
     assert summary.events["file_access"][0]["path"] == "C:\\temp\\x.bin"
     assert summary.warnings == ("일부 호출은 처리되지 않음",)
+
+
+@pytest.mark.parametrize("count", [99, 100, 101, 110])
+@pytest.mark.parametrize("service_index", [0, -1])
+def test_report_summary_tracks_original_count_and_service_return_across_cap(
+    count: int, service_index: int
+) -> None:
+    calls = [{"api_name": "CreateFileW", "pc": index} for index in range(count)]
+    calls[service_index] = {
+        "api_name": "advapi32.CreateServiceW",
+        "ret_val": "0x00000000",
+    }
+    summary = _summarize_report({"entry_points": [{"apis": calls}]})
+
+    assert summary.event_counts["api_calls"] == count
+    assert len(summary.events["api_calls"]) == min(count, 100)
+    assert summary.events_truncated is (count > 100)
+    assert summary.service_creation_calls == {
+        "calls": [{
+            "api_name": "createservicew",
+            "event_index": service_index % count,
+            "ret_val": "0x00000000",
+        }],
+        "total": 1,
+        "complete": True,
+    }
+
+
+def test_report_summary_counts_multiple_entry_points_in_original_order() -> None:
+    summary = _summarize_report({"entry_points": [
+        {"apis": [{"api_name": "CreateFileW"} for _ in range(60)]},
+        {"apis": [
+            *({"api_name": "CreateFileW"} for _ in range(45)),
+            {"api_name": "advapi32.CreateServiceA", "ret_val": "0x0"},
+        ]},
+    ]})
+
+    assert summary.event_counts["api_calls"] == 106
+    assert summary.events_truncated is True
+    assert summary.events["api_calls"][99]["entry_point"] == 1
+    assert summary.service_creation_calls["calls"][0]["event_index"] == 105
+
+
+def test_analyzer_preserves_child_truncation_metadata(monkeypatch, tmp_path) -> None:
+    sample = tmp_path / "harmless-fixture.bin"
+    sample.write_bytes(b"MZ" + b"fixture")
+    calls = [{"api_name": "CreateFileW"} for _ in range(105)]
+    calls.append({"api_name": "advapi32.CreateServiceW", "ret_val": "0x0"})
+    summary = _summarize_report({"entry_points": [{"apis": calls}]})
+    message = json.dumps({
+        "kind": "summary",
+        "observed_apis": summary.observed_apis,
+        "api_call_counts": summary.api_call_counts,
+        "behaviors": summary.behaviors,
+        "events": summary.events,
+        "event_counts": summary.event_counts,
+        "events_truncated": summary.events_truncated,
+        "service_creation_calls": summary.service_creation_calls,
+        "warnings": summary.warnings,
+    })
+
+    class FakeQueue:
+        def close(self):
+            pass
+
+        def join_thread(self):
+            pass
+
+    class FakeProcess:
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, _timeout):
+            pass
+
+    monkeypatch.setattr(
+        analyzer_module.multiprocessing,
+        "get_context",
+        lambda _method: SimpleNamespace(
+            Queue=lambda **_kwargs: FakeQueue(),
+            Process=lambda **_kwargs: FakeProcess(),
+        ),
+    )
+    monkeypatch.setattr(
+        analyzer_module, "_receive_worker_message", lambda *_args: message
+    )
+
+    result = SpeakeasyAnalyzer().analyze(sample)
+
+    assert result.status is DynamicAnalysisStatus.SUCCESS
+    assert result.metadata["event_counts"]["api_calls"] == 106
+    assert result.metadata["events_truncated"] is True
+    assert result.metadata["adapter_events_truncated"] is True
+    assert result.metadata["service_creation_calls"]["calls"][0]["ret_val"] == "0x0"
 
 
 def test_report_error_is_summarized_without_register_dump() -> None:

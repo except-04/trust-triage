@@ -323,6 +323,10 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
             speakeasy["behavior_truncated"] = True
         if worker.get("events_truncated") is True:
             speakeasy["events_truncated"] = True
+        if worker.get("adapter_events_truncated") is True:
+            speakeasy["adapter_events_truncated"] = True
+        if worker.get("worker_events_truncated") is True:
+            speakeasy["worker_events_truncated"] = True
         if worker.get("details_omitted") is True:
             speakeasy["details_omitted"] = True
         counts = _public_event_counts(worker.get("event_counts"))

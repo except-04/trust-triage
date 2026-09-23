@@ -1303,7 +1303,7 @@ def render_speakeasy(target, speakeasy):
     total.metric("API Calls", len(calls))
     unique.metric("Unique APIs", len(counts))
     target.caption(
-        "표시된 이벤트 기준(백엔드 저장 상한 적용) · "
+        "표시된 이벤트 기준 · "
         "unique 수는 api_name이 있는 호출 기준입니다."
     )
     if speakeasy.get("behavior_truncated"):
@@ -1312,8 +1312,12 @@ def render_speakeasy(target, speakeasy):
             target.caption(f"API 호출 총 {original_calls}개 중 {len(calls)}개 미리보기")
         else:
             target.caption("행동 이벤트는 일부만 미리보기로 표시됩니다.")
-    if speakeasy.get("events_truncated") or speakeasy.get("details_omitted"):
+    if speakeasy.get("adapter_events_truncated"):
+        target.caption("Speakeasy 결과 수집 시 카테고리별 100개를 넘는 상세 이벤트가 생략됐습니다.")
+    if speakeasy.get("worker_events_truncated") or speakeasy.get("details_omitted"):
         target.caption("결과 크기 제한으로 일부 상세 이벤트가 저장되지 않았습니다.")
+    elif speakeasy.get("events_truncated") and not speakeasy.get("adapter_events_truncated"):
+        target.caption("일부 상세 이벤트가 저장되지 않았습니다.")
     if counts:
         target.dataframe(
             [{"API": name, "Calls": count} for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)],

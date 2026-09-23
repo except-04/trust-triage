@@ -152,6 +152,23 @@ def test_truncated_worker_and_static_detail_notices_are_visible(app):
     assert any("보관에 실패" in message for message in messages)
 
 
+def test_adapter_and_worker_truncation_stages_are_explained(app):
+    target = Tree()
+    app.render_speakeasy(target, {
+        "behavior": {"api_calls": [{"api_name": "CreateFileW"}] * 8},
+        "behavior_truncated": True,
+        "events_truncated": True,
+        "adapter_events_truncated": True,
+        "worker_events_truncated": True,
+        "event_counts": {"api_calls": 110},
+    })
+
+    captions = [args[0] for args in target.named("caption")]
+    assert any("110개 중 8개" in caption for caption in captions)
+    assert any("100개를 넘는" in caption for caption in captions)
+    assert any("결과 크기 제한" in caption for caption in captions)
+
+
 @pytest.mark.parametrize("payload", [{}, {"behavior": None}, {"behavior": {
     "api_calls": [], "files": None, "network": [], "registry": []
 }}])

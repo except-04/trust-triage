@@ -15,12 +15,11 @@ from trust_triage.dynamic_analysis.models import (
     DynamicAnalysisResult,
     DynamicAnalysisStatus,
 )
+from trust_triage.dynamic_analysis.service_call_summary import service_creation_calls
 
 MAX_MESSAGE_BYTES = 16 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
 RESULT_SCHEMA_VERSION = "speakeasy-result-v1"
-_SERVICE_CREATION_APIS = {"createservicea", "createservicew"}
-_MAX_SERVICE_CALL_SUMMARY = 256
 _JOB_FIELDS = frozenset(
     {"analysis_id", "sha256", "file_location", "requested_stage", "requested_at"}
 )
@@ -236,6 +235,37 @@ def result_from_analysis(
     }
     # Worker는 대형 원본 report를 수집하지 않는다. 요약 및 모든 제한된 이벤트는 유지한다.
     payload["analysis"]["raw_report"] = None
+    retained_counts = {
+        name: len(items) for name, items in payload["analysis"]["events"].items()
+    }
+    source_metadata = payload["analysis"]["metadata"]
+    source_counts = source_metadata.get("event_counts")
+    event_counts = dict(retained_counts)
+    if isinstance(source_counts, Mapping):
+        for name, count in source_counts.items():
+            if (
+                isinstance(name, str)
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+                and count >= retained_counts.get(name, 0)
+            ):
+                event_counts[name] = count
+    payload["event_counts"] = event_counts
+    source_metadata["event_counts"] = event_counts
+    adapter_count_loss = any(
+        count > retained_counts.get(name, 0) for name, count in event_counts.items()
+    )
+    if source_metadata.get("events_truncated") is True or adapter_count_loss:
+        payload["events_truncated"] = True
+        payload["behavior_truncated"] = True
+        source_metadata["events_truncated"] = True
+    if source_metadata.get("adapter_events_truncated") is True or adapter_count_loss:
+        payload["adapter_events_truncated"] = True
+        source_metadata["adapter_events_truncated"] = True
+    service_calls = source_metadata.get("service_creation_calls")
+    if not isinstance(service_calls, Mapping):
+        service_calls = service_creation_calls(analysis.events)
+        source_metadata["service_creation_calls"] = service_calls
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     original_bytes = len(encoded.encode("utf-8"))
     if original_bytes <= MAX_RESULT_BYTES:
@@ -244,17 +274,13 @@ def result_from_analysis(
     # The same events are present in both analysis.events and behavior. Keep
     # the tool outcome and event counts when the display copy pushes the DB
     # envelope over its limit. The full nested observations take precedence.
-    event_counts = {
-        name: len(items) for name, items in payload["analysis"]["events"].items()
-    }
-    payload["event_counts"] = event_counts
     payload["original_result_bytes"] = original_bytes
     payload["result_limit_bytes"] = MAX_RESULT_BYTES
     payload["analysis"]["metadata"] = {
         **payload["analysis"]["metadata"],
         "event_counts": event_counts,
         "behavior_truncated": True,
-        "service_creation_calls": _service_creation_calls(analysis.events),
+        "service_creation_calls": service_calls,
     }
     for preview_items in (8, 2, 0):
         payload["behavior"] = {
@@ -272,7 +298,7 @@ def result_from_analysis(
     # If the nested observations alone exceed the limit, retain a bounded
     # prefix and record how many events were omitted. Never change SUCCESS
     # into a tool failure merely because the report is large.
-    largest_category = max(event_counts.values(), default=0)
+    largest_category = max(retained_counts.values(), default=0)
     limit = largest_category // 2
     while limit:
         payload["analysis"]["events"] = {
@@ -280,6 +306,8 @@ def result_from_analysis(
         }
         payload["events_truncated"] = True
         payload["analysis"]["metadata"]["events_truncated"] = True
+        payload["worker_events_truncated"] = True
+        payload["analysis"]["metadata"]["worker_events_truncated"] = True
         encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
         if len(encoded.encode("utf-8")) <= MAX_RESULT_BYTES:
             return json.loads(encoded)
@@ -288,6 +316,8 @@ def result_from_analysis(
     payload["analysis"]["events"] = {name: [] for name in event_counts}
     payload["events_truncated"] = True
     payload["analysis"]["metadata"]["events_truncated"] = True
+    payload["worker_events_truncated"] = True
+    payload["analysis"]["metadata"]["worker_events_truncated"] = True
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     if len(encoded.encode("utf-8")) <= MAX_RESULT_BYTES:
         return json.loads(encoded)
@@ -305,7 +335,9 @@ def result_from_analysis(
             "details_omitted": True,
             "event_counts": event_counts,
             "events_truncated": True,
-            "service_creation_calls": _service_creation_calls(analysis.events),
+            "adapter_events_truncated": source_metadata.get("adapter_events_truncated") is True,
+            "worker_events_truncated": True,
+            "service_creation_calls": service_calls,
         },
     )
     payload["details_omitted"] = True
@@ -313,41 +345,6 @@ def result_from_analysis(
     if len(encoded.encode("utf-8")) > MAX_RESULT_BYTES:
         raise ValueError("Speakeasy result metadata exceeds the 4 MiB limit")
     return json.loads(encoded)
-
-
-def _service_creation_calls(events: Mapping[str, Any]) -> dict[str, Any]:
-    """Retain bounded return values before a large event list is shortened."""
-
-    calls = []
-    total = 0
-    for index, event in enumerate(events.get("api_calls", ())):
-        if not isinstance(event, Mapping):
-            continue
-        name = re.sub(
-            r"[^a-z0-9]", "", str(event.get("api_name") or "").casefold().split("!")[-1].split(".")[-1]
-        )
-        if name not in _SERVICE_CREATION_APIS:
-            continue
-        total += 1
-        if len(calls) >= _MAX_SERVICE_CALL_SUMMARY:
-            continue
-        item: dict[str, Any] = {"api_name": name, "event_index": index}
-        for field in ("ret_val", "retval", "return_value", "return"):
-            if field not in event:
-                continue
-            value = event[field]
-            if isinstance(value, (str, int, bool)) or value is None:
-                if isinstance(value, str) and len(value) > 64:
-                    item["return_truncated"] = True
-                else:
-                    item[field] = value
-            break
-        calls.append(item)
-    return {
-        "calls": calls,
-        "total": total,
-        "complete": total <= _MAX_SERVICE_CALL_SUMMARY,
-    }
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

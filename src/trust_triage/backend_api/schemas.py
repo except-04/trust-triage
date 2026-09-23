@@ -306,7 +306,7 @@ class DeepAnalysisResponse(AnalysisIdentity):
     )
     speakeasy: dict[str, Any] | None = Field(
         default=None,
-        description="Speakeasy 행동 미리보기. behavior_truncated, events_truncated, event_counts는 생략 범위를 나타냅니다.",
+        description="Speakeasy 행동 미리보기. event_counts는 원본 수집 개수이며 adapter_events_truncated와 worker_events_truncated는 단계별 상세 생략을 나타냅니다.",
     )
     evidence: list[TechniqueEvidence] = Field(
         default_factory=list,
