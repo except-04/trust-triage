@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import lightgbm as lgb
@@ -74,6 +75,8 @@ def main(argv=None):
     X_tr, y_tr = splits["tr"].X, splits["tr"].y
     X_val, y_val = splits["val"].X, splits["val"].y
 
+    if "MLFLOW_TRACKING_URI" in os.environ:
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
     mlflow.set_experiment("TRUST-Triage-Baseline-Feature-Count")
     results = []
     with mlflow.start_run(run_name="feature_count_validation_selection"):

@@ -61,5 +61,6 @@ jobs:
             tests/backend_api \
             tests/test_feature_names.py \
             tests/test_model_data_contract.py \
+            tests/test_mlflow_tracking.py \
             -m "not postgres" \
             -q

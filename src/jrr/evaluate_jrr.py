@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import mlflow
 from sklearn.metrics import roc_auc_score, confusion_matrix, brier_score_loss
@@ -8,6 +9,8 @@ from _jrr_eval_core import calculate_ece, calculate_review_yield, calculate_true
 def main():
     print("[JRR Evaluation] 라우터 평가 및 검증 파이프라인 시작!\n")
 
+    if "MLFLOW_TRACKING_URI" in os.environ:
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
     mlflow.set_experiment("JRR_Evaluation_and_KillTest")
 
     with mlflow.start_run(run_name="RealData_JRR_Eval"):

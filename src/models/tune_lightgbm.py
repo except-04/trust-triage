@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import joblib
@@ -71,6 +72,8 @@ def main(argv=None) -> int:
     X_val_500 = select_columns_chunked(splits["val"].X, top_indices)
     y_tr = splits["tr"].y
     y_val = splits["val"].y
+    if "MLFLOW_TRACKING_URI" in os.environ:
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
     mlflow.set_experiment("trust-triage-baseline")
 
     def objective(trial):
