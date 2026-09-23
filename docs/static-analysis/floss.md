@@ -64,6 +64,16 @@ FlossString 그룹
 - `SUCCESS`, `INVALID_INPUT`, `TIMEOUT`, `ENVIRONMENT_MISMATCH`,
   `PARSE_ERROR`, `UNSUPPORTED`, `TOOL_ERROR`를 반환한다.
 - timeout·실행 오류·파싱 오류는 Evidence로 변환하지 않는다.
+- 16 MiB를 넘는 입력은 전체 deobfuscation을 시도하지 않고
+  FLOSS 3.1의 `floss -j --only static` 제한 모드로 분석한다. 최신 CLI에서
+  `--only`를 지원하지 않으면 `--string-type static`으로 다시 실행한다.
+  16 MiB 이하에서
+  FLOSS가 파일 크기 때문에 deobfuscation을 거부해도 남은 timeout 안에서
+  static-only 모드로 한 번 재시도한다. 일반 timeout이나 다른 오류는
+  재시도하지 않는다.
+- 제한 모드는 `analysis_metadata.limited_mode`, `limited_reason`,
+  `skipped_string_types`와 `warnings`에 기록된다. 이때 복원되지 않은
+  stack/tight/decoded 문자열을 정상 증거로 해석하지 않는다.
 - `subprocess.run(..., shell=False)`와 제한 시간을 사용한다.
 - 입력 PE를 Windows에서 직접 실행하거나 로드하지 않는다.
 - 결과 문자열과 원본 report는 Evidence의 `raw_reference`로 연결할 수 있다.

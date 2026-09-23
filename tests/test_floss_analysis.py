@@ -58,6 +58,20 @@ def _sample(tmp_path: Path) -> Path:
     return path
 
 
+def _static_report(sample: Path) -> dict:
+    report = _report(strings={"static_strings": [
+        {"string": "https://example.invalid/static", "offset": 4096}
+    ]})
+    report["metadata"]["sha256"] = floss_module.sha256_file(sample)
+    report["analysis"].update(
+        enable_stack_strings=False,
+        enable_tight_strings=False,
+        enable_decoded_strings=False,
+        enable_language_strings=False,
+    )
+    return report
+
+
 def test_build_command_uses_json_and_minimum_length(tmp_path: Path) -> None:
     command = FlossConfig(min_string_length=8).build_command(tmp_path / "sample.exe")
 
@@ -65,6 +79,17 @@ def test_build_command_uses_json_and_minimum_length(tmp_path: Path) -> None:
     assert command[3] == "8"
     assert command[-2] == "--"
     assert command[-1].endswith("sample.exe")
+
+
+def test_static_only_command_drops_conflicting_extra_args(tmp_path: Path) -> None:
+    command = FlossConfig(extra_args=("--string-type", "decoded")).build_command(
+        tmp_path / "sample.exe", static_only=True
+    )
+
+    assert command == (
+        "floss", "-j", "--only", "static", "--",
+        str(tmp_path / "sample.exe"),
+    )
 
 
 def test_parse_report_extracts_string_groups_and_metadata() -> None:
@@ -135,6 +160,182 @@ def test_analyze_success_returns_string_evidence_without_running_sample(
     assert all(not item.attack_techniques for item in evidence)
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["timeout"] == 120.0
+
+
+def test_file_over_16_mib_uses_static_only_without_full_attempt(
+    monkeypatch, tmp_path: Path
+) -> None:
+    sample = _sample(tmp_path)
+    with sample.open("r+b") as stream:
+        stream.truncate(floss_module.DEFAULT_DEOBFUSCATION_LIMIT_BYTES + 1)
+    report = _static_report(sample)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+
+    monkeypatch.setattr(floss_module.subprocess, "run", fake_run)
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.SUCCESS
+    assert len(calls) == 1
+    assert calls[0][-4:-2] == ("--only", "static")
+    assert result.analysis_metadata["limited_mode"] is True
+    assert result.analysis_metadata["limited_reason"] == "INPUT_EXCEEDS_16_MIB"
+    assert result.analysis_metadata["file_size_bytes"] == 16 * 1024 * 1024 + 1
+    assert any("static-only limited mode" in item for item in result.warnings)
+    assert result.string_counts == {"static_strings": 1}
+    evidence = result.to_evidence()
+    assert evidence[0].details["limited_mode"] is True
+    assert all(item.category != "OBFUSCATED_STRING" for item in evidence)
+
+
+def test_exactly_16_mib_keeps_full_floss_mode(monkeypatch, tmp_path: Path) -> None:
+    sample = _sample(tmp_path)
+    with sample.open("r+b") as stream:
+        stream.truncate(floss_module.DEFAULT_DEOBFUSCATION_LIMIT_BYTES)
+    report = _report()
+    report["metadata"]["sha256"] = floss_module.sha256_file(sample)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+
+    monkeypatch.setattr(floss_module.subprocess, "run", fake_run)
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.SUCCESS
+    assert len(calls) == 1
+    assert "--only" not in calls[0]
+    assert result.analysis_metadata.get("limited_mode") is None
+
+
+def test_deobfuscation_size_rejection_retries_static_only_with_remaining_budget(
+    monkeypatch, tmp_path: Path
+) -> None:
+    sample = _sample(tmp_path)
+    report = _static_report(sample)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((tuple(command), kwargs["timeout"]))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                command, 1, stdout="",
+                stderr='{"error": "cannot deobfuscate strings from files larger than 0x1000000 bytes"}',
+            )
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+
+    monkeypatch.setattr(floss_module.subprocess, "run", fake_run)
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.SUCCESS
+    assert len(calls) == 2
+    assert "--only" not in calls[0][0]
+    assert calls[1][0][-4:-2] == ("--only", "static")
+    assert 0 < calls[1][1] <= calls[0][1]
+    assert result.analysis_metadata["limited_reason"] == "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+    assert result.analysis_metadata["deobfuscation_threshold_bytes"] == 16 * 1024 * 1024
+    assert any("static-only limited mode" in item for item in result.warnings)
+
+
+def test_newer_floss_cli_retries_static_selection_with_supported_option(
+    monkeypatch, tmp_path: Path
+) -> None:
+    sample = _sample(tmp_path)
+    report = _static_report(sample)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((tuple(command), kwargs["timeout"]))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                command, 1, stdout="",
+                stderr="cannot deobfuscate strings from files larger than 0x1000000 bytes",
+            )
+        if len(calls) == 2:
+            return subprocess.CompletedProcess(
+                command, 1, stdout="floss: error: unrecognized arguments: --only static",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+
+    monkeypatch.setattr(floss_module.subprocess, "run", fake_run)
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.SUCCESS
+    assert len(calls) == 3
+    assert calls[1][0][-4:-2] == ("--only", "static")
+    assert calls[2][0][-4:-2] == ("--string-type", "static")
+    assert 0 < calls[2][1] <= calls[1][1] <= calls[0][1]
+    assert result.analysis_metadata["limited_reason"] == "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+
+
+def test_static_only_success_without_json_records_empty_static_output(
+    monkeypatch, tmp_path: Path
+) -> None:
+    sample = _sample(tmp_path)
+    with sample.open("r+b") as stream:
+        stream.truncate(floss_module.DEFAULT_DEOBFUSCATION_LIMIT_BYTES + 1)
+    monkeypatch.setattr(
+        floss_module.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="", stderr=""
+        ),
+    )
+
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.SUCCESS
+    assert result.string_counts == {"static_strings": 0}
+    assert result.analysis_metadata["limited_mode"] is True
+    assert result.analysis_metadata["empty_static_output"] is True
+    assert any("no JSON report" in warning for warning in result.warnings)
+
+
+def test_failed_static_only_retry_keeps_limit_diagnostic_without_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    sample = _sample(tmp_path)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(tuple(command))
+        error = (
+            "cannot deobfuscate strings from files larger than 0x1000000 bytes"
+            if len(calls) == 1 else "static extraction failed"
+        )
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr=error)
+
+    monkeypatch.setattr(floss_module.subprocess, "run", fake_run)
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.TOOL_ERROR
+    assert len(calls) == 2
+    assert result.analysis_metadata["limited_mode"] is True
+    assert any("static-only limited mode" in item for item in result.warnings)
+    assert result.to_evidence() == []
+
+
+def test_other_floss_failure_is_not_retried(monkeypatch, tmp_path: Path) -> None:
+    sample = _sample(tmp_path)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(tuple(command))
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="unsupported file format"
+        )
+
+    monkeypatch.setattr(floss_module.subprocess, "run", fake_run)
+    result = FlossAnalyzer().analyze(sample)
+
+    assert len(calls) == 1
+    assert result.status is FlossStatus.UNSUPPORTED
+    assert result.analysis_metadata.get("limited_mode") is None
 
 
 def test_report_hash_mismatch_is_rejected_without_evidence(

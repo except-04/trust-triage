@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from trust_triage.deep_analysis import DeepAnalysisConfig
-from trust_triage.deep_analysis.service import DeepServiceLimits
+from trust_triage.deep_analysis.service import DeepServiceLimits, _tool_result_preview
 from trust_triage.deep_analysis.service_models import DeepAnalysisPhase
 from trust_triage.dynamic_analysis import DynamicAnalysisStatus
 from trust_triage.speakeasy_worker.models import (
@@ -124,6 +124,27 @@ def test_individual_tool_result_over_8_mib_keeps_status_and_size_diagnostic(
     assert result["details_error"]["limit_bytes"] == 8 * 1024 * 1024
     assert "details_reference" not in result
     assert h.service.get(h.request.analysis_id)["static_results"][tool] == result
+
+
+def test_floss_limited_mode_survives_archived_result_preview() -> None:
+    result = _tool_result_preview("FLOSS", {
+        "status": "SUCCESS",
+        "sha256": "a" * 64,
+        "analysis_metadata": {
+            "limited_mode": True,
+            "limited_reason": "INPUT_EXCEEDS_16_MIB",
+            "sample_path": "C:/private/sample.exe",
+        },
+        "warnings": ["FLOSS static-only limited mode selected"],
+        "strings": [{"string": "visible static string"}],
+    })
+
+    assert result["status"] == "SUCCESS"
+    assert result["limited_mode"] is True
+    assert result["limited_reason"] == "INPUT_EXCEEDS_16_MIB"
+    assert result["warnings"] == ["FLOSS static-only limited mode selected"]
+    assert "analysis_metadata" not in result
+    assert "C:/private" not in json.dumps(result)
 
 
 def test_static_archive_failure_preserves_tool_status_and_diagnostic(

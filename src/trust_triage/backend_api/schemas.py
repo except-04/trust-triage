@@ -302,7 +302,7 @@ class DeepAnalysisResponse(AnalysisIdentity):
     )
     floss: dict[str, Any] | None = Field(
         default=None,
-        description="FLOSS 문자열 미리보기와 개수. details_status/details_error는 상세 보관 진단입니다.",
+        description="FLOSS 문자열 미리보기와 개수. limited_mode는 static-only 제한 분석을 뜻하며 details_status/details_error는 상세 보관 진단입니다.",
     )
     speakeasy: dict[str, Any] | None = Field(
         default=None,

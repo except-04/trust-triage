@@ -27,6 +27,7 @@ from .capa_analyzer import sha256_file
 DEFAULT_FLOSS_TIMEOUT_SECONDS = 120.0
 DEFAULT_MIN_STRING_LENGTH = 4
 DEFAULT_MAX_EVIDENCE_STRINGS = 64
+DEFAULT_DEOBFUSCATION_LIMIT_BYTES = 16 * 1024 * 1024
 _DIAGNOSTIC_LINE_LIMIT = 40
 _MAX_STRING_LENGTH = 512
 _SUSPICIOUS_STRING_PATTERN = re.compile(
@@ -75,13 +76,26 @@ class FlossConfig:
         object.__setattr__(self, "executable_args", tuple(self.executable_args))
         object.__setattr__(self, "extra_args", tuple(self.extra_args))
 
-    def build_command(self, sample_path: Path) -> tuple[str, ...]:
+    def build_command(
+        self,
+        sample_path: Path,
+        *,
+        static_only: bool = False,
+        static_option: str = "--only",
+    ) -> tuple[str, ...]:
         """Build a shell-free JSON-producing FLOSS command."""
 
         command = [str(self.executable), *self.executable_args, "-j"]
         if self.min_string_length != DEFAULT_MIN_STRING_LENGTH:
             command.extend(("-n", str(self.min_string_length)))
-        command.extend(self.extra_args)
+        # A limited run must select only static strings even when caller-supplied
+        # options would otherwise request expensive string types.
+        if static_only:
+            if static_option not in {"--only", "--string-type"}:
+                raise ValueError("unknown FLOSS static-only selection option")
+            command.extend((static_option, "static"))
+        else:
+            command.extend(self.extra_args)
         # End option parsing before the caller-controlled sample path.
         command.extend(("--", str(sample_path)))
         return tuple(command)
@@ -188,7 +202,8 @@ class FlossAnalysisResult:
                 severity=0.15,
                 reliability=min(reliability, 0.5),
                 summary=(
-                    f"FLOSS recovered {total_strings} string(s): "
+                    f"FLOSS{' static-only limited mode' if self.analysis_metadata.get('limited_mode') else ''} "
+                    f"recovered {total_strings} string(s): "
                     + ", ".join(
                         f"{key}={value}"
                         for key, value in sorted(self.string_counts.items())
@@ -200,6 +215,8 @@ class FlossAnalysisResult:
                     "floss_version": self.floss_version,
                     "string_counts": dict(self.string_counts),
                     "total_strings": total_strings,
+                    "limited_mode": self.analysis_metadata.get("limited_mode") is True,
+                    "limited_reason": self.analysis_metadata.get("limited_reason"),
                 },
             )
         )
@@ -302,6 +319,7 @@ class FlossAnalyzer:
             )
 
         try:
+            sample_size = path.stat().st_size
             sample_sha256 = sha256_file(path)
         except OSError as exc:
             return FlossAnalysisResult(
@@ -330,67 +348,123 @@ class FlossAnalyzer:
             )
 
         resolved_path = path.resolve()
-        command = self.config.build_command(resolved_path)
+        limited_reason = (
+            "INPUT_EXCEEDS_16_MIB"
+            if sample_size > DEFAULT_DEOBFUSCATION_LIMIT_BYTES
+            else None
+        )
+        command = self.config.build_command(
+            resolved_path, static_only=limited_reason is not None
+        )
         started = time.perf_counter()
         analysis_started_at = datetime.now(timezone.utc).isoformat()
 
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                check=False,
-                cwd=(
-                    str(self.config.working_directory)
-                    if self.config.working_directory is not None
-                    else None
-                ),
-                encoding="utf-8",
-                errors="replace",
-                env=os.environ.copy(),
-                shell=False,
-                text=True,
-                timeout=self.config.timeout_seconds,
+        for attempt in range(3):
+            timeout = (
+                self.config.timeout_seconds
+                if attempt == 0
+                else self.config.timeout_seconds - (time.perf_counter() - started)
             )
-        except FileNotFoundError as exc:
-            return self._failure_result(
-                sha256=sample_sha256,
-                command=command,
-                raw_reference=raw_reference,
-                status=FlossStatus.ENVIRONMENT_MISMATCH,
-                error=f"FLOSS executable was not found: {exc}",
-                started=started,
-            )
-        except PermissionError as exc:
-            return self._failure_result(
-                sha256=sample_sha256,
-                command=command,
-                raw_reference=raw_reference,
-                status=FlossStatus.ENVIRONMENT_MISMATCH,
-                error=f"FLOSS executable cannot be executed: {exc}",
-                started=started,
-            )
-        except subprocess.TimeoutExpired as exc:
-            diagnostics = _diagnostic_lines(_decode_output(exc.stderr or exc.stdout))
-            return self._failure_result(
-                sha256=sample_sha256,
-                command=command,
-                raw_reference=raw_reference,
-                status=FlossStatus.TIMEOUT,
-                errors=diagnostics or ["FLOSS analysis timed out"],
-                started=started,
-            )
-        except OSError as exc:
-            return self._failure_result(
-                sha256=sample_sha256,
-                command=command,
-                raw_reference=raw_reference,
-                status=FlossStatus.TOOL_ERROR,
-                error=f"FLOSS process could not be started: {exc}",
-                started=started,
-            )
+            if timeout <= 0:
+                return self._failure_result(
+                    sha256=sample_sha256,
+                    command=command,
+                    raw_reference=raw_reference,
+                    status=FlossStatus.TIMEOUT,
+                    error="FLOSS analysis timed out before static-only fallback",
+                    started=started,
+                    limited_reason=limited_reason,
+                    sample_size=sample_size,
+                )
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    check=False,
+                    cwd=(
+                        str(self.config.working_directory)
+                        if self.config.working_directory is not None
+                        else None
+                    ),
+                    encoding="utf-8",
+                    errors="replace",
+                    env=os.environ.copy(),
+                    shell=False,
+                    text=True,
+                    timeout=timeout,
+                )
+            except FileNotFoundError as exc:
+                return self._failure_result(
+                    sha256=sample_sha256,
+                    command=command,
+                    raw_reference=raw_reference,
+                    status=FlossStatus.ENVIRONMENT_MISMATCH,
+                    error=f"FLOSS executable was not found: {exc}",
+                    started=started,
+                    limited_reason=limited_reason,
+                    sample_size=sample_size,
+                )
+            except PermissionError as exc:
+                return self._failure_result(
+                    sha256=sample_sha256,
+                    command=command,
+                    raw_reference=raw_reference,
+                    status=FlossStatus.ENVIRONMENT_MISMATCH,
+                    error=f"FLOSS executable cannot be executed: {exc}",
+                    started=started,
+                    limited_reason=limited_reason,
+                    sample_size=sample_size,
+                )
+            except subprocess.TimeoutExpired as exc:
+                diagnostics = _diagnostic_lines(_decode_output(exc.stderr or exc.stdout))
+                return self._failure_result(
+                    sha256=sample_sha256,
+                    command=command,
+                    raw_reference=raw_reference,
+                    status=FlossStatus.TIMEOUT,
+                    errors=diagnostics or ["FLOSS analysis timed out"],
+                    started=started,
+                    limited_reason=limited_reason,
+                    sample_size=sample_size,
+                )
+            except OSError as exc:
+                return self._failure_result(
+                    sha256=sample_sha256,
+                    command=command,
+                    raw_reference=raw_reference,
+                    status=FlossStatus.TOOL_ERROR,
+                    error=f"FLOSS process could not be started: {exc}",
+                    started=started,
+                    limited_reason=limited_reason,
+                    sample_size=sample_size,
+                )
+
+            if (
+                completed.returncode != 0
+                and limited_reason is None
+                and _is_deobfuscation_size_error(completed.stderr)
+            ):
+                limited_reason = "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+                command = self.config.build_command(resolved_path, static_only=True)
+                continue
+            if (
+                completed.returncode != 0
+                and limited_reason is not None
+                and "--only" in command
+                and _is_unsupported_static_option(completed)
+            ):
+                command = self.config.build_command(
+                    resolved_path,
+                    static_only=True,
+                    static_option="--string-type",
+                )
+                continue
+            break
 
         elapsed_ms = _elapsed_ms(started)
         stderr = _diagnostic_lines(completed.stderr)
+        limited_metadata = _limited_metadata(limited_reason, sample_size)
+        limited_warnings = _limited_warnings(limited_reason)
         if completed.returncode != 0:
             status = _classify_process_failure(completed.stderr)
             return FlossAnalysisResult(
@@ -399,6 +473,34 @@ class FlossAnalyzer:
                 status=status,
                 errors=stderr
                 or [f"FLOSS exited with return code {completed.returncode}"],
+                warnings=limited_warnings,
+                analysis_metadata=limited_metadata,
+                returncode=completed.returncode,
+                elapsed_ms=elapsed_ms,
+                command=command,
+                raw_reference=raw_reference,
+            )
+
+        if limited_reason is not None and not completed.stdout.strip():
+            # FLOSS can exit successfully without emitting a JSON document
+            # when its static extraction finds no strings.
+            metadata = {
+                **limited_metadata,
+                "execution_mode": "external_process",
+                "analysis_started_at": analysis_started_at,
+                "empty_static_output": True,
+            }
+            return FlossAnalysisResult(
+                sha256=sample_sha256,
+                file_type="UNKNOWN",
+                status=FlossStatus.SUCCESS,
+                string_counts={"static_strings": 0},
+                analysis_metadata=metadata,
+                warnings=[
+                    *limited_warnings,
+                    "FLOSS returned no JSON report; no static strings were recovered",
+                    *stderr,
+                ],
                 returncode=completed.returncode,
                 elapsed_ms=elapsed_ms,
                 command=command,
@@ -418,19 +520,21 @@ class FlossAnalyzer:
                 file_type="UNKNOWN",
                 status=FlossStatus.PARSE_ERROR,
                 errors=[f"could not parse FLOSS JSON output: {exc}"],
-                warnings=stderr,
+                warnings=[*limited_warnings, *stderr],
+                analysis_metadata=limited_metadata,
                 returncode=completed.returncode,
                 elapsed_ms=elapsed_ms,
                 command=command,
                 raw_reference=raw_reference,
             )
 
-        warnings = list(stderr)
+        warnings = [*limited_warnings, *stderr]
         if not parsed.sha256:
             warnings.append(
                 "FLOSS report did not include SHA-256; input hash was verified locally"
             )
         metadata = dict(parsed.analysis_metadata)
+        metadata.update(limited_metadata)
         metadata["execution_mode"] = "external_process"
         metadata["analysis_started_at"] = analysis_started_at
         return FlossAnalysisResult(
@@ -459,6 +563,8 @@ class FlossAnalyzer:
         started: float,
         error: str | None = None,
         errors: list[str] | None = None,
+        limited_reason: str | None = None,
+        sample_size: int = 0,
     ) -> FlossAnalysisResult:
         diagnostics = list(errors or [])
         if error is not None:
@@ -468,6 +574,8 @@ class FlossAnalyzer:
             file_type="UNKNOWN",
             status=status,
             errors=diagnostics,
+            warnings=_limited_warnings(limited_reason),
+            analysis_metadata=_limited_metadata(limited_reason, sample_size),
             elapsed_ms=_elapsed_ms(started),
             command=command,
             raw_reference=raw_reference,
@@ -658,6 +766,53 @@ def _diagnostic_lines(value: Any) -> list[str]:
     return [
         line.strip() for line in _decode_output(value).splitlines() if line.strip()
     ][:_DIAGNOSTIC_LINE_LIMIT]
+
+
+def _is_deobfuscation_size_error(stderr: Any) -> bool:
+    """Retry only when FLOSS explicitly rejects deobfuscation for file size."""
+
+    message = _decode_output(stderr).casefold()
+    return "deobfuscat" in message and any(
+        marker in message
+        for marker in ("larger than", "too large", "size limit", "exceeds")
+    )
+
+
+def _is_unsupported_static_option(completed: subprocess.CompletedProcess[str]) -> bool:
+    message = (
+        _decode_output(completed.stderr) + "\n" + _decode_output(completed.stdout)
+    ).casefold()
+    return "--only" in message and any(
+        marker in message
+        for marker in ("unrecognized", "unknown option", "invalid option", "no such option")
+    )
+
+
+def _limited_metadata(reason: str | None, sample_size: int) -> dict[str, Any]:
+    if reason is None:
+        return {}
+    return {
+        "analysis_mode": "static_only",
+        "limited_mode": True,
+        "limited_reason": reason,
+        "file_size_bytes": sample_size,
+        "deobfuscation_threshold_bytes": DEFAULT_DEOBFUSCATION_LIMIT_BYTES,
+        "skipped_string_types": [
+            "stack_strings", "tight_strings", "decoded_strings"
+        ],
+    }
+
+
+def _limited_warnings(reason: str | None) -> list[str]:
+    if reason is None:
+        return []
+    if reason == "INPUT_EXCEEDS_16_MIB":
+        trigger = "the input exceeded the configured 16 MiB deobfuscation threshold"
+    else:
+        trigger = "FLOSS rejected deobfuscation because of file size"
+    warning = f"FLOSS static-only limited mode selected because {trigger}; "
+    warning += "stack, tight, and decoded strings were skipped"
+    return [warning]
 
 
 def _elapsed_ms(started: float) -> float:
