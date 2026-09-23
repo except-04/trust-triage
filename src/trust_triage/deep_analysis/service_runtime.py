@@ -16,6 +16,8 @@ from ..speakeasy_worker.repository import PostgresJobRepository
 from ..speakeasy_worker.runtime import create_publisher
 from ..speakeasy_worker.storage import S3SampleStore
 from ..static_analysis import CapaAnalyzer, CapaConfig, FlossAnalyzer, FlossConfig
+from ..storage import S3ArtifactStorage
+from .checkpoints import MAX_CHECKPOINT_BYTES
 from .llm_interpreter import MonoGPTClaudeInterpreter, MonoGPTConfig
 from .orchestrator import DeepAnalysisOrchestrator
 from .service import DeepAnalysisService, DeepServiceLimits
@@ -135,6 +137,14 @@ def create_deep_analysis_runtime(
         repository=repository,
         publisher=publisher,
         orchestrator=orchestrator,
+        artifact_storage=S3ArtifactStorage(
+            s3,
+            bucket=config.s3_bucket,
+            prefix=config.s3_prefix,
+            temp_root=Path(config.temp_root) / "deep-analysis-artifacts",
+            max_bytes=MAX_CHECKPOINT_BYTES,
+            download_timeout_seconds=config.download_timeout_seconds,
+        ),
         limits=limits,
         samples=S3SampleStore(
             s3,

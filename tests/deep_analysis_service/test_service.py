@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -13,9 +14,11 @@ from trust_triage.dynamic_analysis import DynamicAnalysisStatus
 from trust_triage.speakeasy_worker.models import (
     InvalidJob,
     JobConflict,
+    JobStatus,
     failure_result,
     result_from_analysis,
 )
+from trust_triage.storage import ArtifactReference
 
 from .fakes import ServiceHarness, complete_worker, detached, dynamic_result
 
@@ -43,6 +46,106 @@ def test_sufficient_static_completes_and_llm_runs_only_once(tmp_path):
     assert h.service.resume(h.request.analysis_id).result == result.result
     assert h.service.get(h.request.analysis_id) == stable
     assert h.calls == (1, 1, 1, 1)
+
+
+def test_large_legacy_checkpoint_get_deduplicates_terminal_evidence(tmp_path):
+    h = ServiceHarness(tmp_path, sufficient=True)
+    h.service.start(h.request)
+    row = h.repository.rows[h.request.analysis_id]
+    checkpoint = detached(row.checkpoint)
+    result = detached(row.result)
+    padding = "x" * (4 * 1024 * 1024)
+    checkpoint["static"]["evidence"][0]["details"]["padding"] = padding
+    result["evidence"][0]["details"]["padding"] = padding
+    h.repository.rows[h.request.analysis_id] = replace(
+        row,
+        checkpoint=checkpoint,
+        result=result,
+    )
+
+    view = h.service.get(h.request.analysis_id)
+    encoded = json.dumps(view, ensure_ascii=False).encode("utf-8")
+
+    assert len(encoded) < 8 * 1024 * 1024
+    assert view["view_schema_version"] == "deep-view-v2"
+    assert view["evidence"][0]["details"]["padding"] == padding
+    assert "evidence" not in view["result"]
+    assert view["result"]["evidence_ref"] == "#/evidence"
+    assert "tool_statuses" not in view["result"]
+    assert view["result"]["tool_statuses_ref"] == "#/tool_statuses"
+
+
+def test_large_static_tool_result_is_archived_and_get_returns_a_bounded_summary(
+    harness,
+):
+    h = harness
+    original = h.capa.result.to_dict
+    h.capa.result.to_dict = lambda: {
+        **original(),
+        "match_details": [{"tree": "x" * (256 * 1024)}],
+    }
+
+    waiting = h.service.start(h.request)
+    capa = waiting.checkpoint["static"]["tool_results"]["CAPA"]
+    reference = capa["details_reference"]
+    artifact = h.artifact_storage.read(ArtifactReference(**reference))
+    view = h.service.get(h.request.analysis_id)
+
+    assert len(artifact) > 256 * 1024
+    assert json.loads(artifact)["match_details"][0]["tree"] == "x" * (256 * 1024)
+    assert "match_details" not in capa
+    assert view["static_results"]["CAPA"]["details_reference"] == reference
+    assert len(json.dumps(view, ensure_ascii=False).encode("utf-8")) < 1024 * 1024
+
+
+def test_large_legacy_static_result_is_compacted_without_mutating_checkpoint(tmp_path):
+    h = ServiceHarness(tmp_path, sufficient=True)
+    h.service.start(h.request)
+    row = h.repository.rows[h.request.analysis_id]
+    checkpoint = detached(row.checkpoint)
+    checkpoint["static"]["tool_results"]["CAPA"]["match_details"] = [
+        {"tree": "x" * 8_386_000}
+    ]
+    h.repository.rows[h.request.analysis_id] = replace(row, checkpoint=checkpoint)
+
+    view = h.service.get(h.request.analysis_id)
+
+    assert view["static_results_compacted"] is True
+    assert view["static_results"]["CAPA"]["details_status"] == "INLINE_IN_CHECKPOINT"
+    assert "match_details" not in view["static_results"]["CAPA"]
+    assert (
+        "match_details"
+        in h.repository.rows[h.request.analysis_id].checkpoint["static"][
+            "tool_results"
+        ]["CAPA"]
+    )
+
+
+def test_legacy_waiting_checkpoint_archives_large_result_on_resume(tmp_path):
+    h = ServiceHarness(tmp_path)
+    waiting = h.service.start(h.request)
+    assert waiting.phase is DeepAnalysisPhase.WAITING_SPEAKEASY
+    row = h.repository.rows[h.request.analysis_id]
+    checkpoint = detached(row.checkpoint)
+    checkpoint["static"]["tool_results"]["CAPA"]["match_details"] = [
+        {"tree": "x" * (256 * 1024)}
+    ]
+    h.repository.rows[h.request.analysis_id] = replace(row, checkpoint=checkpoint)
+    calls_before = h.calls
+
+    resumed = h.service.resume(h.request.analysis_id)
+    capa = resumed.checkpoint["static"]["tool_results"]["CAPA"]
+
+    assert resumed.phase is DeepAnalysisPhase.WAITING_SPEAKEASY
+    assert "details_reference" in capa
+    assert "match_details" not in capa
+    assert h.calls == calls_before
+    assert (
+        h.service.get(h.request.analysis_id)["static_results"]["CAPA"][
+            "details_reference"
+        ]
+        == capa["details_reference"]
+    )
 
 
 def test_waiting_checkpoint_commits_before_queue_send_and_survives_restart(harness):
@@ -126,6 +229,69 @@ def test_worker_running_is_waiting_and_get_is_read_only(harness):
         is DeepAnalysisPhase.WAITING_SPEAKEASY
     )
     assert h.calls == (1, 1, 0, 1)
+
+
+def test_parent_cancellation_is_durable_and_cancels_queued_worker(harness):
+    h = harness
+    h.service.start(h.request)
+
+    cancelled = h.service.cancel(
+        h.request.analysis_id,
+        code="PARENT_DEEP_WAIT_TIMEOUT",
+        message="Parent analysis deadline expired",
+    )
+
+    assert cancelled.phase is DeepAnalysisPhase.FAILED
+    assert "PARENT_DEEP_WAIT_TIMEOUT" in cancelled.result["reason_codes"]
+    worker = h.worker_repository.get(h.request.analysis_id)
+    assert worker.status is JobStatus.FAILED
+    assert worker.result["error"]["code"] == "PARENT_ANALYSIS_CANCELLED"
+    assert h.service.resume_ready() == []
+
+
+def test_parent_cancellation_fences_active_owner_then_reconciles(harness):
+    h = harness
+    h.service.register(h.request)
+    old = h.repository.claim(h.request.analysis_id, 600)
+    assert old.token
+
+    pending = h.service.cancel(
+        h.request.analysis_id,
+        code="PARENT_DEEP_WAIT_TIMEOUT",
+        message="Parent analysis deadline expired",
+    )
+
+    assert pending.phase is DeepAnalysisPhase.STATIC
+    assert pending.cancellation["code"] == "PARENT_DEEP_WAIT_TIMEOUT"
+    assert not h.repository.renew(h.request.analysis_id, old.token, 600)
+    h.repository.now += 601
+    reconciled = h.service.resume_ready()
+    assert len(reconciled) == 1
+    assert reconciled[0].phase is DeepAnalysisPhase.FAILED
+    assert h.calls == (0, 0, 0, 0)
+
+
+def test_parent_cancellation_never_overwrites_active_worker(harness):
+    h = harness
+    h.service.start(h.request)
+    active = h.worker_repository.claim(h.request.worker_job, 180)
+    assert active.token
+
+    cancelled = h.service.cancel(
+        h.request.analysis_id,
+        code="PARENT_DEEP_WAIT_TIMEOUT",
+        message="Parent analysis deadline expired",
+    )
+
+    assert cancelled.phase is DeepAnalysisPhase.FAILED
+    worker = h.worker_repository.get(h.request.analysis_id)
+    assert worker.status is JobStatus.RUNNING
+    assert h.worker_repository.finish(
+        h.request.analysis_id,
+        active.token,
+        result_from_analysis(h.request.worker_job, dynamic_result()),
+    )
+    assert h.worker_repository.get(h.request.analysis_id).status is JobStatus.COMPLETED
 
 
 def test_worker_envelope_unwraps_inner_observations_and_finishes_once(harness):

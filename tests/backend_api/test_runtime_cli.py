@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import signal
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -228,9 +229,16 @@ def test_run_once_and_cleanup_modes(monkeypatch, capsys):
     assert (2, False) in calls
     assert calls.count("close") == 1
     assert cli.main(["cleanup"]) == 0
-    assert calls[-1] == {"limit": 100, "delete": False}
+    assert calls[-1] == {"limit": 100, "delete": False, "after": None}
+    cursor = {"completed_at": "2026-09-08T00:00:00+00:00", "analysis_id": "run_1"}
+    assert cli.main(["cleanup", "--after", json.dumps(cursor)]) == 0
+    assert calls[-1] == {
+        "limit": 100,
+        "delete": False,
+        "after": (datetime(2026, 9, 8, tzinfo=timezone.utc), "run_1"),
+    }
     assert cli.main(["cleanup", "--delete", "--limit", "3"]) == 0
-    assert calls[-1] == {"limit": 3, "delete": True}
+    assert calls[-1] == {"limit": 3, "delete": True, "after": None}
     assert "processed" in capsys.readouterr().out
 
 

@@ -7,6 +7,7 @@ through the actual repositories; no test executes or emulates a PE.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections import Counter, deque
 from types import SimpleNamespace
@@ -164,6 +165,7 @@ def connected(request, monkeypatch, tmp_path):
         sqs=SqsClientDouble(),
         calls=Counter(),
         static_sufficient=False,
+        large_static=False,
         dynamic_status=DynamicAnalysisStatus.SUCCESS,
     )
 
@@ -189,6 +191,9 @@ def connected(request, monkeypatch, tmp_path):
                 CapaCapability(
                     "Synthetic capability",
                     namespace="load-code/inject",
+                    match_details=(
+                        ({"tree": "x" * (256 * 1024)},) if h.large_static else ()
+                    ),
                     attack=("Process Injection",) if h.static_sufficient else (),
                 )
             ],
@@ -351,6 +356,35 @@ def test_http_request_dispatches_worker_and_resumes_after_restart(
     assert h.tick() == []
     assert h.calls == {"capa": 1, "floss": 1, "speakeasy": 1, "llm": 1}
     assert len(h.initial.calls) == 1
+
+    snapshot = h.service.repository.get(identity).deep_result
+    assert snapshot["view_schema_version"] == "deep-view-v2"
+    assert "evidence" not in snapshot["result"]
+    assert snapshot["result"]["evidence_ref"] == "#/evidence"
+    assert deep["evidence_details"]
+
+
+def test_large_static_result_uses_runtime_s3_artifact_storage(connected):
+    h = connected
+    h.large_static = True
+    identity = submit(h)
+
+    h.tick()  # initial triage -> WAITING_DEEP
+    h.tick()  # CAPA/FLOSS -> bounded checkpoint + Worker queue
+
+    deep_service = h.processor.deep._service
+    saved = deep_service.repository.get(identity)
+    capa = saved.checkpoint["static"]["tool_results"]["CAPA"]
+    reference = capa["details_reference"]
+    artifact_key = reference["file_location"].split("/", 3)[-1]
+
+    assert "match_details" not in capa
+    assert reference["tool"] == "DEEP_CAPA"
+    assert artifact_key in h.s3.objects
+    archived = json.loads(h.s3.objects[artifact_key])
+    assert archived["capabilities"][0]["match_details"][0]["tree"] == "x" * (256 * 1024)
+    api_snapshot = h.service.repository.get(identity).deep_result
+    assert api_snapshot["static_results"]["CAPA"]["details_reference"] == reference
 
 
 @pytest.mark.parametrize("verdict", ["AUTO_BENIGN", "AUTO_MALICIOUS"])

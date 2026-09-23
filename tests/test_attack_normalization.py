@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from trust_triage.attack_mapping import technique_display_name
 from trust_triage.deep_analysis import (
     Evidence,
     EvidenceStatus,
     normalize_attack_label,
+    normalize_speakeasy_result,
 )
-from trust_triage.attack_mapping import technique_display_name
 
 
 def test_human_readable_attack_label_is_normalized() -> None:
@@ -33,9 +34,7 @@ def test_unknown_label_is_not_silently_dropped() -> None:
 
 
 def test_capa_evidence_contains_raw_and_normalized_attack_values() -> None:
-    technique = normalize_attack_label(
-        "Persistence::Create or Modify System Process"
-    )
+    technique = normalize_attack_label("Persistence::Create or Modify System Process")
     evidence = Evidence(
         evidence_id="evt-1",
         sha256="a" * 64,
@@ -45,9 +44,7 @@ def test_capa_evidence_contains_raw_and_normalized_attack_values() -> None:
         reliability=0.8,
         summary="CAPA match",
         status=EvidenceStatus.OBSERVED,
-        details={
-            "attack": ["Persistence::Create or Modify System Process"]
-        },
+        details={"attack": ["Persistence::Create or Modify System Process"]},
         attack_techniques=(technique,),
     )
 
@@ -67,3 +64,62 @@ def test_capa_summary_shows_analyst_facing_attack_label() -> None:
     technique = normalize_attack_label("Process Injection")
 
     assert technique_display_name(technique) == "[T1055] Process Injection"
+
+
+def _speakeasy_payload(*, observed_apis, events=None):
+    return {
+        "evidence_id": "dynamic-1",
+        "sha256": "a" * 64,
+        "status": "SUCCESS",
+        "observed_apis": observed_apis,
+        "behaviors": [],
+        "events": events or {},
+    }
+
+
+def test_open_scm_manager_alone_is_not_service_creation() -> None:
+    evidence = normalize_speakeasy_result(
+        _speakeasy_payload(observed_apis=["advapi32.OpenSCManagerW"])
+    )
+
+    assert all(
+        technique.technique_id != "T1543.003"
+        for item in evidence
+        for technique in item.attack_techniques
+    )
+
+
+def test_successful_create_service_maps_windows_service() -> None:
+    evidence = normalize_speakeasy_result(
+        _speakeasy_payload(
+            observed_apis=["advapi32.CreateServiceW"],
+            events={
+                "api_calls": [
+                    {"api_name": "advapi32.CreateServiceW", "ret_val": "0x1234"}
+                ]
+            },
+        )
+    )
+
+    assert any(
+        technique.technique_id == "T1543.003"
+        for item in evidence
+        for technique in item.attack_techniques
+    )
+
+
+def test_failed_create_service_call_is_not_mapped() -> None:
+    evidence = normalize_speakeasy_result(
+        _speakeasy_payload(
+            observed_apis=["advapi32.CreateServiceW"],
+            events={
+                "api_calls": [{"api_name": "advapi32.CreateServiceW", "ret_val": "0x0"}]
+            },
+        )
+    )
+
+    assert all(
+        technique.technique_id != "T1543.003"
+        for item in evidence
+        for technique in item.attack_techniques
+    )

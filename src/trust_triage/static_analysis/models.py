@@ -7,11 +7,12 @@ An unsuccessful tool invocation is an analysis event, not malicious evidence.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from ..evidence import Evidence, EvidenceStatus
+from ..evidence import Evidence
 
 
 class CapaBackend(str, Enum):
@@ -41,6 +42,7 @@ class CapaCapability:
     rule_name: str
     namespace: str = ""
     match_locations: tuple[str, ...] = ()
+    match_details: tuple[dict[str, Any], ...] = ()
     attack: tuple[str, ...] = ()
     mbc: tuple[str, ...] = ()
     description: str = ""
@@ -54,6 +56,7 @@ class CapaCapability:
             "rule_name": self.rule_name,
             "namespace": self.namespace,
             "match_locations": list(self.match_locations),
+            "match_details": [dict(item) for item in self.match_details],
             "match_count": self.match_count,
             "attack": list(self.attack),
             "mbc": list(self.mbc),
@@ -126,7 +129,8 @@ class CapaAnalysisResult:
                         "rule_name": capability.rule_name,
                         "namespace": capability.namespace,
                         "match_count": capability.match_count,
-                        "match_locations": list(capability.match_locations),
+                        "match_locations": list(capability.match_locations[:64]),
+                        "match_locations_truncated": capability.match_count > 64,
                         "attack": list(capability.attack),
                         "mbc": list(capability.mbc),
                         "attack_techniques": [

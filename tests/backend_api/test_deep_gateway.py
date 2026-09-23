@@ -17,6 +17,7 @@ from trust_triage.backend_api.deep_gateway import (
 )
 from trust_triage.backend_api.errors import BackendError
 from trust_triage.backend_api.repository import AnalysisRecord
+from trust_triage.storage import ArtifactIdentity, LocalArtifactStorage
 
 SHA = "a" * 64
 
@@ -88,6 +89,13 @@ class FakeService:
         self.calls.append(("get", analysis_id))
         return self.payload
 
+    def cancel(self, analysis_id, *, code, message):
+        self.calls.append(("cancel", (analysis_id, code, message)))
+
+    def resume_ready(self, limit, *, should_stop=None):
+        self.calls.append(("resume_ready", (limit, should_stop)))
+        return []
+
 
 def test_advance_registers_same_request_resumes_then_reads():
     service = FakeService()
@@ -113,6 +121,23 @@ def test_advance_registers_same_request_resumes_then_reads():
 def test_accepts_actual_service_lifecycle_and_failed_tools_without_sha(status):
     value = snapshot(status)
     assert validate_snapshot(value, record()) == value
+
+
+def test_static_result_artifact_reference_is_validated_for_sample_and_tool(tmp_path):
+    storage = LocalArtifactStorage(tmp_path / "artifacts")
+    reference = storage.put_json(
+        ArtifactIdentity(SHA, "analysis-1", "DEEP_CAPA", "run-1"),
+        {"capabilities": []},
+    )
+    value = snapshot()
+    value["static_results"]["CAPA"]["details_reference"] = reference.to_dict()
+
+    assert validate_snapshot(value, record()) == value
+
+    value["static_results"]["CAPA"]["details_reference"]["tool"] = "DEEP_FLOSS"
+    with pytest.raises(BackendError) as failure:
+        validate_snapshot(value, record())
+    assert failure.value.code == "DEEP_RESULT_INVALID"
 
 
 @pytest.mark.parametrize(
@@ -372,6 +397,36 @@ def test_missing_durable_deep_request_is_registered_before_resume():
     assert [name for name, _ in service.calls] == ["register", "resume", "get"]
 
 
+def test_parent_cancel_is_registered_before_durable_cancellation():
+    service = FakeService()
+    service.repository = SimpleNamespace(get=lambda analysis_id: None)
+    gateway = ExistingDeepGateway(
+        BackendConfig(), service=service, request_type=FakeRequest
+    )
+
+    gateway.cancel(record(), code="PARENT_TIMEOUT", message="deadline expired")
+
+    assert [name for name, _ in service.calls] == ["register", "cancel"]
+    assert service.calls[-1][1] == (
+        record().analysis_id,
+        "PARENT_TIMEOUT",
+        "deadline expired",
+    )
+
+
+def test_reconcile_uses_deep_service_independently_of_parent_queue():
+    service = FakeService()
+    stop = lambda: False
+    gateway = ExistingDeepGateway(
+        BackendConfig(storage_mode="s3", s3_bucket="backend-test-only"),
+        service=service,
+        request_type=FakeRequest,
+    )
+
+    assert gateway.reconcile(7, should_stop=stop) == []
+    assert service.calls == [("resume_ready", (7, stop))]
+
+
 @pytest.mark.parametrize("deep_terminal", [None, False, True])
 @pytest.mark.parametrize("worker_terminal", [None, False, True])
 def test_retention_requires_both_linked_jobs_to_be_absent_or_terminal(
@@ -412,6 +467,26 @@ def test_retention_requires_both_linked_jobs_to_be_absent_or_terminal(
     )
     assert reads == [("deep", record().analysis_id), ("worker", record().analysis_id)]
     assert not service.calls
+
+
+def test_retention_waits_for_terminal_deep_lease_to_expire():
+    request = stored_request()
+    service = FakeService()
+    service.repository = SimpleNamespace(
+        get=lambda analysis_id: SimpleNamespace(
+            request=request,
+            phase=SimpleNamespace(terminal=True),
+            claimed=True,
+        )
+    )
+    service.publisher = SimpleNamespace(repository=SimpleNamespace(get=lambda _: None))
+    gateway = ExistingDeepGateway(
+        BackendConfig(storage_mode="s3", s3_bucket="backend-test-only"),
+        service=service,
+        request_type=FakeRequest,
+    )
+
+    assert gateway.can_delete(record()) is False
 
 
 @pytest.mark.parametrize("source", ["deep", "worker"])

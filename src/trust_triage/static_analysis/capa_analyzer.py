@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -25,7 +26,6 @@ from .models import (
     CapaStatus,
     as_string_tuple,
 )
-
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 _DIAGNOSTIC_LINE_LIMIT = 40
@@ -87,6 +87,7 @@ class CapaConfig:
 class ParsedCapaReport:
     """Normalized fields extracted from CAPA's JSON report."""
 
+    sha256: str | None
     file_type: str
     capa_version: str | None
     rules_version: str | None
@@ -182,9 +183,7 @@ class CapaAnalyzer:
                 started=started,
             )
         except subprocess.TimeoutExpired as exc:
-            diagnostics = _diagnostic_lines(
-                _decode_output(exc.stderr or exc.stdout)
-            )
+            diagnostics = _diagnostic_lines(_decode_output(exc.stderr or exc.stdout))
             return self._failure_result(
                 sha256=sha256,
                 command=command,
@@ -227,8 +226,10 @@ class CapaAnalyzer:
         try:
             report = json.loads(completed.stdout)
             if not isinstance(report, Mapping):
-                raise ValueError("CAPA JSON report must be an object")
+                raise TypeError("CAPA JSON report must be an object")
             parsed = parse_capa_report(report)
+            if parsed.sha256 is not None and parsed.sha256 != sha256:
+                raise ValueError("CAPA report SHA-256 does not match the input file")
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return CapaAnalysisResult(
                 sha256=sha256,
@@ -243,13 +244,16 @@ class CapaAnalyzer:
                 raw_reference=raw_reference,
             )
 
+        warnings = list(stderr)
+        if parsed.sha256 is None:
+            warnings.append(
+                "CAPA report did not include SHA-256; input hash was verified locally"
+            )
         metadata = dict(parsed.analysis_metadata)
         metadata["execution_mode"] = "external_process"
         metadata["backend"] = self.config.backend.value
         metadata["analysis_started_at"] = analysis_started_at
-        metadata["rules_version"] = (
-            parsed.rules_version or self.config.rules_version
-        )
+        metadata["rules_version"] = parsed.rules_version or self.config.rules_version
         return CapaAnalysisResult(
             sha256=sha256,
             file_type=parsed.file_type,
@@ -259,7 +263,7 @@ class CapaAnalyzer:
             capa_version=parsed.capa_version,
             rules_version=parsed.rules_version or self.config.rules_version,
             analysis_metadata=metadata,
-            warnings=stderr,
+            warnings=warnings,
             returncode=completed.returncode,
             elapsed_ms=elapsed_ms,
             command=command,
@@ -320,21 +324,26 @@ class CapaAnalyzer:
 def parse_capa_report(report: Mapping[str, Any]) -> ParsedCapaReport:
     """Parse CAPA JSON while preserving capability and rule metadata."""
 
+    if not isinstance(report.get("meta"), Mapping):
+        raise TypeError("CAPA JSON field 'meta' must be an object")
+    if not isinstance(report.get("rules"), Mapping):
+        raise TypeError("CAPA JSON field 'rules' must be an object")
     meta = _mapping(report.get("meta"))
     analysis = _mapping(meta.get("analysis")) or _mapping(report.get("analysis"))
     sample = _mapping(meta.get("sample"))
+    if not analysis or not sample:
+        raise ValueError("CAPA JSON meta must contain analysis and sample objects")
+    report_sha256 = _optional_sha256(sample.get("sha256"), tool="CAPA")
 
-    raw_rules = report.get("rules", {})
-    if not isinstance(raw_rules, Mapping):
-        raise ValueError("CAPA JSON field 'rules' must be an object")
+    raw_rules = report["rules"]
 
     capabilities: list[CapaCapability] = []
     for rule_key, raw_rule in raw_rules.items():
         if not isinstance(raw_rule, Mapping):
-            raise ValueError(f"CAPA rule '{rule_key}' must be an object")
+            raise TypeError(f"CAPA rule '{rule_key}' must be an object")
         rule_meta = _mapping(raw_rule.get("meta"))
         matches = raw_rule.get("matches", raw_rule.get("locations"))
-        match_locations = _match_locations(matches)
+        match_locations, match_details = _match_entries(matches)
         if not match_locations:
             continue
 
@@ -353,6 +362,7 @@ def parse_capa_report(report: Mapping[str, Any]) -> ParsedCapaReport:
                 rule_name=rule_name,
                 namespace=namespace,
                 match_locations=match_locations,
+                match_details=match_details,
                 attack=as_string_tuple(
                     rule_meta.get("att&ck", rule_meta.get("attack"))
                 ),
@@ -381,6 +391,7 @@ def parse_capa_report(report: Mapping[str, Any]) -> ParsedCapaReport:
     if sample:
         analysis_metadata["sample"] = dict(sample)
     return ParsedCapaReport(
+        sha256=report_sha256,
         file_type=file_type,
         capa_version=capa_version,
         rules_version=rules_version,
@@ -403,14 +414,61 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
-def _match_locations(value: Any) -> tuple[str, ...]:
+def _match_entries(value: Any) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...]]:
     if value is None:
-        return ()
+        return (), ()
+    locations: list[str] = []
+    details: list[dict[str, Any]] = []
     if isinstance(value, Mapping):
-        return tuple(_render_match(item) for item in value)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return tuple(_render_match(item) for item in value)
-    return (_render_match(value),)
+        entries = value.items()
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        entries = value
+    else:
+        entries = (value,)
+
+    for entry in entries:
+        if (
+            isinstance(entry, Sequence)
+            and not isinstance(entry, (str, bytes, bytearray))
+            and len(entry) == 2
+            and isinstance(entry[1], Mapping)
+        ):
+            location, tree = entry
+            locations.append(_render_address(location))
+            details.append(_json_mapping(tree))
+        else:
+            locations.append(_render_address(entry))
+    return tuple(locations), tuple(details)
+
+
+def _match_locations(value: Any) -> tuple[str, ...]:
+    """Compatibility helper for callers that only need normalized addresses."""
+
+    return _match_entries(value)[0]
+
+
+def _render_address(value: Any) -> str:
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return hex(value)
+    if isinstance(value, Mapping):
+        address_type = str(value.get("type") or "").casefold()
+        address_value = value.get("value")
+        if address_type == "absolute" and isinstance(address_value, int):
+            return hex(address_value)
+    return _render_match(value)
+
+
+def _json_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        encoded = json.dumps(dict(value), ensure_ascii=False, allow_nan=False)
+        decoded = json.loads(encoded)
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("CAPA match tree must be finite JSON") from exc
+    if not isinstance(decoded, dict):
+        raise TypeError("CAPA match tree must be an object")
+    return decoded
 
 
 def _render_match(value: Any) -> str:
@@ -434,6 +492,14 @@ def _optional_text(*values: Any) -> str | None:
     return value or None
 
 
+def _optional_sha256(value: Any, *, tool: str) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+        raise ValueError(f"{tool} report SHA-256 is invalid")
+    return value.lower()
+
+
 def _decode_output(value: Any) -> str:
     if value is None:
         return ""
@@ -444,9 +510,7 @@ def _decode_output(value: Any) -> str:
 
 def _diagnostic_lines(value: Any) -> list[str]:
     return [
-        line.strip()
-        for line in _decode_output(value).splitlines()
-        if line.strip()
+        line.strip() for line in _decode_output(value).splitlines() if line.strip()
     ][:_DIAGNOSTIC_LINE_LIMIT]
 
 
@@ -468,6 +532,8 @@ def _classify_process_failure(returncode: int, stderr: str) -> CapaStatus:
         )
     ):
         return CapaStatus.ENVIRONMENT_MISMATCH
-    if any(marker in normalized for marker in ("unsupported", "not a pe", "invalid pe")):
+    if any(
+        marker in normalized for marker in ("unsupported", "not a pe", "invalid pe")
+    ):
         return CapaStatus.UNSUPPORTED
     return CapaStatus.TOOL_ERROR

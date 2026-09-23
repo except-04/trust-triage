@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS deep_analysis_runs (
     checkpoint jsonb,
     result jsonb,
     last_error jsonb CHECK (last_error IS NULL OR jsonb_typeof(last_error) = 'object'),
+    cancellation jsonb CHECK (cancellation IS NULL OR jsonb_typeof(cancellation) = 'object'),
     next_retry_at timestamptz,
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     lease_token uuid,
@@ -60,6 +61,9 @@ CREATE TABLE IF NOT EXISTS deep_analysis_runs (
             CASE phase WHEN 'COMPLETED' THEN 'COMPLETE' ELSE phase END
     ) IS TRUE)
 );
+
+-- Existing installations receive the durable parent-cancellation field in place.
+ALTER TABLE deep_analysis_runs ADD COLUMN IF NOT EXISTS cancellation jsonb;
 
 CREATE INDEX IF NOT EXISTS deep_analysis_runs_pending_idx
     ON deep_analysis_runs (updated_at, analysis_id)

@@ -455,7 +455,7 @@ class MemoryAnalysisRepository:
             self.retries.pop(analysis_id, None)
             return True
 
-    def cleanup_candidates(self, before_datetime, limit=10):
+    def cleanup_candidates(self, before_datetime, limit=10, *, after=None):
         self._fault("cleanup_candidates")
         with self._lock:
             return [
@@ -467,6 +467,11 @@ class MemoryAnalysisRepository:
                 if row.terminal
                 and row.storage_deleted_at is None
                 and datetime.fromisoformat(row.completed_at) < before_datetime
+                and (
+                    after is None
+                    or (datetime.fromisoformat(row.completed_at), row.analysis_id)
+                    > after
+                )
             ][:limit]
 
     def location_records(self, location):

@@ -141,6 +141,7 @@ class DeepAnalysisRecord:
     checkpoint: Mapping[str, Any] | None = None
     result: Mapping[str, Any] | None = None
     last_error: Mapping[str, Any] | None = None
+    cancellation: Mapping[str, Any] | None = None
     attempts: int = 0
     updated_at: str | None = None
     claimed: bool = False
@@ -160,6 +161,9 @@ class DeepAnalysisRecord:
             "result": dict(self.result) if self.result is not None else None,
             "last_error": dict(self.last_error)
             if self.last_error is not None
+            else None,
+            "cancellation": dict(self.cancellation)
+            if self.cancellation is not None
             else None,
             "attempt_count": self.attempts,
             "updated_at": self.updated_at,

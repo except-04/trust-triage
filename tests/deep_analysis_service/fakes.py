@@ -42,6 +42,7 @@ from trust_triage.speakeasy_worker.models import (
     result_from_analysis,
 )
 from trust_triage.speakeasy_worker.publisher import JobPublisher
+from trust_triage.storage import LocalArtifactStorage
 
 
 def detached(value):
@@ -96,15 +97,18 @@ class MemoryDeepRepository:
             checkpoint=detached(row.checkpoint),
             result=detached(row.result),
             last_error=detached(row.last_error),
+            cancellation=detached(row.cancellation),
             claimed=bool(lease and lease[1] > self.now),
         )
 
     def pending_ids(self, limit=10):
-        return [
+        values = [
             key
             for key, row in self.rows.items()
             if not row.phase.terminal and not self.get(key).claimed and self._ready(row)
-        ][:limit]
+        ]
+        values.sort(key=lambda key: self.rows[key].cancellation is None)
+        return values[:limit]
 
     @staticmethod
     def _ready(row):
@@ -125,13 +129,19 @@ class MemoryDeepRepository:
         self.rows[analysis_id] = replace(row, attempts=row.attempts + 1)
         return DeepAnalysisClaim(self.get(analysis_id), token)
 
-    def owns(self, analysis_id, token):
+    def _lease_owned(self, analysis_id, token):
         lease = self.leases.get(analysis_id)
         return bool(
             lease
             and lease[0] == token
             and lease[1] > self.now
             and not self.rows[analysis_id].phase.terminal
+        )
+
+    def owns(self, analysis_id, token):
+        return (
+            self._lease_owned(analysis_id, token)
+            and not self.rows[analysis_id].cancellation
         )
 
     def renew(self, analysis_id, token, lease_seconds):
@@ -181,6 +191,31 @@ class MemoryDeepRepository:
         self.rows[analysis_id] = replace(
             row,
             last_error=detached(error),
+        )
+        self.leases.pop(analysis_id, None)
+        return True
+
+    def request_cancel(self, analysis_id, reason):
+        row = self.rows[analysis_id]
+        if not row.phase.terminal:
+            self.rows[analysis_id] = replace(
+                row,
+                cancellation=detached(row.cancellation or reason),
+                last_error=None,
+            )
+        return self.get(analysis_id)
+
+    def finish_cancelled(self, analysis_id, token, result):
+        if (
+            not self._lease_owned(analysis_id, token)
+            or not self.rows[analysis_id].cancellation
+        ):
+            return False
+        self.rows[analysis_id] = replace(
+            self.rows[analysis_id],
+            phase=DeepAnalysisPhase.FAILED,
+            result=detached(result),
+            last_error=None,
         )
         self.leases.pop(analysis_id, None)
         return True
@@ -324,6 +359,7 @@ class ServiceHarness:
         self.worker_repository = worker_repository or WorkerMemoryRepository()
         self.queue = MemoryQueue()
         self.samples = FakeSamples(root)
+        self.artifact_storage = LocalArtifactStorage(root / "artifacts")
         self.capa = StaticAnalyzer("CAPA", sufficient=sufficient)
         self.floss = StaticAnalyzer("FLOSS")
         self.llm = FakeInterpreter()
@@ -334,6 +370,7 @@ class ServiceHarness:
             repository=self.repository,
             publisher=JobPublisher(self.worker_repository, self.queue),
             samples=self.samples,
+            artifact_storage=self.artifact_storage,
             orchestrator=DeepAnalysisOrchestrator(
                 capa_analyzer=self.capa,
                 floss_analyzer=self.floss,

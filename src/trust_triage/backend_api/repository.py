@@ -155,7 +155,11 @@ class AnalysisRepository(Protocol):
         error: Mapping[str, Any] | None = None,
     ) -> bool: ...
     def cleanup_candidates(
-        self, before_datetime: datetime, limit: int = 10
+        self,
+        before_datetime: datetime,
+        limit: int = 10,
+        *,
+        after: tuple[datetime, str] | None = None,
     ) -> list[AnalysisRecord]: ...
     def mark_sample_deleted(self, location: str) -> list[str]: ...
     def location_records(self, location: str) -> list[AnalysisRecord]: ...
@@ -651,18 +655,45 @@ class PostgresAnalysisRepository:
             )
 
     def cleanup_candidates(
-        self, before_datetime: datetime, limit: int = 10
+        self,
+        before_datetime: datetime,
+        limit: int = 10,
+        *,
+        after: tuple[datetime, str] | None = None,
     ) -> list[AnalysisRecord]:
         before = _aware_datetime(before_datetime)
         _limit(limit)
+        if after is not None:
+            if (
+                not isinstance(after, tuple)
+                or len(after) != 2
+                or not isinstance(after[1], str)
+                or not after[1]
+            ):
+                raise ValueError("cleanup cursor must contain datetime and analysis_id")
+            cursor_time = _aware_datetime(after[0])
+            cursor_id = after[1]
+        else:
+            cursor_time = None
+            cursor_id = None
+        cursor_clause = (
+            " AND (completed_at, analysis_id) > (%s, %s)" if after is not None else ""
+        )
+        parameters = (
+            (before, cursor_time, cursor_id, limit)
+            if after is not None
+            else (before, limit)
+        )
         with self._connection() as connection:
             return [
                 _record(row)
                 for row in connection.execute(
                     _SELECT
                     + " WHERE status IN ('COMPLETED', 'FAILED') AND storage_deleted_at IS NULL"
-                    " AND completed_at < %s ORDER BY completed_at, analysis_id LIMIT %s",
-                    (before, limit),
+                    " AND completed_at < %s"
+                    + cursor_clause
+                    + " ORDER BY completed_at, analysis_id LIMIT %s",
+                    parameters,
                 ).fetchall()
             ]
 

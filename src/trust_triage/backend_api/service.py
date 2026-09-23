@@ -24,6 +24,8 @@ from .schemas import (
 from .storage import SampleStorage, StoredSample
 
 LOGGER = logging.getLogger(__name__)
+CLEANUP_PAGE_SIZE = 100
+CLEANUP_SCAN_LIMIT = 1000
 
 
 def stored_sample(record: AnalysisRecord) -> StoredSample:
@@ -237,43 +239,96 @@ class BackendService:
             ],
         )
 
-    def cleanup(self, *, limit: int = 100, delete: bool = False) -> dict:
+    def cleanup(
+        self,
+        *,
+        limit: int = 100,
+        delete: bool = False,
+        after: tuple[datetime, str] | None = None,
+    ) -> dict:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("cleanup limit must be a positive integer")
+        if after is not None:
+            if (
+                not isinstance(after, tuple)
+                or len(after) != 2
+                or not isinstance(after[1], str)
+                or not after[1]
+            ):
+                raise ValueError("cleanup cursor must contain datetime and analysis_id")
+            try:
+                cursor_time = after[0].astimezone(timezone.utc)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "cleanup cursor must contain datetime and analysis_id"
+                ) from exc
+            if cursor_time.utcoffset() is None:
+                raise ValueError("cleanup cursor timestamp must include a timezone")
+            after = (cursor_time, after[1])
         before = datetime.now(timezone.utc) - timedelta(
             hours=self.config.retention_hours
         )
-        rows = self.repository.cleanup_candidates(before, limit)
-        deleted, skipped, visited = [], [], set()
+        deleted, skipped, visited, considered = [], [], set(), []
         deleted_samples = 0
-        for record in rows:
-            if record.file_location in visited:
-                continue
-            visited.add(record.file_location)
-            with self.repository.sample_transaction([record.sha256]) as transaction:
-                references = transaction.location_records(record.file_location)
-                if not references:
+        eligible_samples = 0
+        cursor = after
+        scanned = 0
+        while eligible_samples < limit and scanned < CLEANUP_SCAN_LIMIT:
+            page_limit = min(CLEANUP_PAGE_SIZE, CLEANUP_SCAN_LIMIT - scanned)
+            rows = self.repository.cleanup_candidates(before, page_limit, after=cursor)
+            if not rows:
+                break
+            for record in rows:
+                scanned += 1
+                cursor = (
+                    datetime.fromisoformat(record.completed_at),
+                    record.analysis_id,
+                )
+                if record.file_location in visited:
                     continue
-                if not all(
-                    self._can_expire(reference, before) for reference in references
-                ):
-                    skipped.extend(
-                        row.analysis_id
-                        for row in rows
-                        if row.file_location == record.file_location
-                    )
-                    continue
-                if delete:
-                    # Only sample.bin is deleted; per-run reports remain available.
-                    self.storage.delete(stored_sample(record))
-                    deleted.extend(
-                        transaction.mark_sample_deleted(record.file_location)
-                    )
-                    deleted_samples += 1
+                visited.add(record.file_location)
+                considered.append(record.analysis_id)
+                with self.repository.sample_transaction([record.sha256]) as transaction:
+                    references = transaction.location_records(record.file_location)
+                    if not references:
+                        continue
+                    if not all(
+                        self._can_expire(reference, before) for reference in references
+                    ):
+                        skipped.extend(
+                            reference.analysis_id
+                            for reference in references
+                            if reference.terminal
+                            and reference.completed_at is not None
+                            and datetime.fromisoformat(reference.completed_at) < before
+                        )
+                        continue
+                    eligible_samples += 1
+                    if delete:
+                        # Only sample.bin is deleted; per-run reports remain available.
+                        self.storage.delete(stored_sample(record))
+                        deleted.extend(
+                            transaction.mark_sample_deleted(record.file_location)
+                        )
+                        deleted_samples += 1
+                if eligible_samples >= limit:
+                    break
+            if len(rows) < page_limit:
+                break
+        scan_limit_reached = scanned >= CLEANUP_SCAN_LIMIT and eligible_samples < limit
         return {
-            "candidate_ids": [row.analysis_id for row in rows],
+            "candidate_ids": considered,
             "deleted_ids": deleted,
             "skipped_ids": skipped,
             "retention_hours": self.config.retention_hours,
             "deleted_sample_count": deleted_samples,
+            "scanned_candidate_count": scanned,
+            "scan_limit_reached": scan_limit_reached,
+            "next_cursor": (
+                {"completed_at": cursor[0].isoformat(), "analysis_id": cursor[1]}
+                if scan_limit_reached and cursor is not None
+                else None
+            ),
         }
 
     def _can_expire(self, record, before):

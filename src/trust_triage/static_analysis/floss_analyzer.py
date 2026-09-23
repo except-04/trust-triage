@@ -8,7 +8,6 @@ loads the input PE in the TRUST-TRIAGE process.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -24,7 +23,6 @@ from typing import Any
 
 from ..evidence import Evidence, EvidenceStatus
 from .capa_analyzer import sha256_file
-
 
 DEFAULT_FLOSS_TIMEOUT_SECONDS = 120.0
 DEFAULT_MIN_STRING_LENGTH = 4
@@ -230,9 +228,7 @@ class FlossAnalysisResult:
                     ),
                     severity=_severity_for_string(item),
                     reliability=reliability,
-                    summary=(
-                        f"FLOSS recovered {item.string_type}: {value}"
-                    ),
+                    summary=(f"FLOSS recovered {item.string_type}: {value}"),
                     status=EvidenceStatus.OBSERVED,
                     raw_reference=reference,
                     details={
@@ -325,8 +321,10 @@ class FlossAnalyzer:
                 file_type="UNKNOWN",
                 status=FlossStatus.ENVIRONMENT_MISMATCH,
                 errors=[
-                    "FLOSS working directory does not exist: "
-                    f"{self.config.working_directory}"
+                    (
+                        "FLOSS working directory does not exist: "
+                        f"{self.config.working_directory}"
+                    )
                 ],
                 raw_reference=raw_reference,
             )
@@ -410,8 +408,10 @@ class FlossAnalyzer:
         try:
             report = json.loads(completed.stdout)
             if not isinstance(report, Mapping):
-                raise ValueError("FLOSS JSON report must be an object")
+                raise TypeError("FLOSS JSON report must be an object")
             parsed = parse_floss_report(report)
+            if parsed.sha256 and parsed.sha256 != sample_sha256:
+                raise ValueError("FLOSS report SHA-256 does not match the input file")
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return FlossAnalysisResult(
                 sha256=sample_sha256,
@@ -425,6 +425,11 @@ class FlossAnalyzer:
                 raw_reference=raw_reference,
             )
 
+        warnings = list(stderr)
+        if not parsed.sha256:
+            warnings.append(
+                "FLOSS report did not include SHA-256; input hash was verified locally"
+            )
         metadata = dict(parsed.analysis_metadata)
         metadata["execution_mode"] = "external_process"
         metadata["analysis_started_at"] = analysis_started_at
@@ -436,7 +441,7 @@ class FlossAnalyzer:
             string_counts=dict(parsed.string_counts),
             floss_version=parsed.floss_version,
             analysis_metadata=metadata,
-            warnings=stderr,
+            warnings=warnings,
             returncode=completed.returncode,
             elapsed_ms=elapsed_ms,
             command=command,
@@ -476,11 +481,13 @@ def parse_floss_report(report: Mapping[str, Any]) -> ParsedFlossReport:
     additions do not break the integration.
     """
 
+    for field_name in ("metadata", "analysis", "strings"):
+        if not isinstance(report.get(field_name), Mapping):
+            raise TypeError(f"FLOSS JSON field '{field_name}' must be an object")
     metadata = _mapping(report.get("metadata"))
     analysis = _mapping(report.get("analysis"))
     raw_strings = _mapping(report.get("strings"))
-    if not isinstance(report.get("strings", {}), Mapping):
-        raise ValueError("FLOSS JSON field 'strings' must be an object")
+    report_sha256 = _optional_sha256(metadata.get("sha256"), tool="FLOSS")
 
     parsed_strings: list[FlossString] = []
     string_counts: dict[str, int] = {}
@@ -492,7 +499,7 @@ def parse_floss_report(report: Mapping[str, Any]) -> ParsedFlossReport:
         if not isinstance(group_values, Sequence) or isinstance(
             group_values, (str, bytes, bytearray)
         ):
-            raise ValueError(f"FLOSS string group '{group_name}' must be a list")
+            raise TypeError(f"FLOSS string group '{group_name}' must be a list")
 
         canonical_group = str(group_name)
         count = 0
@@ -552,7 +559,7 @@ def parse_floss_report(report: Mapping[str, Any]) -> ParsedFlossReport:
     analysis_metadata = dict(analysis)
     analysis_metadata["metadata"] = dict(metadata)
     return ParsedFlossReport(
-        sha256=_first_text(metadata.get("sha256")),
+        sha256=report_sha256 or "",
         file_type=file_type,
         floss_version=floss_version,
         analysis_metadata=analysis_metadata,
@@ -607,6 +614,14 @@ def _optional_text(*values: Any) -> str | None:
     return value or None
 
 
+def _optional_sha256(value: Any, *, tool: str) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+        raise ValueError(f"{tool} report SHA-256 is invalid")
+    return value.lower()
+
+
 def _scalar(*values: Any) -> int | str | None:
     for value in values:
         if isinstance(value, (int, str)) and not isinstance(value, bool):
@@ -641,9 +656,7 @@ def _decode_output(value: Any) -> str:
 
 def _diagnostic_lines(value: Any) -> list[str]:
     return [
-        line.strip()
-        for line in _decode_output(value).splitlines()
-        if line.strip()
+        line.strip() for line in _decode_output(value).splitlines() if line.strip()
     ][:_DIAGNOSTIC_LINE_LIMIT]
 
 

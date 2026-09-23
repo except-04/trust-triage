@@ -31,6 +31,12 @@ flowchart TD
 
 정적 분석 체크포인트는 SQS 전송보다 먼저 commit한다. 전송 실패는 `dispatch_pending`에서 복구한다. 재시작·반복 polling 시 정적 분석과 완료 Worker 작업을 반복하지 않는다. 결과 저장 재시도에서는 계산된 결과를 재사용한다. 체크포인트 저장 전 강제 종료나 저장 재시도 소진으로 외부 도구 호출이 다시 발생할 가능성까지 없애는 exactly-once 보장은 제공하지 않는다.
 
+Backend의 전체 심층분석 대기 기한이 끝나면 `deep_analysis_runs.cancellation`에
+종료 사유를 먼저 기록한다. 이 값은 기존 Deep Analysis lease의 갱신과 결과
+저장을 fence한다. `backend_api run`의 독립 조정 단계가 lease 만료 후 실패 결과를
+확정한다. 아직 실행 중인 Speakeasy Worker의 결과를 덮어쓰지 않으며, Worker가
+종료 상태가 되기 전까지 원본 삭제도 허용하지 않는다.
+
 Worker 결과의 분석 번호·해시·단계·상세 도구 상태·산출물 참조를 검증하고, 전체 결과를 체크포인트에 복사한다. 이후 Worker 행을 다시 조회하지 않아도 저장된 증거를 읽을 수 있다. 원본 정리는 Deep Analysis와 Worker가 모두 종료했는지 확인한 뒤 Backend 보관 정책으로 처리한다.
 
 ## 실행 절차
@@ -60,6 +66,10 @@ Backend 서버의 [.env.backend.example](../../.env.backend.example)을 기준�
 & $workerPython -m trust_triage.speakeasy_worker --env-file .env check
 & $workerPython -m trust_triage.speakeasy_worker --env-file .env run
 ```
+
+이번 스키마에는 기존 `deep_analysis_runs`에 nullable `cancellation` JSONB 열이
+추가된다. 배포 시 서비스 재시작 전에 위 `init-db --deep` 명령을 한 번 실행한다.
+기존 체크포인트와 완료 결과는 변환하지 않고 그대로 읽는다.
 
 Backend에 연결된 요청은 위 세 프로세스로 진행한다. `deep_analysis run`을 추가로 띄울 필요는 없다. 별도 시스템에서 Deep Analysis를 직접 호출하는 경우에는 `python -m trust_triage.deep_analysis`의 `start`·`resume`·`run` 명령을 사용할 수 있다.
 

@@ -8,6 +8,7 @@ import logging
 import multiprocessing
 import signal
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from .errors import BackendError
@@ -57,6 +58,10 @@ def parser() -> argparse.ArgumentParser:
         help="원본 삭제 실행. 생략하면 대상 번호만 조회",
     )
     cleanup.add_argument("--limit", type=int, default=100)
+    cleanup.add_argument(
+        "--after",
+        help="이전 cleanup 결과의 next_cursor JSON을 전달해 다음 후보부터 계속 검사",
+    )
     export = commands.add_parser("export-openapi", help="접속 없이 API 명세 JSON 생성")
     export.add_argument(
         "--output", type=Path, default=Path("docs/backend-api/openapi.json")
@@ -109,7 +114,28 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "check":
             print(json.dumps(check(service, analysis=args.analysis, deep=args.deep)))
         elif args.command == "cleanup":
-            print(json.dumps(service.cleanup(limit=args.limit, delete=args.delete)))
+            after = None
+            if args.after:
+                value = json.loads(args.after)
+                if (
+                    not isinstance(value, dict)
+                    or set(value) != {"completed_at", "analysis_id"}
+                    or not isinstance(value["completed_at"], str)
+                ):
+                    raise ValueError(
+                        "--after must be a cleanup next_cursor JSON object"
+                    )
+                after = (
+                    datetime.fromisoformat(
+                        value["completed_at"].replace("Z", "+00:00")
+                    ),
+                    value["analysis_id"],
+                )
+            print(
+                json.dumps(
+                    service.cleanup(limit=args.limit, delete=args.delete, after=after)
+                )
+            )
         elif args.command == "serve":
             import uvicorn
 

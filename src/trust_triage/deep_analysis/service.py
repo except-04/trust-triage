@@ -15,9 +15,10 @@ if TYPE_CHECKING:
     from typing_extensions import Self
 
 from ..speakeasy_worker.errors import LeaseLost, PermanentError, RetryableError
-from ..speakeasy_worker.models import InvalidJob, JobConflict, utc_now
+from ..speakeasy_worker.models import InvalidJob, JobConflict, failure_result, utc_now
 from ..speakeasy_worker.publisher import JobPublisher
 from ..speakeasy_worker.storage import SampleStore
+from ..storage import ArtifactError, ArtifactIdentity
 from .checkpoints import StaticAnalysisCheckpoint, json_snapshot
 from .models import DeepAnalysisDisposition, DeepAnalysisResult, DeepAnalysisStatus
 from .orchestrator import DeepAnalysisOrchestrator
@@ -27,6 +28,8 @@ from .worker_results import analysis_from_worker, validate_worker_record
 
 LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
+_INLINE_TOOL_RESULT_BYTES = 128 * 1024
+_TOOL_RESULT_PREVIEW_ITEMS = 64
 
 
 @dataclass(frozen=True)
@@ -141,6 +144,7 @@ class DeepAnalysisService:
         publisher: JobPublisher,
         samples: SampleStore,
         orchestrator: DeepAnalysisOrchestrator,
+        artifact_storage=None,
         limits: DeepServiceLimits | None = None,
     ) -> None:
         if orchestrator.config.enable_ghidra_capa:
@@ -149,6 +153,7 @@ class DeepAnalysisService:
             )
         self.repository, self.publisher = repository, publisher
         self.samples, self.orchestrator = samples, orchestrator
+        self.artifact_storage = artifact_storage
         self.limits = limits or DeepServiceLimits()
         self.config_fingerprint = orchestrator.config.fingerprint()
 
@@ -162,6 +167,26 @@ class DeepAnalysisService:
 
         self._validate_route(request)
         return self.repository.register(request, self.config_fingerprint)
+
+    def cancel(
+        self, analysis_id: str, *, code: str, message: str
+    ) -> DeepAnalysisRecord:
+        """Persist a parent cancellation and fence any active deep-analysis owner."""
+
+        if not isinstance(code, str) or not code or len(code) > 128:
+            raise ValueError("cancellation code must contain 1-128 characters")
+        if not isinstance(message, str) or not message or len(message) > 1000:
+            raise ValueError("cancellation message must contain 1-1000 characters")
+        record = self.repository.get(analysis_id)
+        if record is None:
+            raise ValueError("Deep-analysis request was not found")
+        if record.phase.terminal:
+            return record
+        record = self.repository.request_cancel(
+            analysis_id, {"code": code, "message": message}
+        )
+        self._cancel_worker(record.request)
+        return self.resume(analysis_id)
 
     def _validate_route(self, request: DeepAnalysisRequest) -> None:
         automatic = {"AUTO_BENIGN": "BENIGN", "AUTO_MALICIOUS": "MALICIOUS"}
@@ -186,10 +211,17 @@ class DeepAnalysisService:
                 self.repository, record.request, token, self.limits
             ) as guard:
                 try:
+                    if record.cancellation is not None:
+                        self._cancel_worker(record.request)
+                        return self._save_cancelled(record, token)
                     if record.config_fingerprint != self.config_fingerprint:
                         raise PermanentError(
                             "PIPELINE_CONFIG_CHANGED",
                             "Resume requires the original deep-analysis configuration",
+                        )
+                    if record.phase is not DeepAnalysisPhase.STATIC:
+                        record = self._archive_checkpoint_tool_results(
+                            record, token, guard
                         )
                     return self._advance(record, token, guard)
                 except LeaseLost:
@@ -270,6 +302,7 @@ class DeepAnalysisService:
             if isinstance(prepared, DeepAnalysisResult):
                 return self._save_result(record, token, prepared, guard)
             self._validate_checkpoint(request, prepared, record.config_fingerprint)
+            prepared = self._archive_large_tool_results(prepared, request, token)
             envelope = {
                 "schema_version": "deep-checkpoint-v1",
                 "static": prepared.to_dict(),
@@ -361,6 +394,54 @@ class DeepAnalysisService:
                     "Checkpoint evidence assessment does not match its evidence"
                 )
 
+    def _archive_checkpoint_tool_results(self, record, token, guard):
+        checkpoint = self._load_checkpoint(record)
+        archived = self._archive_large_tool_results(checkpoint, record.request, token)
+        if archived.tool_results == checkpoint.tool_results:
+            return record
+        envelope = dict(record.checkpoint)
+        envelope["static"] = archived.to_dict()
+        return self._save_checkpoint(record, token, envelope, record.phase, guard)
+
+    def _archive_large_tool_results(self, checkpoint, request, token):
+        results = dict(checkpoint.tool_results)
+        changed = False
+        for tool, result in checkpoint.tool_results.items():
+            if "details_reference" in result:
+                continue
+            encoded = json.dumps(
+                result, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            ).encode("utf-8")
+            if len(encoded) <= _INLINE_TOOL_RESULT_BYTES:
+                continue
+            if self.artifact_storage is None:
+                # Non-runtime service users retain the durable checkpoint; GET
+                # has a legacy compaction path so oversized detail cannot wedge
+                # the parent Backend result.
+                continue
+            version = result.get("capa_version", result.get("floss_version"))
+            try:
+                reference = self.artifact_storage.put_json(
+                    ArtifactIdentity(
+                        sha256=request.sha256,
+                        analysis_id=request.analysis_id,
+                        tool=f"DEEP_{tool}",
+                        tool_run_id=token,
+                        name="result.json",
+                    ),
+                    result,
+                    tool_version=version if isinstance(version, str) else None,
+                    config_sha256=self.config_fingerprint,
+                )
+            except ArtifactError as exc:
+                error_type = RetryableError if exc.retryable else PermanentError
+                raise error_type(exc.code, exc.message) from exc
+            results[tool] = _tool_result_preview(
+                tool, result, details_reference=reference.to_dict()
+            )
+            changed = True
+        return replace(checkpoint, tool_results=results) if changed else checkpoint
+
     def _load_checkpoint(self, record: DeepAnalysisRecord) -> StaticAnalysisCheckpoint:
         value = record.checkpoint
         if (
@@ -430,6 +511,51 @@ class DeepAnalysisService:
         saved = self._write(save, guard)
         _log("finished", record.request, phase=saved.phase.value)
         return saved
+
+    def _save_cancelled(self, record, token) -> DeepAnalysisRecord:
+        cancellation = record.cancellation
+        if not isinstance(cancellation, Mapping):
+            raise TypeError("Cancelled analysis is missing its durable reason")
+        code = cancellation.get("code")
+        message = cancellation.get("message")
+        if not isinstance(code, str) or not isinstance(message, str):
+            raise TypeError("Cancelled analysis has an invalid durable reason")
+        result = self._failure(record, code, message)
+        payload = result.to_dict()
+        json_snapshot(payload)
+        for attempt in range(self.limits.persistence_attempts):
+            try:
+                if self.repository.finish_cancelled(
+                    record.request.analysis_id, token, payload
+                ):
+                    saved = self._get_record(record.request.analysis_id)
+                    _log("cancelled", record.request, code=code)
+                    return saved
+                saved = self._get_record(record.request.analysis_id)
+                if saved.phase.terminal:
+                    return saved
+                raise LeaseLost()
+            except RetryableError:
+                if attempt + 1 == self.limits.persistence_attempts:
+                    raise
+                time.sleep(0.1 * (2**attempt))
+        raise AssertionError("unreachable cancellation persistence attempt")
+
+    def _cancel_worker(self, request: DeepAnalysisRequest) -> None:
+        worker_repository = self.publisher.repository
+        worker = worker_repository.get(request.analysis_id)
+        if worker is None or worker.status.terminal:
+            return
+        if not worker.job.same_input(request.worker_job):
+            raise JobConflict("Worker cancellation belongs to another input")
+        worker_repository.dead_letter(
+            request.worker_job,
+            failure_result(
+                request.worker_job,
+                "PARENT_ANALYSIS_CANCELLED",
+                "Parent analysis ended before Speakeasy completion",
+            ),
+        )
 
     def _failure(self, record, code, message) -> DeepAnalysisResult:
         checkpoint = None
@@ -512,6 +638,7 @@ class DeepAnalysisService:
         if record is None:
             return None
         payload = record.to_dict()
+        payload["view_schema_version"] = "deep-view-v2"
         payload.update(
             tool_statuses={}, evidence=[], static_results={}, speakeasy_result=None
         )
@@ -544,7 +671,122 @@ class DeepAnalysisService:
         if record.result is not None:
             payload["tool_statuses"].update(record.result.get("tool_statuses", {}))
             payload["evidence"] = record.result.get("evidence", [])
-        return json_snapshot(payload)
+            compact_result = dict(record.result)
+            if "evidence" in compact_result:
+                compact_result.pop("evidence")
+                compact_result["evidence_ref"] = "#/evidence"
+            if "tool_statuses" in compact_result:
+                compact_result.pop("tool_statuses")
+                compact_result["tool_statuses_ref"] = "#/tool_statuses"
+            payload["result"] = compact_result
+        try:
+            return json_snapshot(payload)
+        except ValueError as exc:
+            if "exceeds the 8 MiB limit" not in str(exc):
+                raise
+            # Old checkpoints may contain large inline CAPA/FLOSS details.
+            # Keep the full checkpoint untouched while returning a bounded
+            # summary to the Backend API.
+            payload["static_results"] = {
+                tool: _tool_result_preview(
+                    tool,
+                    result,
+                    details_status="INLINE_IN_CHECKPOINT",
+                )
+                for tool, result in payload["static_results"].items()
+            }
+            payload["static_results_compacted"] = True
+            return json_snapshot(payload)
+
+
+def _tool_result_preview(
+    tool: str,
+    result: Mapping[str, Any],
+    *,
+    details_reference: Mapping[str, Any] | None = None,
+    details_status: str | None = None,
+) -> dict[str, Any]:
+    """Expose display fields inline and keep full parsed output by reference."""
+
+    summary = {
+        key: result[key]
+        for key in (
+            "sha256",
+            "file_type",
+            "status",
+            "elapsed_ms",
+            "returncode",
+            "raw_reference",
+        )
+        if key in result
+    }
+    for field in ("warnings", "errors"):
+        values = result.get(field)
+        if isinstance(values, list):
+            summary[field] = [
+                value[:512] if isinstance(value, str) else str(value)[:512]
+                for value in values[:8]
+            ]
+            if len(values) > 8:
+                summary[f"{field}_truncated"] = True
+
+    if tool == "CAPA":
+        for field in ("backend", "capa_version", "rules_version"):
+            if field in result:
+                summary[field] = result[field]
+        capabilities = result.get("capabilities")
+        if isinstance(capabilities, list):
+            summary["capabilities"] = [
+                {
+                    key: (
+                        value[:512]
+                        if key == "description" and isinstance(value, str)
+                        else value
+                    )
+                    for key, value in capability.items()
+                    if key
+                    in {
+                        "rule_name",
+                        "namespace",
+                        "match_count",
+                        "attack",
+                        "mbc",
+                        "description",
+                    }
+                }
+                for capability in capabilities[:_TOOL_RESULT_PREVIEW_ITEMS]
+                if isinstance(capability, Mapping)
+            ]
+            summary["capabilities_count"] = len(capabilities)
+            if len(capabilities) > _TOOL_RESULT_PREVIEW_ITEMS:
+                summary["capabilities_truncated"] = True
+    else:
+        if "floss_version" in result:
+            summary["floss_version"] = result["floss_version"]
+        counts = result.get("string_counts")
+        if isinstance(counts, Mapping):
+            summary["string_counts"] = dict(counts)
+        strings = result.get("strings")
+        if isinstance(strings, list):
+            preview = []
+            for item in strings[:_TOOL_RESULT_PREVIEW_ITEMS]:
+                if not isinstance(item, Mapping):
+                    continue
+                value = dict(item)
+                if isinstance(value.get("string"), str):
+                    value["string"] = value["string"][:2048]
+                if isinstance(value.get("tags"), list):
+                    value["tags"] = value["tags"][:8]
+                preview.append(value)
+            summary["strings"] = preview
+            summary["strings_count"] = len(strings)
+            if len(strings) > _TOOL_RESULT_PREVIEW_ITEMS:
+                summary["strings_truncated"] = True
+
+    summary["details_status"] = details_status or "ARCHIVED"
+    if details_reference is not None:
+        summary["details_reference"] = dict(details_reference)
+    return summary
 
 
 def _retry_due(record: DeepAnalysisRecord) -> bool:

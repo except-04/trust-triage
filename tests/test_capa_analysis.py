@@ -78,6 +78,29 @@ def test_parse_report_preserves_capability_metadata() -> None:
     assert capability.attack == ("Persistence::Create or Modify System Process",)
 
 
+def test_parse_real_result_document_match_pair_separates_address_and_tree() -> None:
+    report = _report()
+    match_tree = {
+        "success": True,
+        "node": {
+            "type": "feature",
+            "feature": {"type": "api", "api": "CreateServiceW"},
+        },
+        "children": [],
+        "locations": [{"type": "absolute", "value": 0x401000}],
+        "captures": {},
+    }
+    report["rules"]["create service"]["matches"] = [
+        [{"type": "absolute", "value": 0x401000}, match_tree]
+    ]
+
+    capability = parse_capa_report(report).capabilities[0]
+
+    assert capability.match_locations == ("0x401000",)
+    assert capability.match_details == (match_tree,)
+    assert "success" not in capability.match_locations[0]
+
+
 def test_analyze_success_returns_evidence_without_running_sample(
     monkeypatch,
     tmp_path: Path,
@@ -114,6 +137,48 @@ def test_analyze_success_returns_evidence_without_running_sample(
     assert evidence["raw_reference"] == "reports/capa/sample.json"
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["timeout"] == 120.0
+
+
+def test_report_hash_mismatch_is_rejected_without_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    sample = _sample(tmp_path)
+    report = _report()
+    report["meta"]["sample"]["sha256"] = "f" * 64
+
+    monkeypatch.setattr(
+        capa_module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(report), stderr=""
+        ),
+    )
+
+    result = CapaAnalyzer().analyze(sample)
+
+    assert result.status is CapaStatus.PARSE_ERROR
+    assert result.to_evidence() == []
+    assert any("SHA-256" in error for error in result.errors)
+
+
+def test_supported_report_without_hash_is_accepted_with_warning(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    sample = _sample(tmp_path)
+    monkeypatch.setattr(
+        capa_module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(_report()), stderr=""
+        ),
+    )
+
+    result = CapaAnalyzer().analyze(sample)
+
+    assert result.status is CapaStatus.SUCCESS
+    assert any("did not include SHA-256" in warning for warning in result.warnings)
 
 
 def test_ghidra_backend_sets_installation_environment(
@@ -180,7 +245,9 @@ def test_missing_capa_executable_is_environment_mismatch(
     assert result.to_evidence() == []
 
 
-def test_invalid_input_does_not_start_external_process(monkeypatch, tmp_path: Path) -> None:
+def test_invalid_input_does_not_start_external_process(
+    monkeypatch, tmp_path: Path
+) -> None:
     called = False
 
     def fake_run(command, **kwargs):
@@ -206,4 +273,20 @@ def test_invalid_json_is_parse_error(monkeypatch, tmp_path: Path) -> None:
 
     assert result.status is CapaStatus.PARSE_ERROR
     assert result.errors
+    assert result.to_evidence() == []
+
+
+def test_empty_json_object_is_not_a_capa_report(monkeypatch, tmp_path: Path) -> None:
+    sample = _sample(tmp_path)
+
+    monkeypatch.setattr(
+        capa_module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="{}", stderr=""
+        ),
+    )
+    result = CapaAnalyzer().analyze(sample)
+
+    assert result.status is CapaStatus.PARSE_ERROR
     assert result.to_evidence() == []
