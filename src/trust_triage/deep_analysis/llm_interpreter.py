@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import multiprocessing
 import os
 import re
 import time
@@ -30,6 +31,7 @@ _TECHNIQUE_ID_PATTERN = re.compile(r"^T\d{4}(?:\.\d{3})?$")
 _MAX_TEXT_LENGTH = 2000
 _DEFAULT_MAX_EVIDENCE_ITEMS = 40
 _DEFAULT_MAX_INPUT_CHARS = 24000
+_DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_EVIDENCE_TEXT_LENGTH = 600
 _MAX_CONTEXT_TEXT_LENGTH = 400
 _MAX_CONTEXT_ITEMS = 8
@@ -60,6 +62,7 @@ class MonoGPTConfig:
     max_tokens: int = 1600
     max_evidence_items: int = _DEFAULT_MAX_EVIDENCE_ITEMS
     max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS
+    max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES
 
     @classmethod
     def from_env(cls, *, load_env_file: bool = True) -> MonoGPTConfig:
@@ -90,6 +93,10 @@ class MonoGPTConfig:
             "MONOGPT_MAX_INPUT_CHARS",
             str(_DEFAULT_MAX_INPUT_CHARS),
         )
+        max_response_bytes_raw = os.getenv(
+            "MONOGPT_MAX_RESPONSE_BYTES",
+            str(_DEFAULT_MAX_RESPONSE_BYTES),
+        )
         try:
             timeout_seconds = float(timeout_raw)
         except ValueError as exc:
@@ -106,6 +113,10 @@ class MonoGPTConfig:
             max_input_chars = int(max_input_chars_raw)
         except ValueError as exc:
             raise ValueError("MONOGPT_MAX_INPUT_CHARS must be an integer") from exc
+        try:
+            max_response_bytes = int(max_response_bytes_raw)
+        except ValueError as exc:
+            raise ValueError("MONOGPT_MAX_RESPONSE_BYTES must be an integer") from exc
 
         return cls(
             api_key=api_key,
@@ -116,6 +127,7 @@ class MonoGPTConfig:
             max_tokens=max_tokens,
             max_evidence_items=max_evidence_items,
             max_input_chars=max_input_chars,
+            max_response_bytes=max_response_bytes,
         )
 
     def __post_init__(self) -> None:
@@ -127,6 +139,8 @@ class MonoGPTConfig:
             raise ValueError("max_evidence_items must be positive")
         if self.max_input_chars <= 0:
             raise ValueError("max_input_chars must be positive")
+        if not 128 <= self.max_response_bytes <= 8 * 1024 * 1024:
+            raise ValueError("max_response_bytes must be between 128 bytes and 8 MiB")
 
     @property
     def is_configured(self) -> bool:
@@ -138,6 +152,134 @@ class MonoGPTConfig:
         if base_url.endswith("/chat/completions"):
             return base_url
         return f"{base_url}/chat/completions"
+
+
+def _http_post_process(
+    sender: Any,
+    *,
+    url: str,
+    headers: Mapping[str, str],
+    payload: Mapping[str, Any],
+    timeout_seconds: float,
+    max_response_bytes: int,
+) -> None:
+    """Read one bounded response in a disposable process.
+
+    The parent owns the wall-clock deadline and may terminate this process.
+    A terminated process closes its socket and cannot keep a service lease or
+    a Python worker thread alive after the caller has timed out.
+    """
+
+    session = requests.Session()
+    try:
+        sender.send(("ready",))
+        read_timeout = max(0.05, min(1.0, timeout_seconds))
+        connect_timeout = max(0.05, min(5.0, timeout_seconds))
+        with session.post(
+            url,
+            headers=dict(headers),
+            json=dict(payload),
+            timeout=(connect_timeout, read_timeout),
+            stream=True,
+        ) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    declared_size = int(content_length)
+                except ValueError:
+                    declared_size = -1
+                if declared_size > max_response_bytes:
+                    sender.send(("too_large", response.status_code))
+                    return
+
+            body = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                body.extend(chunk)
+                if len(body) > max_response_bytes:
+                    sender.send(("too_large", response.status_code))
+                    return
+            sender.send(("response", response.status_code, bytes(body)))
+    except requests.Timeout:
+        sender.send(("timeout",))
+    except requests.RequestException as exc:
+        sender.send(("request_error", type(exc).__name__))
+    except (OSError, TypeError, ValueError) as exc:
+        sender.send(("request_error", type(exc).__name__))
+    finally:
+        session.close()
+        sender.close()
+
+
+def _stop_http_process(process: Any) -> None:
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=0.2)
+    else:
+        process.join(timeout=0.05)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=0.2)
+
+
+def _bounded_http_post(
+    config: MonoGPTConfig,
+    *,
+    headers: Mapping[str, str],
+    payload: Mapping[str, Any],
+) -> tuple[Any, ...]:
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_http_post_process,
+        kwargs={
+            "sender": sender,
+            "url": config.completions_url,
+            "headers": dict(headers),
+            "payload": dict(payload),
+            "timeout_seconds": config.timeout_seconds,
+            "max_response_bytes": config.max_response_bytes,
+        },
+        name="monogpt-http-request",
+        daemon=True,
+    )
+    try:
+        process.start()
+    except (AssertionError, OSError, RuntimeError):
+        sender.close()
+        receiver.close()
+        return ("request_error", "ProcessStartError")
+    sender.close()
+    try:
+        # Process startup is outside the network deadline. Once the child is
+        # ready, the configured limit covers the entire HTTP exchange.
+        startup_deadline = time.monotonic() + 10.0
+        while time.monotonic() < startup_deadline:
+            if receiver.poll(0.05):
+                message = receiver.recv()
+                if message == ("ready",):
+                    break
+                return tuple(message)
+            if not process.is_alive():
+                return ("request_error", "ProcessExit")
+        else:
+            return ("request_error", "ProcessStartupTimeout")
+
+        deadline = time.monotonic() + config.timeout_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return ("timeout",)
+            if receiver.poll(min(0.05, remaining)):
+                return tuple(receiver.recv())
+            if not process.is_alive():
+                return ("request_error", "ProcessExit")
+    except (EOFError, OSError, TypeError, ValueError):
+        return ("request_error", "ProtocolError")
+    finally:
+        receiver.close()
+        _stop_http_process(process)
 
 
 class MonoGPTClaudeInterpreter:
@@ -154,7 +296,9 @@ class MonoGPTClaudeInterpreter:
         session: requests.Session | None = None,
     ) -> None:
         self.config = config or MonoGPTConfig.from_env()
-        self.session = session or requests.Session()
+        # Kept as a compatibility attribute for callers that inspected the
+        # injected session. Network I/O now always runs in the bounded child.
+        self.session = session
 
     @classmethod
     def from_env(cls) -> MonoGPTClaudeInterpreter:
@@ -220,39 +364,49 @@ class MonoGPTClaudeInterpreter:
             "response_format": {"type": "json_object"},
         }
 
-        try:
-            response = self.session.post(
-                self.config.completions_url,
-                headers={
-                    "Authorization": f"Bearer {self.config.api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                json=request_payload,
-                timeout=self.config.timeout_seconds,
-            )
-        except requests.Timeout:
+        outcome = _bounded_http_post(
+            self.config,
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            payload=request_payload,
+        )
+        if outcome[0] == "timeout":
             return self._result(
                 status=LLMInterpretationStatus.TIMEOUT,
                 started=started,
                 error=f"MonoGPT request timed out after {self.config.timeout_seconds:g}s",
             )
-        except requests.RequestException as exc:
+        if outcome[0] == "too_large":
             return self._result(
-                status=LLMInterpretationStatus.API_ERROR,
+                status=LLMInterpretationStatus.INVALID_RESPONSE,
                 started=started,
-                error=f"MonoGPT request failed: {type(exc).__name__}",
+                error=("MonoGPT response exceeded the configured response size limit"),
             )
-
-        if not response.ok:
+        if outcome[0] == "request_error":
             return self._result(
                 status=LLMInterpretationStatus.API_ERROR,
                 started=started,
-                error=f"MonoGPT returned HTTP {response.status_code}",
+                error=f"MonoGPT request failed: {outcome[1]}",
+            )
+        if outcome[0] != "response":
+            return self._result(
+                status=LLMInterpretationStatus.API_ERROR,
+                started=started,
+                error="MonoGPT request failed: ProtocolError",
+            )
+        _, status_code, response_body = outcome
+        if not 200 <= status_code < 300:
+            return self._result(
+                status=LLMInterpretationStatus.API_ERROR,
+                started=started,
+                error=f"MonoGPT returned HTTP {status_code}",
             )
 
         try:
-            response_json = response.json()
+            response_json = json.loads(response_body.decode("utf-8"))
             content = _extract_content(response_json)
             parsed = _parse_json_content(content)
             return self._validated_result(
@@ -260,7 +414,7 @@ class MonoGPTClaudeInterpreter:
                 evidence=selected_evidence,
                 started=started,
             )
-        except (TypeError, ValueError, KeyError) as exc:
+        except (TypeError, ValueError, KeyError, UnicodeError) as exc:
             return self._result(
                 status=LLMInterpretationStatus.INVALID_RESPONSE,
                 started=started,

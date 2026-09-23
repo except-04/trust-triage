@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from trust_triage.deep_analysis.llm_interpreter import (
     MonoGPTConfig,
     _select_evidence,
@@ -99,3 +101,20 @@ def test_llm_config_has_safe_default_output_and_input_limits() -> None:
     assert config.max_tokens == 1600
     assert config.max_evidence_items == 40
     assert config.max_input_chars == 24000
+    assert config.max_response_bytes == 1024 * 1024
+
+
+def test_llm_response_limit_loads_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("MONOGPT_MAX_RESPONSE_BYTES", "2048")
+
+    config = MonoGPTConfig.from_env(load_env_file=False)
+
+    assert config.max_response_bytes == 2048
+
+
+@pytest.mark.parametrize("value", ["invalid", "0", "127", str(8 * 1024 * 1024 + 1)])
+def test_llm_response_limit_rejects_invalid_environment(monkeypatch, value) -> None:
+    monkeypatch.setenv("MONOGPT_MAX_RESPONSE_BYTES", value)
+
+    with pytest.raises(ValueError):
+        MonoGPTConfig.from_env(load_env_file=False)

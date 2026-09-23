@@ -125,6 +125,8 @@ class FakeDeep:
         self.calls = []
         self.outcomes = deque()
         self.read_value = None
+        self.cancel_calls = []
+        self.reconcile_calls = []
 
     def get(self, analysis_id):
         return deepcopy(self.read_value)
@@ -135,6 +137,13 @@ class FakeDeep:
         if isinstance(outcome, Exception):
             raise outcome
         return deepcopy(outcome(record) if callable(outcome) else outcome)
+
+    def cancel(self, record, *, code, message):
+        self.cancel_calls.append((record.analysis_id, code, message))
+
+    def reconcile(self, limit=10, *, should_stop=None):
+        self.reconcile_calls.append((limit, should_stop))
+        return []
 
 
 class FakeClock:
@@ -375,6 +384,23 @@ def test_deep_wait_deadline_stops_polling(harness):
     )
     assert expired.status == "FAILED" and expired.error["code"] == "DEEP_WAIT_TIMEOUT"
     assert harness.deep.calls == []
+    assert harness.deep.cancel_calls == [
+        (
+            accepted.analysis_id,
+            "PARENT_DEEP_WAIT_TIMEOUT",
+            "Backend deep-analysis wait deadline expired",
+        )
+    ]
+
+
+def test_processor_reconciles_deep_jobs_without_pending_parent(harness):
+    marker = object()
+    harness.processor.resume_ready(limit=7, should_stop=lambda: marker is None)
+
+    assert len(harness.deep.reconcile_calls) == 1
+    limit, should_stop = harness.deep.reconcile_calls[0]
+    assert limit == 7
+    assert should_stop() is False
 
 
 def test_finished_deep_result_is_recovered_even_after_wait_deadline(harness):
@@ -416,6 +442,86 @@ def test_cleanup_preserves_samples_while_linked_job_state_is_uncertain(
         assert outcome["deleted_ids"] == []
         assert outcome["skipped_ids"] == [record.analysis_id]
         assert harness.storage._path(stored_sample(record)).exists()
+
+
+def test_cleanup_scans_past_blocked_front_candidate(harness):
+    harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
+    first = submit(harness, marker=1)
+    second = submit(harness, marker=2)
+    complete(harness, first.analysis_id)
+    complete(harness, second.analysis_id)
+    harness.clock.advance(harness.config.retention_hours * 3600 + 1)
+    harness.service.config = replace(
+        harness.config, storage_mode="s3", s3_bucket="fake-test-bucket"
+    )
+    cutoff = harness.repository.now - timedelta(hours=harness.config.retention_hours)
+    ordered = harness.repository.cleanup_candidates(cutoff, 100)
+    front, later = ordered[0], ordered[1]
+    harness.service.cleanup_guard = lambda record: (
+        record.analysis_id != front.analysis_id
+    )
+
+    outcome = harness.service.cleanup(delete=True, limit=1)
+
+    assert front.analysis_id in outcome["skipped_ids"]
+    assert outcome["deleted_ids"] == [later.analysis_id]
+    assert harness.storage._path(
+        stored_sample(harness.service.get(front.analysis_id))
+    ).exists()
+    assert not harness.storage._path(
+        stored_sample(harness.service.get(later.analysis_id))
+    ).exists()
+
+
+def test_cleanup_keyset_scan_reaches_candidate_after_full_blocked_page(harness):
+    harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
+    accepted = [submit(harness, marker=index) for index in range(101)]
+    for item in accepted:
+        complete(harness, item.analysis_id)
+    harness.clock.advance(harness.config.retention_hours * 3600 + 1)
+    harness.service.config = replace(
+        harness.config, storage_mode="s3", s3_bucket="fake-test-bucket"
+    )
+    target = accepted[-1]
+    harness.service.cleanup_guard = lambda record: (
+        record.analysis_id == target.analysis_id
+    )
+
+    outcome = harness.service.cleanup(delete=True, limit=1)
+
+    assert outcome["deleted_ids"] == [target.analysis_id]
+    assert len(outcome["skipped_ids"]) == 100
+
+
+def test_cleanup_scan_budget_returns_cursor_for_a_later_pass(harness, monkeypatch):
+    harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
+    accepted = [submit(harness, marker=index) for index in range(3)]
+    for item in accepted:
+        complete(harness, item.analysis_id)
+    harness.clock.advance(harness.config.retention_hours * 3600 + 1)
+    harness.service.config = replace(
+        harness.config, storage_mode="s3", s3_bucket="fake-test-bucket"
+    )
+    cutoff = harness.repository.now - timedelta(hours=harness.config.retention_hours)
+    ordered = harness.repository.cleanup_candidates(cutoff, 100)
+    target = ordered[-1]
+    harness.service.cleanup_guard = lambda record: (
+        record.analysis_id == target.analysis_id
+    )
+    monkeypatch.setattr(service_module, "CLEANUP_SCAN_LIMIT", 2)
+
+    first = harness.service.cleanup(delete=True, limit=1)
+    cursor = first["next_cursor"]
+    second = harness.service.cleanup(
+        delete=True,
+        limit=1,
+        after=(datetime.fromisoformat(cursor["completed_at"]), cursor["analysis_id"]),
+    )
+
+    assert first["scan_limit_reached"] is True
+    assert first["scanned_candidate_count"] == 2
+    assert second["deleted_ids"] == [target.analysis_id]
+    assert second["scan_limit_reached"] is False
 
 
 def test_retryable_initial_failure_obeys_backoff_then_recovers(harness):

@@ -282,6 +282,38 @@ def test_expired_owner_is_fenced_for_every_update_and_can_be_reclaimed(
 
 
 @pytest.mark.postgres
+def test_durable_cancellation_fences_owner_and_finishes_after_lease_expiry(
+    database, analysis_request
+):
+    repository, dsn = database
+    repository.register(analysis_request, FINGERPRINT)
+    previous = repository.claim(analysis_request.analysis_id, 180)
+    reason = {"code": "PARENT_TIMEOUT", "message": "parent deadline expired"}
+
+    requested = repository.request_cancel(analysis_request.analysis_id, reason)
+
+    assert requested.cancellation == reason
+    assert requested.claimed
+    assert not repository.renew(analysis_request.analysis_id, previous.token, 180)
+    assert not repository.finish(
+        analysis_request.analysis_id, previous.token, _result(analysis_request)
+    )
+    assert repository.pending_ids() == []
+    _expire(dsn, analysis_request.analysis_id)
+    assert repository.pending_ids() == [analysis_request.analysis_id]
+    current = repository.claim(analysis_request.analysis_id, 180)
+    assert current.token and current.token != previous.token
+    failed = _result(analysis_request, DeepAnalysisStatus.FAILED)
+    assert repository.finish_cancelled(
+        analysis_request.analysis_id, current.token, failed
+    )
+    saved = repository.get(analysis_request.analysis_id)
+    assert saved.phase is DeepAnalysisPhase.FAILED
+    assert saved.cancellation == reason
+    assert saved.result == failed
+
+
+@pytest.mark.postgres
 def test_checkpoint_survives_restart_release_and_resume(database, analysis_request):
     repository, dsn = database
     repository.register(analysis_request, FINGERPRINT)

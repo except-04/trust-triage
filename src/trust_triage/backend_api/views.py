@@ -231,6 +231,11 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
                 }
                 for row in capa_raw.get("capabilities", [])
             ],
+            "capabilities_count": capa_raw.get(
+                "capabilities_count", len(capa_raw.get("capabilities", []))
+            ),
+            "capabilities_truncated": bool(capa_raw.get("capabilities_truncated")),
+            "details_available": bool(capa_raw.get("details_reference")),
             "raw_result_location": None,
         }
     floss = None
@@ -241,6 +246,11 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
             "tool": "FLOSS",
             "status": states["floss"],
             "strings": strings,
+            "strings_count": floss_raw.get(
+                "strings_count", sum(map(len, strings.values()))
+            ),
+            "strings_truncated": bool(floss_raw.get("strings_truncated")),
+            "details_available": bool(floss_raw.get("details_reference")),
         }
     worker = snapshot.get("speakeasy_result")
     speakeasy = None

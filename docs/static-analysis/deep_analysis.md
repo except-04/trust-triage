@@ -172,12 +172,18 @@ $env:MONOGPT_MODEL="<claude-model-id>"
 $env:MONOGPT_MAX_TOKENS="1600"
 $env:MONOGPT_MAX_EVIDENCE_ITEMS="40"
 $env:MONOGPT_MAX_INPUT_CHARS="24000"
+$env:MONOGPT_MAX_RESPONSE_BYTES="1048576"
 python -m pytest -q tests/test_monogpt_claude_integration.py
 ```
 
 또는 저장소 루트의 `.env`에 같은 값을 넣을 수 있다. 환경변수가 없으면 이
 통합 테스트는 실제 API를 호출하지 않고 `skipped`된다. API 키는 저장소에
 커밋하지 않는다.
+
+`MONOGPT_TIMEOUT_SECONDS`는 연결·개별 소켓 대기가 아니라 전체 HTTP 응답
+기한으로 적용된다. 요청은 제한된 별도 프로세스에서 실행하며, 기한이 지나면
+프로세스와 연결을 종료한다. 응답 본문은 `MONOGPT_MAX_RESPONSE_BYTES`를 넘으면
+JSON 파싱 전에 거부한다. 기본값은 1 MiB이고 허용 범위는 128 bytes~8 MiB다.
 
 ## 안전 제한
 

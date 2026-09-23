@@ -228,6 +228,31 @@ def test_floss_uses_real_string_type_categories(snapshot):
     ]
 
 
+def test_archived_static_result_preview_discloses_truncation_without_leaking_location(
+    snapshot,
+):
+    snapshot["static_results"]["CAPA"].update(
+        capabilities_count=100,
+        capabilities_truncated=True,
+        details_reference={"file_location": "s3://private/deep-capa/result.json"},
+    )
+    snapshot["static_results"]["FLOSS"].update(
+        strings_count=100,
+        strings_truncated=True,
+        details_reference={"file_location": "s3://private/deep-floss/result.json"},
+    )
+
+    value = views.deep_analysis(record(deep_result=snapshot))
+
+    assert value.capa["capabilities_count"] == 100
+    assert value.capa["capabilities_truncated"] is True
+    assert value.capa["details_available"] is True
+    assert value.floss["strings_count"] == 100
+    assert value.floss["strings_truncated"] is True
+    assert value.floss["details_available"] is True
+    assert "s3://private" not in value.model_dump_json()
+
+
 def test_grouped_floss_report_projects_only_known_string_fields(snapshot):
     snapshot["static_results"]["FLOSS"]["strings"] = {
         "static_strings": [

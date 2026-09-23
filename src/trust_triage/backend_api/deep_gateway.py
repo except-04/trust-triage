@@ -13,6 +13,8 @@ import os
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from trust_triage.storage import ArtifactReference
+
 from .config import BackendConfig
 from .errors import BackendError
 from .repository import AnalysisRecord
@@ -21,6 +23,8 @@ from .repository import AnalysisRecord
 class DeepGateway(Protocol):
     def advance(self, record: AnalysisRecord) -> dict[str, Any]: ...
     def get(self, analysis_id: str) -> dict[str, Any] | None: ...
+    def cancel(self, record: AnalysisRecord, *, code: str, message: str) -> None: ...
+    def reconcile(self, limit: int = 10, *, should_stop=None) -> list[Any]: ...
     def check(self) -> None: ...
     def can_delete(self, record: AnalysisRecord) -> bool: ...
 
@@ -155,6 +159,43 @@ class ExistingDeepGateway:
                 retryable=type(exc).__name__ in {"RetryableError", "LeaseLost"},
             ) from exc
 
+    def cancel(self, record: AnalysisRecord, *, code: str, message: str) -> None:
+        service = self._resolve()
+        try:
+            request = self._request(record)
+            stored = service.repository.get(record.analysis_id)
+            if stored is None:
+                service.register(request)
+            else:
+                _assert_same_input(stored.request, request)
+            service.cancel(record.analysis_id, code=code, message=message)
+        except Exception as exc:
+            if isinstance(exc, BackendError):
+                raise
+            raise BackendError(
+                "DEEP_CANCEL_FAILED",
+                "심층 분석 종료 요청을 저장하지 못했습니다.",
+                http_status=503,
+                stage="SPEAKEASY",
+                retryable=True,
+            ) from exc
+
+    def reconcile(self, limit: int = 10, *, should_stop=None) -> list[Any]:
+        if self.config.storage_mode == "local":
+            return []
+        try:
+            return self._resolve().resume_ready(limit, should_stop=should_stop)
+        except Exception as exc:
+            if isinstance(exc, BackendError):
+                raise
+            raise BackendError(
+                "DEEP_RECONCILE_FAILED",
+                "심층 분석 조정 작업을 실행하지 못했습니다.",
+                http_status=503,
+                stage="CAPA_FLOSS",
+                retryable=True,
+            ) from exc
+
     def _request(self, record: AnalysisRecord):
         return self._request_type(
             analysis_id=record.analysis_id,
@@ -178,9 +219,13 @@ class ExistingDeepGateway:
                 _assert_same_input(deep_record.request, request)
             if worker_record is not None:
                 _assert_same_input(worker_record.job, request.worker_job)
-            return (deep_record is None or deep_record.phase.terminal is True) and (
-                worker_record is None or worker_record.status.terminal is True
-            )
+            return (
+                deep_record is None
+                or (
+                    deep_record.phase.terminal is True
+                    and not getattr(deep_record, "claimed", False)
+                )
+            ) and (worker_record is None or worker_record.status.terminal is True)
         except BackendError:
             raise
         except Exception as exc:
@@ -237,6 +282,10 @@ def validate_snapshot(payload: Any, record: AnalysisRecord) -> dict[str, Any]:
         if result is not None:
             if not isinstance(result, dict) or result.get("sha256") != record.sha256:
                 raise ValueError("invalid deep-analysis result")
+            if result.get("evidence_ref") not in {None, "#/evidence"}:
+                raise ValueError("invalid deep-analysis evidence reference")
+            if result.get("tool_statuses_ref") not in {None, "#/tool_statuses"}:
+                raise ValueError("invalid deep-analysis tool-status reference")
             _validate_evidence(result.get("evidence", []), record.sha256)
             _validate_tool_statuses(result.get("tool_statuses", {}))
             errors = result.get("errors", [])
@@ -254,6 +303,17 @@ def validate_snapshot(payload: Any, record: AnalysisRecord) -> dict[str, Any]:
             if tool not in {"CAPA", "FLOSS"}:
                 raise ValueError("unexpected static tool")
             _validate_tool_identity(analysis, record.sha256)
+            raw_reference = analysis.get("details_reference")
+            if raw_reference is not None:
+                if not isinstance(raw_reference, dict):
+                    raise ValueError("invalid static-result artifact reference")
+                reference = ArtifactReference(**raw_reference)
+                if (
+                    reference.analysis_id != record.analysis_id
+                    or reference.sha256 != record.sha256
+                    or reference.tool != f"DEEP_{tool}"
+                ):
+                    raise ValueError("static-result artifact belongs to another run")
         worker = value.get("speakeasy_result")
         if worker is not None and (
             not isinstance(worker, dict)

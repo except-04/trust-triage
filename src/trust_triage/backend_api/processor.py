@@ -216,6 +216,11 @@ class BackendProcessor:
                             "COMPLETED",
                             "FAILED",
                         }:
+                            self.deep.cancel(
+                                record,
+                                code="PARENT_DEEP_WAIT_TIMEOUT",
+                                message="Backend deep-analysis wait deadline expired",
+                            )
                             raise BackendError(
                                 "DEEP_WAIT_TIMEOUT",
                                 "심층 분석 전체 대기 시간을 초과했습니다.",
@@ -358,4 +363,6 @@ class BackendProcessor:
             if should_stop is not None and should_stop():
                 break
             values.append(self.resume(analysis_id))
+        if should_stop is None or not should_stop():
+            self.deep.reconcile(limit, should_stop=should_stop)
         return values

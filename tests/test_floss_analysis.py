@@ -59,9 +59,7 @@ def _sample(tmp_path: Path) -> Path:
 
 
 def test_build_command_uses_json_and_minimum_length(tmp_path: Path) -> None:
-    command = FlossConfig(min_string_length=8).build_command(
-        tmp_path / "sample.exe"
-    )
+    command = FlossConfig(min_string_length=8).build_command(tmp_path / "sample.exe")
 
     assert command[:3] == ("floss", "-j", "-n")
     assert command[3] == "8"
@@ -109,10 +107,12 @@ def test_analyze_success_returns_string_evidence_without_running_sample(
 
     def fake_run(command, **kwargs):
         calls.append((tuple(command), kwargs))
+        report = _report()
+        report["metadata"]["sha256"] = floss_module.sha256_file(sample)
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=json.dumps(_report()),
+            stdout=json.dumps(report),
             stderr="",
         )
 
@@ -130,12 +130,54 @@ def test_analyze_success_returns_string_evidence_without_running_sample(
     assert evidence[0].category == "STRING_SUMMARY"
     assert any(item.category == "OBFUSCATED_STRING" for item in evidence)
     assert any(
-        item.details.get("string") == "https://example.invalid/c2"
-        for item in evidence
+        item.details.get("string") == "https://example.invalid/c2" for item in evidence
     )
     assert all(not item.attack_techniques for item in evidence)
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["timeout"] == 120.0
+
+
+def test_report_hash_mismatch_is_rejected_without_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    sample = _sample(tmp_path)
+    report = _report()
+    report["metadata"]["sha256"] = "f" * 64
+    monkeypatch.setattr(
+        floss_module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(report), stderr=""
+        ),
+    )
+
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.PARSE_ERROR
+    assert result.to_evidence() == []
+    assert any("SHA-256" in error for error in result.errors)
+
+
+def test_supported_report_without_hash_is_accepted_with_warning(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    sample = _sample(tmp_path)
+    report = _report()
+    report["metadata"].pop("sha256")
+    monkeypatch.setattr(
+        floss_module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(report), stderr=""
+        ),
+    )
+
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.SUCCESS
+    assert any("did not include SHA-256" in warning for warning in result.warnings)
 
 
 def test_timeout_is_not_malicious_evidence(monkeypatch, tmp_path: Path) -> None:
@@ -179,4 +221,20 @@ def test_invalid_json_is_parse_error(monkeypatch, tmp_path: Path) -> None:
 
     assert result.status is FlossStatus.PARSE_ERROR
     assert result.errors
+    assert result.to_evidence() == []
+
+
+def test_empty_json_object_is_not_a_floss_report(monkeypatch, tmp_path: Path) -> None:
+    sample = _sample(tmp_path)
+    monkeypatch.setattr(
+        floss_module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="{}", stderr=""
+        ),
+    )
+
+    result = FlossAnalyzer().analyze(sample)
+
+    assert result.status is FlossStatus.PARSE_ERROR
     assert result.to_evidence() == []

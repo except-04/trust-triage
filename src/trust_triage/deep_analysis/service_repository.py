@@ -37,6 +37,13 @@ _OWNED = (
     "analysis_id = %s AND "
     + _NONTERMINAL
     + " AND lease_token = %s::uuid AND lease_until > clock_timestamp()"
+    " AND cancellation IS NULL"
+)
+_OWNED_CANCELLED = (
+    "analysis_id = %s AND "
+    + _NONTERMINAL
+    + " AND lease_token = %s::uuid AND lease_until > clock_timestamp()"
+    " AND cancellation IS NOT NULL"
 )
 
 
@@ -62,6 +69,12 @@ class DeepAnalysisRepository(Protocol):
     ) -> bool: ...
     def release(
         self, analysis_id: str, token: str, error: Mapping[str, Any] | None = None
+    ) -> bool: ...
+    def request_cancel(
+        self, analysis_id: str, reason: Mapping[str, Any]
+    ) -> DeepAnalysisRecord: ...
+    def finish_cancelled(
+        self, analysis_id: str, token: str, result: Mapping[str, Any]
     ) -> bool: ...
 
 
@@ -176,7 +189,7 @@ class PostgresDeepAnalysisRepository:
                 + _NONTERMINAL
                 + " AND "
                 + _AVAILABLE
-                + " ORDER BY updated_at, analysis_id LIMIT %s",
+                + " ORDER BY (cancellation IS NULL), updated_at, analysis_id LIMIT %s",
                 (limit,),
             ).fetchall()
             return [row["analysis_id"] for row in rows]
@@ -283,6 +296,46 @@ class PostgresDeepAnalysisRepository:
             )
             return cursor.rowcount == 1
 
+    def request_cancel(
+        self, analysis_id: str, reason: Mapping[str, Any]
+    ) -> DeepAnalysisRecord:
+        payload = _json_object(reason)
+        with self._connection() as connection:
+            row = connection.execute(
+                """UPDATE deep_analysis_runs
+                   SET cancellation = coalesce(cancellation, %s),
+                       next_retry_at = NULL, updated_at = clock_timestamp()
+                   WHERE analysis_id = %s AND """
+                + _NONTERMINAL
+                + " RETURNING *, (lease_until > clock_timestamp()) AS claimed",
+                (Jsonb(payload), analysis_id),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    _SELECT + " WHERE analysis_id = %s", (analysis_id,)
+                ).fetchone()
+            if row is None:
+                raise ValueError("analysis_id is not registered")
+            return _record(row)
+
+    def finish_cancelled(
+        self, analysis_id: str, token: str, result: Mapping[str, Any]
+    ) -> bool:
+        payload = _json_object(result)
+        if payload.get("deep_analysis_status") != "FAILED":
+            raise ValueError("cancelled analysis requires a FAILED result")
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """UPDATE deep_analysis_runs SET phase = 'FAILED', result = %s,
+                   last_error = NULL, next_retry_at = NULL,
+                   lease_token = NULL, lease_until = NULL,
+                   completed_at = clock_timestamp(), updated_at = clock_timestamp()
+                   WHERE """
+                + _OWNED_CANCELLED,
+                (Jsonb(payload), analysis_id, token),
+            )
+            return cursor.rowcount == 1
+
 
 def _retry_timestamp(error: Mapping[str, Any] | None) -> datetime | None:
     """Parse once at the write boundary; queue scans never cast arbitrary JSON."""
@@ -342,6 +395,7 @@ def _record(row: Mapping[str, Any]) -> DeepAnalysisRecord:
         checkpoint=row["checkpoint"],
         result=row["result"],
         last_error=row["last_error"],
+        cancellation=row.get("cancellation"),
         attempts=row["attempt_count"],
         updated_at=_iso(row["updated_at"]),
         claimed=bool(row["claimed"]),

@@ -12,7 +12,6 @@ from ..attack_mapping import (
 )
 from ..evidence import Evidence, EvidenceStatus
 
-
 _INJECTION_APIS = {
     "createremotethread",
     "createremotethreadex",
@@ -27,7 +26,7 @@ _INJECTION_MEMORY_APIS = {
     "writeprocessmemory",
     "ntwritevirtualmemory",
 }
-_SERVICE_APIS = {"createservicea", "createservicew", "openscmanagera", "openscmanagerw"}
+_SERVICE_CREATION_APIS = {"createservicea", "createservicew"}
 
 
 def normalize_capa_result(
@@ -91,11 +90,13 @@ def normalize_speakeasy_result(
         return ()
 
     sample_sha256 = str(payload.get("sha256") or sha256 or "")
-    base_id = str(payload.get("evidence_id") or f"speakeasy-{sample_sha256[:16] or 'unknown'}")
+    base_id = str(
+        payload.get("evidence_id") or f"speakeasy-{sample_sha256[:16] or 'unknown'}"
+    )
     observed_apis = _strings(payload.get("observed_apis"))
     behaviors = _strings(payload.get("behaviors"))
     events = payload.get("events")
-    techniques = _observed_techniques(observed_apis, behaviors)
+    techniques = _observed_techniques(observed_apis, behaviors, events)
     tool_status = str(payload.get("status") or "SUCCESS")
 
     evidence: list[Evidence] = []
@@ -157,6 +158,7 @@ def normalize_speakeasy_result(
 def _observed_techniques(
     observed_apis: Sequence[str],
     behaviors: Sequence[str],
+    events: Any = None,
 ) -> tuple[Any, ...]:
     labels: list[str] = list(behaviors)
     api_names = {_api_basename(api) for api in observed_apis}
@@ -166,7 +168,7 @@ def _observed_techniques(
     # into another process is treated as a candidate combination.
     if api_names & _INJECTION_APIS or len(api_names & _INJECTION_MEMORY_APIS) >= 2:
         labels.append("Process Injection")
-    if api_names & _SERVICE_APIS:
+    if _successful_service_creation(api_names, events):
         labels.append("Create Service")
 
     return tuple(
@@ -174,6 +176,45 @@ def _observed_techniques(
         for technique in normalize_attack_labels(labels)
         if technique.technique_id is not None
     )
+
+
+def _successful_service_creation(api_names: set[str], events: Any) -> bool:
+    if not api_names & _SERVICE_CREATION_APIS:
+        return False
+    if not isinstance(events, Mapping):
+        return True
+    api_calls = events.get("api_calls")
+    if not isinstance(api_calls, Sequence) or isinstance(
+        api_calls, (str, bytes, bytearray)
+    ):
+        return True
+    matching_calls = [
+        call
+        for call in api_calls
+        if isinstance(call, Mapping)
+        and _api_basename(str(call.get("api_name") or "")) in _SERVICE_CREATION_APIS
+    ]
+    if not matching_calls:
+        return True
+    return any(not _explicit_call_failure(call) for call in matching_calls)
+
+
+def _explicit_call_failure(call: Mapping[str, Any]) -> bool:
+    for name in ("ret_val", "retval", "return_value", "return"):
+        if name not in call:
+            continue
+        value = call[name]
+        if value is None or value is False or value == 0:
+            return True
+        return isinstance(value, str) and value.strip().casefold() in {
+            "",
+            "0",
+            "0x0",
+            "false",
+            "none",
+            "null",
+        }
+    return False
 
 
 def _payload(value: Any) -> dict[str, Any]:
