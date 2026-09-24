@@ -1,6 +1,9 @@
+import os
 import mlflow
 import pandas as pd
 
+if "MLFLOW_TRACKING_URI" in os.environ:
+    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
 mlflow.set_experiment("trust-triage-baseline")
 runs = mlflow.search_runs(order_by=["start_time"])
 

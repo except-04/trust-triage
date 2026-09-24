@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import joblib
@@ -41,6 +42,8 @@ def main() -> None:
     X_val_500 = splits["val"].X[:, top_indices]
     y_val = splits["val"].y
 
+    if "MLFLOW_TRACKING_URI" in os.environ:
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
     mlflow.set_experiment("TRUST-Triage-XGBoost-500")
     with mlflow.start_run():
         mlflow.set_tags(

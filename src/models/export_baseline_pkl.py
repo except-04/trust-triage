@@ -1,7 +1,10 @@
+import os
 import mlflow
 import joblib
 
 print("MLflow에서 최신 4-way 모델의 run_id를 조회합니다...")
+if "MLFLOW_TRACKING_URI" in os.environ:
+    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
 mlflow.set_experiment("trust-triage-baseline")
 
 # 최신 4-way 모델(split_type=temporal_week_id_4way)의 Run ID를 자동으로 가져옵니다.
