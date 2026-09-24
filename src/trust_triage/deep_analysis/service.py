@@ -790,6 +790,14 @@ def _tool_result_preview(
     else:
         if "floss_version" in result:
             summary["floss_version"] = result["floss_version"]
+        metadata = result.get("analysis_metadata")
+        if isinstance(metadata, Mapping) and metadata.get("limited_mode") is True:
+            summary["limited_mode"] = True
+            reason = metadata.get("limited_reason")
+            if isinstance(reason, str) and reason in {
+                "INPUT_EXCEEDS_16_MIB", "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+            }:
+                summary["limited_reason"] = reason
         counts = result.get("string_counts")
         if isinstance(counts, Mapping):
             summary["string_counts"] = dict(counts)

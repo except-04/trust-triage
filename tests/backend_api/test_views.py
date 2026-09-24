@@ -234,6 +234,21 @@ def test_floss_uses_real_string_type_categories(snapshot):
     ]
 
 
+def test_floss_limited_mode_is_public_without_raw_metadata(snapshot):
+    snapshot["static_results"]["FLOSS"]["analysis_metadata"] = {
+        "limited_mode": True,
+        "limited_reason": "FLOSS_DEOBFUSCATION_SIZE_ERROR",
+        "sample_path": PRIVATE_PATH,
+    }
+
+    value = views.deep_analysis(record(deep_result=snapshot))
+
+    assert value.floss["limited_mode"] is True
+    assert value.floss["limited_reason"] == "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+    assert "analysis_metadata" not in value.model_dump_json()
+    assert PRIVATE_PATH not in value.model_dump_json()
+
+
 def test_archived_static_result_preview_discloses_truncation_without_leaking_location(
     snapshot,
 ):

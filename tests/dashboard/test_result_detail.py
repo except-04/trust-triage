@@ -169,6 +169,18 @@ def test_adapter_and_worker_truncation_stages_are_explained(app):
     assert any("결과 크기 제한" in caption for caption in captions)
 
 
+def test_floss_static_only_mode_is_visible_in_detail(app):
+    result = sample(app, "HIGH_RISK_UNCERTAIN", "COMPLETED")
+    result["floss"]["limited_mode"] = True
+    target = Tree()
+
+    app.render_result_detail(result, target)
+
+    captions = [args[0] for args in target.named("caption")]
+    assert any("FLOSS 제한 모드" in caption for caption in captions)
+    assert any("정적 문자열 중심" in caption for caption in captions)
+
+
 @pytest.mark.parametrize("payload", [{}, {"behavior": None}, {"behavior": {
     "api_calls": [], "files": None, "network": [], "registry": []
 }}])

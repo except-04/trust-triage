@@ -737,6 +737,9 @@ def _llm_context(item: Evidence) -> dict[str, Any]:
             "tags",
             "string_counts",
             "total_strings",
+            "limited_mode",
+            "limited_reason",
+            "skipped_string_types",
         )
     elif source == "CAPA":
         allowed = ("rule_name", "namespace", "match_count", "attack", "mbc")

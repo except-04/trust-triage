@@ -773,6 +773,7 @@ JRR이 심층 분석 경로로 전달한 파일에 대해 CAPA, FLOSS, Speakeasy
 `deep_analysis_status`는 도구별 대기·진행·완료 상태입니다. `NOT_REQUIRED`는 해당 분석이 필요 없어 생략됐다는 뜻입니다.
 `tool_details`는 `TIMEOUT`을 포함한 원래 도구 상태와 버전을 보존합니다.
 CAPA/FLOSS의 `details_status`와 `details_error`는 도구 실행 결과와 별개인 상세 보관 상태입니다. 오류 메시지나 저장 위치는 공개하지 않습니다.
+FLOSS의 `limited_mode=true`는 큰 파일의 deobfuscation을 건너뛰고 static 문자열만 분석했다는 뜻입니다. `limited_reason`은 입력 크기 선제 제한 또는 FLOSS의 크기 제한 오류를 구분합니다.
 Speakeasy의 `behavior_truncated`, `events_truncated`, `event_counts`는 표시된 행동이 전체인지 미리보기인지 알려줍니다. `event_counts`는 최초 report의 이벤트 수이며 `adapter_events_truncated`는 카테고리별 100개 수집 제한, `worker_events_truncated`는 Worker 결과 크기 제한으로 상세가 생략됐음을 뜻합니다.
 `evidence`는 ATT&CK 기법 단위 집계, `evidence_details`는 출처와 신뢰도를 포함한 개별 증거를 제공합니다.
 `llm_summary`는 생성된 경우에만 제공되는 전문가 참고 설명입니다.

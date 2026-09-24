@@ -1438,6 +1438,9 @@ def render_deep_analysis(analysis, deep, state):
         floss_box.dataframe(string_rows, hide_index=True, width="stretch")
     else:
         floss_box.caption(f"Status: {statuses.get('floss', 'NOT_REQUIRED')}")
+    if floss.get("limited_mode"):
+        action = "분석했습니다" if floss.get("status") == "COMPLETED" else "분석을 시도했습니다"
+        floss_box.caption(f"FLOSS 제한 모드: 정적 문자열 중심으로 {action}. stack·tight·decoded·언어별 추가 문자열은 분석하지 않았습니다.")
     render_static_detail_notice(floss_box, floss)
 
     speakeasy = analysis.get("speakeasy") or {}

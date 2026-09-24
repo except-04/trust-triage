@@ -61,6 +61,10 @@ jobs:
             tests/backend_api \
             tests/test_feature_names.py \
             tests/test_model_data_contract.py \
+            tests/test_floss_analysis.py \
+            tests/test_floss_transport.py \
+            tests/test_llm_input_limits.py \
+            tests/deep_analysis_service/test_service.py \
             tests/test_mlflow_tracking.py \
             -m "not postgres" \
             -q

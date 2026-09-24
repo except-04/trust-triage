@@ -289,6 +289,9 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
     floss = None
     if floss_raw:
         strings = _floss_strings(floss_raw.get("strings", []))
+        floss_metadata = floss_raw.get("analysis_metadata")
+        if not isinstance(floss_metadata, Mapping):
+            floss_metadata = {}
         floss = {
             "analysis_id": record.analysis_id,
             "tool": "FLOSS",
@@ -301,6 +304,13 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
             "details_available": bool(floss_raw.get("details_reference")),
             **_detail_diagnostic(floss_raw),
         }
+        if floss_raw.get("limited_mode") is True or floss_metadata.get("limited_mode") is True:
+            floss["limited_mode"] = True
+            reason = floss_raw.get("limited_reason", floss_metadata.get("limited_reason"))
+            if isinstance(reason, str) and reason in {
+                "INPUT_EXCEEDS_16_MIB", "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+            }:
+                floss["limited_reason"] = reason
     worker = snapshot.get("speakeasy_result")
     speakeasy = None
     if worker:
