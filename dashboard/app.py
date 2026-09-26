@@ -1,9 +1,7 @@
-import hashlib
 import re
 import time
 from collections import Counter
 from html import escape
-from uuid import uuid4
 
 import api_client
 import matplotlib.pyplot as plt
