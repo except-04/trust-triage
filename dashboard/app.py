@@ -1,9 +1,7 @@
-import hashlib
 import re
 import time
 from collections import Counter
 from html import escape
-from uuid import uuid4
 
 import api_client
 import matplotlib.pyplot as plt
@@ -69,7 +67,7 @@ def reset_analysis_session():
 def select_analysis_result(widget_key="selected_analysis_id"):
     """Bind the selected batch row to the existing detail view."""
     selected_id = st.session_state.get(widget_key)
-    selected = load_mock_analysis(selected_id)
+    selected = find_batch_analysis(selected_id)
     if selected is not None:
         st.session_state.selected_analysis_id = selected_id
         st.session_state.analysis_result = selected
@@ -314,223 +312,6 @@ def render_shap_chart(target, features):
     plt.close(figure)
 
 
-def mock_status_for_index(index, total):
-    """Create a deterministic mix of polling states for the batch UI."""
-    if total == 1:
-        return "COMPLETED"
-    sequence = (
-        "COMPLETED",
-        "RUNNING",
-        "QUEUED",
-        "COMPLETED",
-        "FAILED",
-        "COMPLETED",
-        "RUNNING",
-        "COMPLETED",
-        "COMPLETED",
-        "COMPLETED",
-    )
-    return sequence[index % len(sequence)]
-
-
-def mock_triage_profile(index):
-    """Return interface-spec-aligned triage values for one mock analysis."""
-    profile_sequence = (
-        "HIGH_RISK_UNCERTAIN",
-        "HIGH_RISK_UNCERTAIN",
-        "HIGH_RISK_UNCERTAIN",
-        "AUTO_MALICIOUS",
-        "AUTO_MALICIOUS",
-        "AUTO_BENIGN",
-        "HIGH_RISK_UNCERTAIN",
-        "AUTO_MALICIOUS",
-        "AUTO_BENIGN",
-        "AUTO_MALICIOUS",
-    )
-    initial_verdict = profile_sequence[index % len(profile_sequence)]
-
-    if initial_verdict == "AUTO_BENIGN":
-        return {
-            "raw_probability": 0.081,
-            "calibrated_probability": 0.057,
-            "disagreement": 0.02,
-            "ood_score": 0.084,
-            "difficulty_score": 2,
-            "initial_verdict": initial_verdict,
-            "route": "FINAL",
-            "reason": "High Benign Confidence",
-            "final_verdict": "BENIGN",
-        }
-
-    if initial_verdict == "AUTO_MALICIOUS":
-        return {
-            "raw_probability": 0.997,
-            "calibrated_probability": 0.9981,
-            "disagreement": 0.01,
-            "ood_score": 0.072,
-            "difficulty_score": 3,
-            "initial_verdict": initial_verdict,
-            "route": "FINAL",
-            "reason": "High Malicious Confidence",
-            "final_verdict": "MALICIOUS",
-        }
-
-    review_reasons = (
-        "OOD Detected",
-        "High Model Disagreement",
-        "High Analysis Difficulty",
-        "Uncertain Probability",
-    )
-    return {
-        "raw_probability": 0.978,
-        "calibrated_probability": 0.942,
-        "disagreement": 0.13,
-        "ood_score": -0.031,
-        "difficulty_score": 6,
-        "initial_verdict": initial_verdict,
-        "route": "DEEP_ANALYSIS",
-        "reason": review_reasons[index % len(review_reasons)],
-        "final_verdict": "MALICIOUS",
-    }
-
-
-def mock_deep_analysis_status(route, status, index):
-    """Keep per-tool polling states separate from the overall analysis status."""
-    if route == "FINAL":
-        return {
-            "capa": "NOT_REQUIRED",
-            "floss": "NOT_REQUIRED",
-            "speakeasy": "NOT_REQUIRED",
-            "cape": "NOT_REQUIRED",
-        }
-    if status == "COMPLETED":
-        return {
-            "capa": "COMPLETED",
-            "floss": "COMPLETED",
-            "speakeasy": "COMPLETED",
-            "cape": "NOT_REQUIRED",
-        }
-    if status == "RUNNING":
-        return {
-            "capa": "COMPLETED",
-            "floss": "COMPLETED",
-            "speakeasy": "RUNNING" if index % 2 == 0 else "QUEUED",
-            "cape": "NOT_REQUIRED",
-        }
-    if status == "FAILED":
-        return {
-            "capa": "COMPLETED",
-            "floss": "COMPLETED",
-            "speakeasy": "FAILED",
-            "cape": "NOT_REQUIRED",
-        }
-    return {
-        "capa": "QUEUED",
-        "floss": "QUEUED",
-        "speakeasy": "QUEUED",
-        "cape": "NOT_REQUIRED",
-    }
-
-
-def build_mock_analysis(file_descriptor, batch_id, index, total):
-    """Build one mock API response using the interface specification fields."""
-    status = mock_status_for_index(index, total)
-    triage = mock_triage_profile(index)
-    deep_status = mock_deep_analysis_status(triage["route"], status, index)
-    final_verdict = (
-        triage["final_verdict"] if status == "COMPLETED" else "UNCERTAIN"
-    )
-    top_features = [
-        {
-            "feature_name": "SectionMaxEntropy",
-            "feature_value": 7.92,
-            "shap_value": 0.31,
-            "direction": "MALICIOUS",
-        },
-        {
-            "feature_name": "ImportsNb",
-            "feature_value": 142,
-            "shap_value": 0.24,
-            "direction": "MALICIOUS",
-        },
-        {
-            "feature_name": "SizeOfCode",
-            "feature_value": 286720,
-            "shap_value": 0.18,
-            "direction": "MALICIOUS",
-        },
-        {
-            "feature_name": "LegitCertificate",
-            "feature_value": 1,
-            "shap_value": -0.10,
-            "direction": "BENIGN",
-        },
-        {
-            "feature_name": "PackerSignature",
-            "feature_value": 0,
-            "shap_value": -0.06,
-            "direction": "BENIGN",
-        },
-    ]
-    evidence = [
-        {
-            "technique_id": "T1059.003",
-            "technique_name": "Windows Command Shell",
-            "sources": ["CAPA", "SPEAKEASY"],
-            "summary": "Command execution related behavior detected.",
-            "tactic": "Execution",
-        },
-        {
-            "technique_id": "T1105",
-            "technique_name": "Ingress Tool Transfer",
-            "sources": ["CAPA", "SPEAKEASY"],
-            "summary": "External file transfer behavior detected.",
-            "tactic": "Command and Control",
-        },
-        {
-            "technique_id": "T1140",
-            "technique_name": "Deobfuscate/Decode Files or Information",
-            "sources": ["CAPA"],
-            "summary": "Encoded content was decoded in memory.",
-            "tactic": "Defense Evasion",
-        },
-    ]
-
-    return {
-        "analysis_id": f"a_{uuid4().hex[:16]}",
-        "batch_id": batch_id,
-        "filename": file_descriptor["filename"],
-        "file_size": file_descriptor["size"],
-        "file_type": (
-            "PE/DLL"
-            if file_descriptor["filename"].lower().endswith(".dll")
-            else "PE/EXE"
-        ),
-        "sha256": hashlib.sha256(file_descriptor["content"]).hexdigest(),
-        "created_at": "2026-09-01T17:04:00+09:00",
-        "analyzed_at": "2026-09-01 17:04",
-        "status": status,
-        **triage,
-        "final_verdict": final_verdict,
-        "top_features": top_features,
-        "deep_analysis_status": deep_status,
-        "evidence": evidence,
-        "llm_summary": {
-            "summary": "의심 행위와 모델 위험 신호를 종합한 Mock 분석 요약입니다.",
-            "suspicious_behaviors": [
-                "명령 실행 및 외부 파일 전송 행위",
-                "인코딩된 데이터의 메모리 내 디코딩",
-            ],
-            "analyst_notes": "원본 Evidence와 함께 검토가 필요합니다.",
-        },
-        "capa_behaviors": [
-            "PowerShell 명령 실행 기능",
-            "외부 URL에서 파일 다운로드",
-            "인코딩된 데이터 디코딩 및 메모리 전개",
-        ],
-    }
-
-
 def derive_batch_summary(analyses):
     """Derive mutually exclusive analyst-facing counts from analysis records."""
     summary = {
@@ -551,24 +332,6 @@ def derive_batch_summary(analyses):
             summary["auto_benign"] += 1
     return summary
 
-
-def load_mock_batch(file_descriptors):
-    """Mock batch endpoint; replace with get_batch_from_api(batch_id)."""
-    batch_id = f"b_20260909_{uuid4().hex[:8]}"
-    analyses = [
-        build_mock_analysis(
-            file_descriptor,
-            batch_id,
-            index,
-            len(file_descriptors),
-        )
-        for index, file_descriptor in enumerate(file_descriptors)
-    ]
-    return {
-        "batch_id": batch_id,
-        "summary": derive_batch_summary(analyses),
-        "analyses": analyses,
-    }
 
 def entry_view(entry, status):
     """접수 응답의 entries 항목 하나를 대시보드 뷰 모델로 옮긴다.
@@ -971,8 +734,8 @@ def resume_polling():
     st.session_state.poll_started_at = time.monotonic()
 
 
-def load_mock_analysis(analysis_id, batch_data=None):
-    """Mock detail endpoint; replace with get_analysis_from_api(analysis_id)."""
+def find_batch_analysis(analysis_id, batch_data=None):
+    """현재 세션에 저장된 배치 결과에서 특정 분석(analysis_id) 항목을 찾아 반환합니다."""
     batch = batch_data or st.session_state.get("batch_data", {})
     for analysis in batch.get("analyses", []):
         if analysis["analysis_id"] == analysis_id:
@@ -1977,7 +1740,7 @@ def render_batch_group_results(group_key, analyses):
         )
         st.session_state[selector_key] = selected_id
         st.session_state.selected_analysis_id = selected_id
-        st.session_state.analysis_result = load_mock_analysis(selected_id)
+        st.session_state.analysis_result = find_batch_analysis(selected_id)
 
     result_card.selectbox(
         "상세 분석 파일 선택",

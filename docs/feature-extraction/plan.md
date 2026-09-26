@@ -1,6 +1,6 @@
 # Feature Extraction 진행 계획
 
-최종 수정일: 2026-08-04
+상태 정리일: 2026-09-26 (과거 검증 결과와 변경 기록은 당시 기준 유지)
 
 이 문서는 TRUST-TRIAGE의 Feature 추출 모듈 진행 상황과 팀 협의가 필요한 사항,
 추후 확장 작업을 한 곳에서 관리하기 위한 문서다.
@@ -180,7 +180,7 @@ JRR에서 사용할 경우 다음 정보를 위험 신호 또는 Evidence로 전
 
 Import 존재만으로 악성 행위나 실제 실행을 확정하지 않는다.
 
-## 6. 아직 결정하지 않은 사항
+## 6. 모델 입력 결정과 선택적 확장 방향
 
 ### 6.1 2568개 전체 사용 여부 (결정 완료)
 
@@ -211,28 +211,34 @@ API_GROUPS를 모델 학습 입력으로 사용하면 EMBER 2568개 모델과는
 Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·Evidence·JRR 보조
 정보로 사용하는 방향이다.
 
-## 7. 추후 추가 작업
+## 7. 완료 항목과 잔여 작업
 
-### 우선순위 높음
+### 구현 완료
 
 - [x] 팀에서 최종 모델 Feature 사용 범위 결정 (500개 확정)
-- [ ] EMBER 학습 데이터의 Feature Schema와 실제 추출 Schema 대조
+- [x] EMBER 학습 데이터의 Feature Schema와 실제 추출 Schema 대조 (코드 상 `FeatureSelector` 및 bundle 검증으로 구현. 단, 원본 EMBER2024 학습셋의 의미적 완벽 일치까지 독립 검증된 것은 아님)
 - [x] 모델 학습 결과에 맞는 Feature 이름·인덱스 목록 문서화
 - [x] 모델팀의 top500 목록으로 selection manifest 작성
 - [x] 모델 학습·추론 입력과 `FeatureSelector` 통합 테스트
-- [ ] API_GROUPS를 JRR에 전달할 공통 필드 확정
-- [ ] API_GROUPS 결과의 근거와 한계 문서화
+- [x] API_GROUPS 결과의 근거와 한계 문서화 (본 문서 내 상태 설명 및 코드 docstring에 이미 포함됨)
 
-### 우선순위 중간
+### 검증 잔여 작업
+
+- [ ] 대용량 PE 처리 시간과 메모리 측정 (실제 벤치마크는 미완료. timeout/크기 제한은 구현됨)
+
+### 선택적 API_GROUPS 확장
+
+현재 모델은 EMBER 기반 Top-500을 사용한다. 아래 항목은 API_GROUPS를 추가 신호로 채택할 경우의 작업이며 현재 모델 입력의 필수 누락을 뜻하지 않는다.
+
+- [ ] API_GROUPS를 JRR에 전달할 공통 필드와 사용 정책 확정
 
 - [ ] `process`, `file`, `persistence`, `anti-analysis` 등 추가 그룹 검토
 - [ ] API_GROUPS 목록을 Python 코드 밖의 버전 관리되는 설정 파일로 분리
 - [ ] DLL 이름과 API 이름을 함께 사용하는 정밀 매칭 추가
 - [ ] 매칭된 API를 그룹별 위험 신호로 집계하는 함수 추가
-- [ ] 대용량 PE 처리 시간과 메모리 측정
 - [ ] API_GROUPS 결과를 공통 Evidence Schema로 변환
 
-### 우선순위 낮음
+### 추가 확장 후보 (채택 여부 미정)
 
 - [ ] 동일 버전 DLL Export Table을 이용한 ordinal 이름 보완
 - [ ] 동적 API 로딩 탐지 보조

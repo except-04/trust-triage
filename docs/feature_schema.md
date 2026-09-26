@@ -213,12 +213,15 @@ Calibration/JRR 담당(김건우·이가영)이 아래 단계에서 계산. 특�
 
 ---
 
-## 확정 필요 항목 (다음 회의 안건)
+## 현재 결정과 초기 제안의 상태
 
 - [x] ~~특징 개수~~ → **500개 확정**
 - [x] ~~블록 분류~~ → **완료** (해싱 안 됨 303개/60.6%, 해싱됨 197개/39.4%)
 - [x] ~~StringExtractor 존재 확인~~ → **본 문서에 6번 카테고리로 반영 완료**
-- [ ] StringExtractor 76개 패턴을 전부 이식할지, 보안 관련성 높은 일부만 추릴지
-- [ ] `pe_format_warnings`를 분석 난이도 신호로 정식 채택할지
-- [ ] `packing_suspected` 임계값 7.0 유지 여부
-- [ ] `api_group_definitions.json` 실제 API 함수명 목록
+- 초기 StringExtractor 별도 이식 제안은 현재 구현 과제에서 제외한다. 현재 경로는 공식 thrember 추출 및 Top-500 선택을 사용한다. 별도 추출기를 채택할 때 다시 검토한다.
+- [x] `pe_format_warnings`를 분석 난이도 신호로 정식 채택할지 (현재 `src/jrr/risk_signals.py`와 `backend_api/initial_analysis.py`에서 난이도 신호로 사용 중)
+
+### 선택적 확장 후보
+
+- `packing_suspected`: 별도 특징 채택 여부와 기준 결정이 필요하다. 현재 공식 모델의 필수 기능 누락은 아니다.
+- API_GROUPS 외부 설정 파일: 현재 API 목록은 `src/trust_triage/feature_extraction/api_groups.py`의 `DEFAULT_API_GROUPS`에 있다. `api_group_definitions.json`은 초기 제안 파일명이며 현재 필수 파일이 아니다. 외부 설정 분리는 [확장 계획](feature-extraction/plan.md#7-완료-항목과-잔여-작업)에서 관리한다.

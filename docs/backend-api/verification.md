@@ -24,7 +24,7 @@
 - 신호 배열이 초기 결과 JSON·리포트에 저장되고 서비스 재시작과 전문가 검토 후에도 유지되며, 개별·목록·배치 HTTP 응답에 전달되는 것을 확인했다.
 - 로컬/S3 대역에서 SHA-256 원본 공유·리포트 무결성과 보존, 실제 PostgreSQL에서 동시 접수·삭제, 이전 DB 스키마 전환을 확인했다.
 
-모델·분석 도구는 테스트 대역을 사용했다. 실제 AWS·Streamlit·Worker·LLM을 연결한 전체 서비스 검증은 후속 통합 범위다. 저장 구조 전환은 [storage.md](storage.md), 최신 API 필드는 [api-reference.md](api-reference.md)를 참고한다.
+모델·분석 도구는 테스트 대역을 사용했다. 현재 Backend↔Worker 간의 코드 연결 및 통합시험은 완료되었으나(`docs/worker/verification.md`, `docs/deep-review-remediation.md` 참고), 승인된 전체 실환경(실제 AWS·Streamlit UI·실제 LLM 모델 연동 등)을 연결한 전체 E2E 서비스 통합 검증은 후속 과제로 남아 있다. 저장 구조 전환은 [storage.md](storage.md), 최신 API 필드는 [api-reference.md](api-reference.md)를 참고한다.
 
 ## 2026-09-08 — 초기 백엔드 검증
 
