@@ -399,7 +399,7 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 ```
 
 - `docs/interface_spec.md`는 상태 조회(`current_stage`), Batch(`batch_id`+개별 `analysis_id`), Task Queue 메시지 등을 정의합니다. Task Queue(SQS), Batch 정책, `final_verdict` Enum 등 핵심 요소는 구현이 완료되었으나, DB 실환경 배포 방식이나 승인된 전체 환경 E2E 검증 등은 아직 운영 대기(TBD) 상태입니다(§22).
-- **현재 대시보드(`dashboard/app.py`)는 백엔드 연동을 진행하여 실제 동작을 수행합니다.** 대시보드의 업로드는 `submit_batch()`와 API polling을 이용합니다. 코드에 남아 있는 `load_mock_analysis()`는 현재 세션에 저장된 분석 항목을 찾는 용도이며, 이름만으로 가짜 결과를 반환한다고 판단하면 안 됩니다. 다중 파일/ZIP 배치 업로드 UI도 대시보드에 통합되어 구현되어 있습니다.
+- **현재 대시보드(`dashboard/app.py`)는 백엔드 연동을 진행하여 실제 동작을 수행합니다.** 대시보드의 업로드는 `submit_batch()`와 API polling을 이용합니다. 과거 가짜 데이터를 생성하던 잔재에서 벗어나 세션 조회 역할을 명확히 하도록 `find_batch_analysis()` 등으로 리팩토링되었습니다. 다중 파일/ZIP 배치 업로드 UI도 대시보드에 통합되어 구현되어 있습니다.
 
 ---
 
