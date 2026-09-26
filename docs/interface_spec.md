@@ -1146,10 +1146,8 @@ FINAL_ASSESSMENT
 - [x] **LLM API/Prompt/Output Schema**: MonoGPT/Claude 연결, 프롬프트, 출력 검증 구현 완료 (`deep_analysis/llm_interpreter.py`, `service_runtime.py:93`)
 
 ### 22.2. 운영 및 검증 대기 (TBD)
-- [ ] 실제 DB 배포 방식(RDS/EC2 선택), AWS 네트워크 접근 범위, 증설·부하 정책
-- [ ] S3 Lifecycle 실제 AWS 운영 설정
-- [ ] 승인된 PE, 실제 자격 증명을 이용한 실서비스 전체 E2E 검증
-- [ ] MCP 구현 범위 및 Tool 목록 확정
+
+운영 설정·실환경 검증은 [공통 잔여 작업](remaining-work.md)에서 관리한다. MCP는 운영 설정이 아니라 범위 확정과 구현이 필요한 선택적 확장이다.
 
 ---
 

@@ -1,3 +1,7 @@
+# 초기 모델 데모 기록
+
+이 문서는 `tests/demo/01/demo.py`의 범위를 설명한다. 운영 대시보드는 `dashboard/`에 있으며 아래 데모의 미지원 항목을 현재 서비스의 잔여 작업으로 해석하지 않는다.
+
 ## 1. 폴더 구조
 
 ```
@@ -78,7 +82,7 @@ python demo.py --path "C:\Windows\System32\notepad.exe"
 | `initial_verdict` | JRR 초기 판정. 기본값은 `HIGH_RISK_UNCERTAIN` |
 | `route` | 다음 단계 처리 지시. 기본값은 `DEEP_ANALYSIS` |
 | `calibrated_probability` | 보정된 악성 확률 |
-| `top_features` | 추후 추가 |
+| `top_features` | 이 초기 데모는 빈 목록을 반환함. 운영 Dashboard의 SHAP 연동과 별개 |
 
 ### 종료 코드
 
