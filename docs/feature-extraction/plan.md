@@ -216,12 +216,12 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 ### 우선순위 높음
 
 - [x] 팀에서 최종 모델 Feature 사용 범위 결정 (500개 확정)
-- [ ] EMBER 학습 데이터의 Feature Schema와 실제 추출 Schema 대조
+- [x] EMBER 학습 데이터의 Feature Schema와 실제 추출 Schema 대조 (코드 상 `FeatureSelector` 및 bundle 검증으로 구현. 단, 원본 EMBER2024 학습셋의 의미적 완벽 일치까지 독립 검증된 것은 아님)
 - [x] 모델 학습 결과에 맞는 Feature 이름·인덱스 목록 문서화
 - [x] 모델팀의 top500 목록으로 selection manifest 작성
 - [x] 모델 학습·추론 입력과 `FeatureSelector` 통합 테스트
 - [ ] API_GROUPS를 JRR에 전달할 공통 필드 확정
-- [ ] API_GROUPS 결과의 근거와 한계 문서화
+- [x] API_GROUPS 결과의 근거와 한계 문서화 (본 문서 내 상태 설명 및 코드 docstring에 이미 포함됨)
 
 ### 우선순위 중간
 
@@ -229,7 +229,7 @@ Schema와 학습 모델이 필요하다. 현재 구현은 API_GROUPS를 설명·
 - [ ] API_GROUPS 목록을 Python 코드 밖의 버전 관리되는 설정 파일로 분리
 - [ ] DLL 이름과 API 이름을 함께 사용하는 정밀 매칭 추가
 - [ ] 매칭된 API를 그룹별 위험 신호로 집계하는 함수 추가
-- [ ] 대용량 PE 처리 시간과 메모리 측정
+- [ ] 대용량 PE 처리 시간과 메모리 측정 (실제 벤치마크 측정은 미완료 상태. 단, timeout/크기 제한 방어 로직은 선반영됨)
 - [ ] API_GROUPS 결과를 공통 Evidence Schema로 변환
 
 ### 우선순위 낮음
