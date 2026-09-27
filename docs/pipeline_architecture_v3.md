@@ -1325,18 +1325,21 @@ AI Agent ────────┴─ MCP
 
 ---
 
-# 6. 현재 확인 / 결정 필요 사항
+# 6. 구현 상태 요약 (완료 및 확인 필요 사항)
 
-- [ ] CAPA + FLOSS → Speakeasy Tier 진입 조건 최종 확정
-- [ ] Final Assessment 자동 판정 규칙 확정
-- [ ] `final_verdict` Enum 최종 확정
-- [ ] Task Queue 최종 선택: Redis + RQ / AWS SQS
-- [ ] 단일 / 분산 서버 배치 구조 확정
-- [ ] Raw PE 임시 저장 위치 및 삭제/Lifecycle 정책 확정
-- [ ] Batch 최대 파일 수 및 파일 크기 제한 확정
-- [ ] PostgreSQL 배포 방식 확정
-- [ ] MCP 구현 범위 확정
-- [ ] End-to-End 통합 후 Lockbox 실행 전 전체 Pipeline Freeze
+### 6.1. 코드 구현 완료
+- [x] **Task Queue**: AWS SQS (`src/trust_triage/speakeasy_worker/queue.py`, `publisher.py`, `runtime.py`)
+- [x] **단일/분산 서버 구조**: Backend HTTP/processor와 별도 Speakeasy Worker 프로세스 분리·연결 완료 (`docs/worker/backend-integration.md`)
+- [x] **Batch 파일 수/크기 제한**: 기본 10개, 파일당 50 MiB, 환경 설정으로 변경 가능 (`backend_api/config.py:39`)
+- [x] **ZIP 지원 여부**: 접수·검증·화면 통합 완료 (`backend_api/batch_inputs.py`, `app.py`, `dashboard/app.py`)
+- [x] **Raw PE 저장/보관**: 로컬/S3, SHA-256 공유, 기본 24시간 보관, 정리 로직 구현 (`backend_api/config.py:56`, `storage.py`)
+- [x] **CAPA/FLOSS → Speakeasy 기준**: Evidence 충분성 정책과 조건부 진입 구현 완료 (`deep_analysis/orchestrator.py`)
+- [x] **final_verdict Enum/Final Assessment**: 판정·처리 제안·실패/검토 경로 구현 완료 (`deep_analysis/models.py`, `backend_api/schemas.py`, `deep_analysis/orchestrator.py`)
+- [x] **LLM API/Prompt/Output Schema**: MonoGPT/Claude 연결, 프롬프트, 출력 검증 구현 완료 (`deep_analysis/llm_interpreter.py`, `service_runtime.py:93`)
+
+### 6.2. 운영 및 검증 대기 (TBD)
+
+운영 설정·실환경 E2E·전체 Pipeline Freeze 및 Lockbox 승인 기록은 [공통 잔여 작업](remaining-work.md)에서 관리한다. MCP는 별도의 선택적 확장이다.
 
 ---
 

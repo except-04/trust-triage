@@ -121,10 +121,13 @@ pytest tests/test_shap_lightgbm.py --basetemp=.pytest_tmp
 
 ## 8. 현재 한계와 향후 작업
 
-- 실제 PE → 2568차원 추출 → Top-500 선택 → SHAP까지의 자동화된 E2E 회귀 테스트 추가
-- feature extraction/inference 계층에서 live schema version을 전달하도록 pipeline schema 연결
-- FastAPI 또는 Streamlit 응답에 `ShapContribution` 연결
-- explainer 초기화 비용을 고려해 서비스에서 인스턴스를 재사용하는 lifecycle 설계
-- 모델 artifact 자체에는 feature metadata가 없으므로, 배포 시 모델과 `data/top_feature_indices_500.npy`, selection manifest를 하나의 검증 가능한 bundle로 함께 배치
-- SHAP/LightGBM 버전 변경 시 공식 artifact로 반환 타입과 `(1, 500)` / `(1,)` shape를 다시 검증
+### 구현 완료된 연동 및 검증 항목
+- **live schema 전달**: `backend_api/initial_analysis.py`에 구현 완료.
+- **FastAPI/Streamlit 응답 연결**: `_explain()` 출력, API의 XAI, Dashboard의 Top features 표시 경로 존재.
+- **인스턴스 재사용**: `backend_api/initial_worker.py` 이후 모델과 explainer를 재사용함 (README 기본 동작 반영).
+- **검증 가능한 bundle 구성**: `backend_api/model_bundle.py`가 모델·인덱스·manifest 설정과 순서·해시·스키마를 검증함 (번들 검증 기능 완료).
 
+### 실제 남은 작업 (자동 E2E/확장)
+- 실제 PE → 2568차원 추출 → Top-500 선택 → SHAP까지의 자동화된 E2E 회귀 테스트 추가
+- 하나의 배포 패키지로 묶는 공식 릴리스 절차 구성 (번들 경로 및 배포 확정)
+- SHAP/LightGBM 라이브러리 버전 업그레이드 시 공식 artifact 반환 타입 및 shape 재검증

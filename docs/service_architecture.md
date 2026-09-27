@@ -215,7 +215,7 @@ Raw PE를 다루는 서비스와 Worker는 다음 원칙을 적용합니다.
                   │                                    ▼
                   │                         ┌─────────────────────┐
                   │                         │    Task Queue       │
-                  │                         │ SQS candidate       │
+                  │                         │ AWS SQS (채택)      │
                   │                         └──────────┬──────────┘
                   │                                    │
                   │                                    ▼
@@ -467,10 +467,10 @@ Redis + RQ
 ### 최종 선택 상태
 
 ```text
-TBD
+AWS SQS (구현 완료)
 ```
 
-> AWS 중심 배포 구조에서는 SQS를 우선 검토합니다.
+> AWS 중심 배포 구조에 따라 SQS를 채택하여 구현했습니다.
 
 ---
 
@@ -522,7 +522,7 @@ FAILED
 
 ## 3.4 Worker Retry / Failure
 
-Task Queue가 AWS SQS로 확정될 경우 다음 항목을 구성합니다.
+Task Queue가 AWS SQS로 채택/구현됨에 따라 다음 항목이 구성/적용됩니다.
 
 - Visibility Timeout
 - Retry Count
@@ -805,7 +805,7 @@ LLM_MODEL
                      │           │              │
                      ▼           ▼              ▼
                 PostgreSQL      S3          Task Queue
-                                             (SQS?)
+                                             (AWS SQS)
                                                 │
                                                 ▼
                                     ┌────────────────────┐
@@ -1163,22 +1163,23 @@ Raw PE Upload
 
 ---
 
-# 18. 현재 TBD
+# 18. 구현 상태 요약 (완료 및 TBD)
 
 M4 초기에 아래 사항을 최종 결정하고 본 문서를 업데이트합니다.
 
-- [ ] **Task Queue 최종 선택** — AWS SQS / Redis + RQ
-- [ ] **서버 구조 최종 결정** — 단일 / Main + Worker 분산
-- [ ] **PostgreSQL 배포 방식** — RDS / EC2
-- [ ] **S3 Raw PE 보존 기간 및 Lifecycle**
-- [ ] **CAPA + FLOSS → Speakeasy 진입 기준**
-- [ ] **Batch 최대 파일 수**
-- [ ] **최대 파일 크기**
-- [ ] **ZIP 입력 지원 여부**
-- [ ] **MCP 구현 범위**
-- [ ] **Final Assessment 로직**
-- [ ] **AWS 네트워크 접근 범위**
-- [ ] **Worker 동시 실행 수 / Backpressure 정책**
+### 18.1. 코드 구현 완료
+- [x] **Task Queue**: AWS SQS (`src/trust_triage/speakeasy_worker/queue.py`, `publisher.py`, `runtime.py`)
+- [x] **단일/분산 서버 구조**: Backend HTTP/processor와 별도 Speakeasy Worker 프로세스 분리·연결 완료 (`docs/worker/backend-integration.md`)
+- [x] **Batch 파일 수/크기 제한**: 기본 10개, 파일당 50 MiB, 환경 설정으로 변경 가능 (`backend_api/config.py:39`)
+- [x] **ZIP 지원 여부**: 접수·검증·화면 통합 완료 (`backend_api/batch_inputs.py`, `app.py`, `dashboard/app.py`)
+- [x] **Raw PE 저장/보관**: 로컬/S3, SHA-256 공유, 기본 24시간 보관, 정리 로직 구현 (`backend_api/config.py:56`, `storage.py`)
+- [x] **CAPA/FLOSS → Speakeasy 기준**: Evidence 충분성 정책과 조건부 진입 구현 완료 (`deep_analysis/orchestrator.py`)
+- [x] **final_verdict Enum/Final Assessment**: 판정·처리 제안·실패/검토 경로 구현 완료 (`deep_analysis/models.py`, `backend_api/schemas.py`, `deep_analysis/orchestrator.py`)
+- [x] **LLM API/Prompt/Output Schema**: MonoGPT/Claude 연결, 프롬프트, 출력 검증 구현 완료 (`deep_analysis/llm_interpreter.py`, `service_runtime.py:93`)
+
+### 18.2. 운영 및 검증 대기 (TBD)
+
+DB·네트워크·S3 운영 설정, Worker 동시 실행·부하 정책과 실환경 E2E는 [공통 잔여 작업](remaining-work.md)에서 관리한다. MCP는 별도의 선택적 확장이다.
 
 ---
 

@@ -81,4 +81,4 @@ Backend에 연결된 요청은 위 세 프로세스로 진행한다. `deep_analy
 
 LLM은 기존 해석기를 선택적으로 호출하며 미설정·실패 시에도 증거와 도구 상태를 보존한다. Backend의 현재 정책은 심층 분석 대상을 `UNCERTAIN / MANUAL_REVIEW`로 전문가에게 넘긴다. 심층 분석 실패 시에는 `UNCERTAIN / ANALYSIS_FAILED`를 기록한다. LLM의 정상·악성 해석을 자동 확정하지 않으며, JRR 자동 재판정·최종 자동 판정 정책을 새로 정한 변경은 아니다.
 
-연결 테스트는 실제 HTTP 경계·런타임·Gateway·SQS 어댑터·Worker·저장소 코드와 PostgreSQL을 사용한다. 초기 모델과 분석 도구, LLM, 클라우드 클라이언트는 대역으로 바꾸고 실행 코드가 없는 기존 헤더 fixture만 사용한다. 실제 AWS/RDS·분석 도구·승인된 PE의 배포 환경 검증은 남아 있다. 상세 결과는 [검증 기록](verification.md)에 남긴다.
+연결 테스트는 실제 HTTP 경계·런타임·Gateway·SQS 어댑터·Worker·저장소 코드와 PostgreSQL을 사용한다. 초기 모델과 분석 도구, LLM, 클라우드 클라이언트는 대역으로 바꾸고 실행 코드가 없는 기존 헤더 fixture만 사용한다. 이러한 부분 통합 검증이 승인된 실데이터(PE), 실제 모델·도구, 실제 AWS/RDS, LLM API, UI를 모두 포함하는 전체 E2E 실서비스 환경 검증을 대체하지는 않으며, 이 전체 통합 검증은 여전히 잔여 과제로 남아 있다. 상세 결과는 [검증 기록](verification.md)에 남긴다.

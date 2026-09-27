@@ -99,7 +99,7 @@ python -m trust_triage.backend_api --env-file .env cleanup --delete --limit 100
 
 ## 6. Worker에서 재사용할 인터페이스
 
-공통 저장 모듈은 FastAPI나 백엔드 서비스에 의존하지 않는다. CAPA·FLOSS·Speakeasy 원본 리포트는 후속 통합 브랜치에서 각 도구 실행부가 다음 인터페이스로 저장한다.
+공통 저장 모듈은 FastAPI나 백엔드 서비스에 의존하지 않는다. 현재 `deep_analysis/service.py`와 `speakeasy_worker/reports.py`에서 정규화된 리포트 저장은 동작하고 있으며, 엔진의 raw 원본 리포트 저장 여부(`include_raw_report` 설정 등)는 용량과 필요에 따라 선택적으로 적용되거나 향후 보완될 수 있다. 아래는 도구 실행부의 저장 인터페이스 사용 예시이다.
 
 ```python
 from trust_triage.storage import ArtifactIdentity, S3ArtifactStorage

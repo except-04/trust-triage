@@ -609,7 +609,7 @@ Task Queue
 Speakeasy Worker
 ```
 
-현재 Task Queue는 **AWS SQS를 우선 적용 후보로 두며, 팀 최종 확정 후 본 문서에서 TBD를 제거합니다.**
+현재 Task Queue는 **AWS SQS로 구현되어 적용되어 있습니다.**
 
 ## 6.1 SQS Message Body
 
@@ -1116,7 +1116,7 @@ FINAL_ASSESSMENT
 - 상태값 업데이트
 - CAPA / FLOSS / Speakeasy 결과 표준 구조 반환
 - Worker 실패 시 Error Interface 준수
-- SQS 확정 시 Visibility Timeout / Retry / DLQ 정책을 Service Architecture와 함께 반영
+- AWS SQS가 적용됨에 따라 Visibility Timeout / Retry / DLQ 정책을 Service Architecture와 함께 반영
 
 ## AWS / Infrastructure
 
@@ -1133,19 +1133,21 @@ FINAL_ASSESSMENT
 
 ---
 
-# 22. 현재 TBD 항목
+# 22. 구현 상태 요약 (완료 및 TBD)
 
-- [ ] Task Queue 최종 확정: **AWS SQS 우선안** (팀 확정 후 TBD 제거)
-- [ ] Main Server / Worker 단일·분산 배치 최종 구조
-- [ ] PostgreSQL 배포 방식: EC2 / RDS 등
-- [ ] Raw PE 저장 방식 및 보존 기간
-- [ ] Batch 최대 파일 수 / 파일 크기 제한
-- [ ] ZIP 입력 지원 여부
-- [ ] CAPA + FLOSS → Speakeasy Tier 진입 조건
-- [ ] `final_verdict` 최종 Enum
-- [ ] MCP 구현 범위 및 Tool 목록
-- [ ] LLM API 및 Prompt/Output Schema 확정
-- [ ] Final Assessment 자동 판정 로직
+### 22.1. 코드 구현 완료
+- [x] **Task Queue**: AWS SQS (`src/trust_triage/speakeasy_worker/queue.py`, `publisher.py`, `runtime.py`)
+- [x] **단일/분산 서버 구조**: Backend HTTP/processor와 별도 Speakeasy Worker 프로세스 분리·연결 완료 (`docs/worker/backend-integration.md`)
+- [x] **Batch 파일 수/크기 제한**: 기본 10개, 파일당 50 MiB, 환경 설정으로 변경 가능 (`backend_api/config.py:39`)
+- [x] **ZIP 지원 여부**: 접수·검증·화면 통합 완료 (`backend_api/batch_inputs.py`, `app.py`, `dashboard/app.py`)
+- [x] **Raw PE 저장/보관**: 로컬/S3, SHA-256 공유, 기본 24시간 보관, 정리 로직 구현 (`backend_api/config.py:56`, `storage.py`)
+- [x] **CAPA/FLOSS → Speakeasy 기준**: Evidence 충분성 정책과 조건부 진입 구현 완료 (`deep_analysis/orchestrator.py`)
+- [x] **final_verdict Enum/Final Assessment**: 판정·처리 제안·실패/검토 경로 구현 완료 (`deep_analysis/models.py`, `backend_api/schemas.py`, `deep_analysis/orchestrator.py`)
+- [x] **LLM API/Prompt/Output Schema**: MonoGPT/Claude 연결, 프롬프트, 출력 검증 구현 완료 (`deep_analysis/llm_interpreter.py`, `service_runtime.py:93`)
+
+### 22.2. 운영 및 검증 대기 (TBD)
+
+운영 설정·실환경 검증은 [공통 잔여 작업](remaining-work.md)에서 관리한다. MCP는 운영 설정이 아니라 범위 확정과 구현이 필요한 선택적 확장이다.
 
 ---
 
