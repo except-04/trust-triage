@@ -162,8 +162,12 @@ def _display_name(label: str, technique_id: str | None) -> str:
         if catalog_entry is not None:
             return catalog_entry[0]
 
-    parts = [part.strip() for part in re.split(r"::|:|/|\\", label)]
-    return next((part for part in reversed(parts) if part), label)
+    # "Discovery::Software Discovery [T1518]"처럼 ID가 함께 들어온 라벨에서
+    # ID를 빼야 이름이 "Software Discovery"가 된다. ID는 따로 보관된다.
+    without_id = _TECHNIQUE_ID_PATTERN.sub("", label)
+    without_id = re.sub(r"[\[\]()]", " ", without_id)
+    parts = [part.strip(" -") for part in re.split(r"::|:|/|\\", without_id)]
+    return next((part for part in reversed(parts) if part), technique_id or label)
 
 
 def _normalize_for_match(value: str) -> str:

@@ -210,7 +210,48 @@ def as_string_tuple(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,)
     if isinstance(value, Mapping):
+        if _is_capa_spec(value):
+            return (_capa_spec_text(value),)
         return tuple(str(key) for key in value)
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        return tuple(str(item) for item in value)
+        return tuple(
+            _capa_spec_text(item) if isinstance(item, Mapping) else str(item)
+            for item in value
+        )
     return (str(value),)
+
+
+_CAPA_SPEC_PART_KEYS = (
+    ("tactic", "technique", "subtechnique"),  # ATT&CK
+    ("objective", "behavior", "method"),  # MBC
+)
+
+
+def _is_capa_spec(value: Mapping[Any, Any]) -> bool:
+    return "id" in value or "parts" in value
+
+
+def _capa_spec_text(spec: Mapping[Any, Any]) -> str:
+    """Render a CAPA ATT&CK/MBC spec the way CAPA prints it.
+
+    CAPA result documents store each entry as an object such as
+    ``{"parts": ["Discovery", "Software Discovery"], "id": "T1518", ...}``.
+    Converting that object with ``str()`` leaks Python dict syntax into
+    labels, so it is rendered as ``Discovery::Software Discovery [T1518]``.
+    """
+
+    parts = spec.get("parts")
+    if not isinstance(parts, Sequence) or isinstance(parts, (str, bytes, bytearray)):
+        parts = next(
+            (
+                [spec.get(key) for key in keys]
+                for keys in _CAPA_SPEC_PART_KEYS
+                if any(spec.get(key) for key in keys)
+            ),
+            [],
+        )
+    text = "::".join(str(part).strip() for part in parts if part and str(part).strip())
+    spec_id = str(spec.get("id") or "").strip()
+    if text and spec_id:
+        return f"{text} [{spec_id}]"
+    return text or spec_id
