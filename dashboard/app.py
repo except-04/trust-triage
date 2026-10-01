@@ -2021,7 +2021,8 @@ with toggle_col:
     st.button(
         "",
         key="theme_toggle",
-        on_click=flip_theme
+        on_click=flip_theme,
+        help="라이트 모드로 전환" if dark else "다크 모드로 전환",
     )
 
 TOGGLE_ICON = "var(--toggle-track)"
@@ -2054,6 +2055,7 @@ LIGHT_THEME = {
     "chart-benign": "#2563eb",
 
     "df-filter": "none",
+    "polling-accent-bg": "#fff7ed", "polling-accent-border": "#fed7aa", "polling-accent-fg": "#9a3412",
 
     # 토글
     "toggle-track": "#0f172a",
@@ -2088,6 +2090,7 @@ DARK_THEME = {
     "chart-benign": "#60a5fa",
 
     "df-filter": "invert(1) hue-rotate(180deg)",
+    "polling-accent-bg": "#172554", "polling-accent-border": "#1e3a8a", "polling-accent-fg": "#93c5fd",
 
     # 토글
     "toggle-track": "#f1f5f9",
@@ -2359,7 +2362,7 @@ st.markdown(
         .batch-section-heading-first {
             margin-top: 1.5rem;
         }
-        
+
         .batch-heading-inline {
             justify-content: flex-start;
             margin-top: 0;
@@ -2645,13 +2648,12 @@ st.markdown(
             color: var(--text-faint);
         }
         
-        /* 입력창, 선택 상자 */
-        [data-testid="stTextInputRootElement"]{
+        /* 입력창 */
+        [data-testid="stTextInputRootElement"] {
             background: var(--surface-muted);
             border-color: var(--border-strong);
         }
-        [data-testid="stTextInput"] input,
-        [data-baseweb="select"] * { color: var(--text); }
+        [data-testid="stTextInput"] input { color: var(--text); }
         [data-testid="stTextInput"] input::placeholder {
             color: var(--text-faint) !important;
             opacity: 1;
@@ -2691,7 +2693,7 @@ st.markdown(
             color: var(--text) !important;
         }
         [data-testid="stSelectbox"] svg { fill: var(--text-muted); color: var(--text-muted); }
-        
+
         /* 선택 상자를 펼쳤을 때 나오는 목록 */
         [data-testid="stSelectboxVirtualDropdown"],
         [data-baseweb="popover"] ul {
@@ -2706,7 +2708,7 @@ st.markdown(
         [data-baseweb="popover"] li:hover {
             background: var(--surface-muted) !important;
         }
-        
+
         /* 분류 버튼 (segmented control): 선택되지 않은 버튼 */
         [data-testid="stButtonGroup"] button[aria-checked="false"] {
             background: var(--surface);
@@ -2717,21 +2719,13 @@ st.markdown(
             color: var(--text);
             border-color: var(--text-muted);
         }
-        
+
         /* 분석 요약, 분석 결과 분류 카드: Streamlit 마크다운의 음수 margin 때문에 아래 여백이 사라지는 문제 */
         .st-key-detail_summary_card [data-testid="stMarkdownContainer"],
         .st-key-batch_group_results > [data-testid="stElementContainer"]:last-child [data-testid="stMarkdownContainer"] {
             margin-bottom: 0;
         }
-        
-        /* 진행률 막대: 바탕(트랙)은 테마 색, 채워지는 부분은 파란색 */
-        [data-testid="stProgress"] [role="progressbar"] > div {
-            background: var(--border) !important;
-        }
-        [data-testid="stProgress"] [role="progressbar"] > div > div {
-            background: var(--chart-benign) !important;
-        }
-        
+
         /* 분석 파이프라인 카드: 옆의 라우팅 결정 카드 높이에 맞춰 늘어나므로 내용을 세로 가운데에 둔다 */
         .st-key-detail_pipeline_card {
             justify-content: center;
@@ -2739,7 +2733,25 @@ st.markdown(
         .st-key-detail_pipeline_card [data-testid="stMarkdownContainer"] {
             margin-bottom: 0;
         }
-        
+
+        /* 진행률 막대: 바탕(트랙)은 테마 색, 채워지는 부분은 파란색 */
+        [data-testid="stProgress"] [role="progressbar"] > div {
+            background: var(--border) !important;
+        }
+        [data-testid="stProgress"] [role="progressbar"] > div > div {
+            background: var(--chart-benign) !important;
+        }
+
+        /* 분석 진행 중 패널의 강조 칸(QUEUED): 라이트는 주황, 다크는 파랑 */
+        .st-key-batch_polling_panel .batch-summary-priority {
+            background: var(--polling-accent-bg);
+            border-color: var(--polling-accent-border);
+        }
+        .st-key-batch_polling_panel .batch-summary-priority .batch-summary-label,
+        .st-key-batch_polling_panel .batch-summary-priority .batch-summary-value {
+            color: var(--polling-accent-fg);
+        }
+
         /* 표: 캔버스로 그려져서 색을 바꿀 수 없으므로 다크 모드에서만 반전 */
         [data-testid="stDataFrame"] { filter: var(--df-filter); }
 
