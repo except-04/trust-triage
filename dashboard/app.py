@@ -254,20 +254,21 @@ def render_shap_chart(target, features):
         )
         for feature in chart_features
     ]
-    colors = ["#dc2626" if value >= 0 else "#2563eb" for value in values]
+    theme = DARK_THEME if st.session_state.get("dark_mode") else LIGHT_THEME
+    colors = [theme["chart-malicious"] if value >= 0 else theme["chart-benign"] for value in values]
     limit = max((abs(value) for value in values), default=0.1) * 1.22
 
     # Keep full-width labels; the tighter figure is ~230-255px in the wide panel.
     figure, axis = plt.subplots(figsize=(6.2, 1.0))
     positions = list(range(len(names)))
     axis.barh(positions, values, color=colors, height=0.55)
-    axis.axvline(0, color="#64748b", linewidth=1.1, zorder=0)
+    axis.axvline(0, color=theme["text-muted"], linewidth=1.1, zorder=0)
     axis.set_xlim(-limit, limit)
     axis.set_yticks(positions, labels=names)
     axis.invert_yaxis()
-    axis.xaxis.grid(True, color="#e2e8f0", linewidth=0.7)
+    axis.xaxis.grid(True, color=theme["border"], linewidth=0.7)
     axis.set_axisbelow(True)
-    axis.tick_params(axis="both", labelsize=6.5, colors="#475569", pad=1)
+    axis.tick_params(axis="both", labelsize=6.5, colors=theme["text-3"], pad=1)
 
     for position, value in zip(positions, values):
         offset = limit * 0.025
@@ -278,7 +279,7 @@ def render_shap_chart(target, features):
             va="center",
             ha="left" if value >= 0 else "right",
             fontsize=6.5,
-            color="#334155",
+            color=theme["text-2"],
         )
 
     axis.text(
@@ -286,7 +287,7 @@ def render_shap_chart(target, features):
         1.04,
         "← Benign contribution",
         transform=axis.transAxes,
-        color="#2563eb",
+        color=theme["chart-benign"],
         fontsize=6.5,
         fontweight="bold",
     )
@@ -295,7 +296,7 @@ def render_shap_chart(target, features):
         1.04,
         "Malicious contribution →",
         transform=axis.transAxes,
-        color="#dc2626",
+        color=theme["chart-malicious"],
         fontsize=6.5,
         fontweight="bold",
         ha="right",
@@ -304,9 +305,9 @@ def render_shap_chart(target, features):
     for spine in axis.spines.values():
         spine.set_visible(False)
 
-    axis.set_xlabel("SHAP value", fontsize=6.5, color="#64748b", labelpad=1)
-    figure.patch.set_facecolor("#ffffff")
-    axis.set_facecolor("#ffffff")
+    axis.set_xlabel("SHAP value", fontsize=6.5, color=theme["text-muted"], labelpad=1)
+    figure.patch.set_alpha(0)
+    axis.set_facecolor("none")
     figure.tight_layout(pad=0.35)
     target.pyplot(figure, width="stretch")
     plt.close(figure)
@@ -1990,12 +1991,152 @@ st.set_page_config(
     layout="wide",
 )
 
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+
+def flip_theme():
+    st.session_state.dark_mode = not st.session_state.dark_mode
+
+
+dark = st.session_state.dark_mode
+
+_, toggle_col = st.columns([12, 1])
+with toggle_col:
+    st.button(
+        "",
+        key="theme_toggle",
+        on_click=flip_theme
+    )
+
+TOGGLE_ICON = "var(--toggle-track)"
+
+SUN_SHADOW = ", ".join(
+    [f"0 0 0 2px {TOGGLE_ICON}"]                          # 가운데 원
+    + [f"{x}px {y}px 0 -1px {TOGGLE_ICON}" for x, y in    # 햇살 8개
+       [(7, 0), (-7, 0), (0, 7), (0, -7), (5, 5), (-5, 5), (5, -5), (-5, -5)]]
+)
+
+LIGHT_THEME = {
+    "bg": "#f8fafc",
+    "surface": "#ffffff",
+    "text": "#0f172a",
+    "surface-muted": "#f8fafc",
+    "text-2": "#334155",
+    "text-3": "#475569",
+    "text-muted": "#64748b",
+    "text-faint": "#94a3b8",
+    "border": "#e2e8f0",
+    "border-strong": "#cbd5e1",
+    "neutral-bg": "#f1f5f9",
+    "danger-fg": "#991b1b", "danger-bg": "#fee2e2", "danger-border": "#fecaca",
+    "success-fg": "#166534", "success-bg": "#dcfce7", "success-border": "#bbf7d0",
+    "warning-fg": "#9a3412", "warning-bg": "#ffedd5", "warning-border": "#fed7aa",
+    "warning-soft": "#fff7ed",
+    "info-fg": "#1d4ed8", "info-bg": "#dbeafe", "info-border": "#bfdbfe",
+    "info-strong": "#1e40af", "info-strong-border": "#93c5fd",
+    "chart-malicious": "#dc2626",
+    "chart-benign": "#2563eb",
+
+    "df-filter": "none",
+
+    # 토글
+    "toggle-track": "#0f172a",
+    "toggle-knob": "#ffffff",
+    "toggle-knob-x": "4px",  # 손잡이 왼쪽
+    "icon-size": "4px",
+    "icon-top": "12px",
+    "icon-offset": "10px",
+    "icon-bg": TOGGLE_ICON,
+    "icon-shadow": SUN_SHADOW  # 해
+}
+
+DARK_THEME = {
+    "bg": "#020617",
+    "surface": "#0f172a",
+    "text": "#f1f5f9",
+    "surface-muted": "#1e293b",
+    "text-2": "#cbd5e1",
+    "text-3": "#a8b3c4",
+    "text-muted": "#94a3b8",
+    "text-faint": "#64748b",
+    "border": "#1e293b",
+    "border-strong": "#334155",
+    "neutral-bg": "#1e293b",
+    "danger-fg": "#fca5a5", "danger-bg": "#450a0a", "danger-border": "#7f1d1d",
+    "success-fg": "#86efac", "success-bg": "#052e16", "success-border": "#14532d",
+    "warning-fg": "#fdba74", "warning-bg": "#431407", "warning-border": "#7c2d12",
+    "warning-soft": "#2a1106",
+    "info-fg": "#93c5fd", "info-bg": "#172554", "info-border": "#1e3a8a",
+    "info-strong": "#bfdbfe", "info-strong-border": "#1e40af",
+    "chart-malicious": "#f87171",
+    "chart-benign": "#60a5fa",
+
+    "df-filter": "invert(1) hue-rotate(180deg)",
+
+    # 토글
+    "toggle-track": "#f1f5f9",
+    "toggle-knob": "#0f172a",
+    "toggle-knob-x": "calc(100% - 28px)",  # 손잡이 오른쪽
+    "icon-size": "12px",
+    "icon-top": "7px",
+    "icon-offset": "6px",
+    "icon-bg": "transparent",
+    "icon-shadow": f"inset -4px -2px 0 0 {TOGGLE_ICON}"  # 달
+}
+
+palette = DARK_THEME if dark else LIGHT_THEME
+css_vars = "\n".join(f"--{name}: {value};" for name, value in palette.items())
+st.markdown(f"<style>:root {{ {css_vars} }}</style>", unsafe_allow_html=True)
+
 st.markdown(
     """
     <style>
         .stApp {
-            background: #f8fafc;
-            color: #0f172a;
+            background: var(--bg);
+            color: var(--text);
+        }
+        
+        /* 트랙 (알약 모양 바탕) */
+        .st-key-theme_toggle button {
+            position: relative;
+            width: 60px; height: 32px; min-height: 32px;
+            padding: 0;
+            border-radius: 999px;
+            border: 2px solid var(--toggle-track);
+            background: var(--toggle-track);
+            transition: background .25s, border-color .25s;
+        }
+        
+        .st-key-theme_toggle button:hover,
+        .st-key-theme_toggle button:focus,
+        .st-key-theme_toggle button:active {
+            background: var(--toggle-track) !important;
+        }
+        
+        /* 손잡이 */
+        .st-key-theme_toggle button::before {
+            content: "";
+            position: absolute; top: 2px;
+            left: var(--toggle-knob-x);
+            width: 24px; height: 24px;
+            border-radius: 50%;
+            background: var(--toggle-knob);
+            transition: left .25s;
+        }
+        
+        /* 아이콘 (해 또는 달) */
+        .st-key-theme_toggle button::after {
+            content: "";
+            position: absolute;
+            top: var(--icon-top);
+            left: calc(var(--toggle-knob-x) + var(--icon-offset));
+            width: var(--icon-size); height: var(--icon-size);
+            border-radius: 50%;
+            background: var(--icon-bg);
+            box-shadow: var(--icon-shadow);
+            transform: rotate(-20deg);
+            transition: left .25s;
         }
 
         header[data-testid="stHeader"],
@@ -2071,10 +2212,10 @@ st.markdown(
         }
 
         div[data-testid="stVerticalBlockBorderWrapper"] {
-            background: #ffffff;
-            border-color: #e2e8f0;
+            background: var(--surface);
+            border-color: var(--border);
             box-sizing: border-box;
-            color: #0f172a;
+            color: var(--text);
         }
 
         hr {
@@ -2094,33 +2235,33 @@ st.markdown(
         }
 
         .badge-danger {
-            color: #991b1b;
-            background: #fee2e2;
-            border-color: #fecaca;
+            color: var(--danger-fg);
+            background: var(--danger-bg);
+            border-color: var(--danger-border);
         }
 
         .badge-success {
-            color: #166534;
-            background: #dcfce7;
-            border-color: #bbf7d0;
+            color: var(--success-fg);
+            background: var(--success-bg);
+            border-color: var(--success-border);
         }
 
         .badge-warning {
-            color: #9a3412;
-            background: #ffedd5;
-            border-color: #fed7aa;
+            color: var(--warning-fg);
+            background: var(--warning-bg);
+            border-color: var(--warning-border);
         }
 
         .badge-info {
-            color: #1d4ed8;
-            background: #dbeafe;
-            border-color: #bfdbfe;
+            color: var(--info-fg);
+            background: var(--info-bg);
+            border-color: var(--info-border);
         }
 
         .badge-neutral {
-            color: #475569;
-            background: #f1f5f9;
-            border-color: #e2e8f0;
+            color: var(--text-3);
+            background: var(--neutral-bg);
+            border-color: var(--border);
         }
 
         .route-focus {
@@ -2129,7 +2270,7 @@ st.markdown(
         }
 
         .route-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.75rem;
             font-weight: 600;
             letter-spacing: 0.08em;
@@ -2139,9 +2280,9 @@ st.markdown(
 
         .route-badge {
             display: inline-block;
-            color: #1e40af;
-            background: #dbeafe;
-            border: 1px solid #93c5fd;
+            color: var(--info-strong);
+            background: var(--info-bg);
+            border: 1px solid var(--info-strong-border);
             border-radius: 0.55rem;
             font-size: 1.05rem;
             font-weight: 750;
@@ -2158,16 +2299,16 @@ st.markdown(
         }
 
         .reason-chip {
-            color: #334155;
-            background: #f8fafc;
-            border: 1px solid #cbd5e1;
+            color: var(--text-2);
+            background: var(--surface-muted);
+            border: 1px solid var(--border-strong);
             border-radius: 999px;
             font-size: 0.78rem;
             padding: 0.5rem 1rem;
         }
 
         .secondary-text {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.85rem;
             overflow-wrap: anywhere;
         }
@@ -2181,7 +2322,7 @@ st.markdown(
 
         .batch-panel-title,
         .batch-section-heading {
-            color: #0f172a;
+            color: var(--text);
             font-size: 1.05rem;
             font-weight: 700;
             line-height: 1.35;
@@ -2205,7 +2346,7 @@ st.markdown(
         }
 
         .batch-context {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.76rem;
             font-weight: 500;
         }
@@ -2228,18 +2369,18 @@ st.markdown(
         }
 
         .batch-summary-priority {
-            background: #fff7ed;
-            border: 1px solid #fed7aa;
+            background: var(--warning-soft);
+            border: 1px solid var(--warning-border);
             border-radius: 0.5rem;
         }
 
         .batch-summary-priority .batch-summary-label,
         .batch-summary-priority .batch-summary-value {
-            color: #9a3412;
+            color: var(--warning-fg);
         }
 
         .batch-summary-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.72rem;
             line-height: 1.2;
             margin-bottom: 0.5rem;
@@ -2247,7 +2388,7 @@ st.markdown(
         }
 
         .batch-summary-value {
-            color: #0f172a;
+            color: var(--text);
             font-size: 1.15rem;
             font-weight: 720;
             line-height: 1.2;
@@ -2262,24 +2403,24 @@ st.markdown(
         }
 
         .deep-status-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.76rem;
             font-weight: 650;
             margin-right: 0.5rem;
         }
 
         .deep-status-item {
-            color: #334155;
-            background: #f8fafc;
-            border: 1px solid #cbd5e1;
+            color: var(--text-2);
+            background: var(--surface-muted);
+            border: 1px solid var(--border-strong);
             border-radius: 999px;
             font-size: 0.72rem;
             padding: 0.5rem 1rem;
         }
 
         .detail-section-break {
-            color: #475569;
-            border-top: 1px solid #e2e8f0;
+            color: var(--text-3);
+            border-top: 1px solid var(--border);
             font-size: 0.82rem;
             font-weight: 650;
             margin-top: 2rem;
@@ -2291,12 +2432,12 @@ st.markdown(
             align-items: flex-end;
             justify-content: space-between;
             gap: 1rem;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid var(--border);
             padding: 0 0 1rem;
         }
 
         .file-title {
-            color: #0f172a;
+            color: var(--text);
             font-size: 1rem;
             font-weight: 700;
             line-height: 1.25;
@@ -2304,7 +2445,7 @@ st.markdown(
 
         .file-hash,
         .file-meta {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.76rem;
             line-height: 1.45;
         }
@@ -2318,7 +2459,7 @@ st.markdown(
         }
 
         .verdict-arrow {
-            color: #94a3b8;
+            color: var(--text-faint);
             font-size: 1rem;
             text-align: center;
         }
@@ -2339,19 +2480,19 @@ st.markdown(
         }
 
         .summary-divider {
-            border-top: 1px solid #e2e8f0;
+            border-top: 1px solid var(--border);
             margin: 0.5rem 0;
         }
 
         .summary-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.7rem;
             line-height: 1.2;
             margin-bottom: 0.5rem;
         }
 
         .summary-value {
-            color: #0f172a;
+            color: var(--text);
             font-size: 0.98rem;
             font-weight: 650;
             line-height: 1.25;
@@ -2370,26 +2511,26 @@ st.markdown(
         }
 
         .evidence-section + .evidence-section {
-            border-left: 1px solid #e2e8f0;
+            border-left: 1px solid var(--border);
             padding-left: 1rem;
         }
 
         .evidence-title {
-            color: #334155;
+            color: var(--text-2);
             font-size: 0.8rem;
             font-weight: 700;
             margin-bottom: 0.5rem;
         }
 
         .evidence-item {
-            color: #334155;
+            color: var(--text-2);
             font-size: 0.74rem;
             line-height: 1.35;
             margin-bottom: 0.5rem;
         }
 
         .technique-id {
-            color: #1d4ed8;
+            color: var(--info-fg);
             font-weight: 650;
         }
 
@@ -2404,15 +2545,15 @@ st.markdown(
         .pipeline-node {
             flex: 1 1 0;
             min-width: 0;
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
+            background: var(--surface);
+            border: 1px solid var(--border);
             border-radius: 0.45rem;
             padding: 0.5rem;
             text-align: center;
         }
 
         .pipeline-name {
-            color: #0f172a;
+            color: var(--text);
             font-size: 0.82rem;
             font-weight: 650;
             line-height: 1.2;
@@ -2429,30 +2570,96 @@ st.markdown(
         }
 
         .pipeline-complete {
-            color: #166534;
-            background: #dcfce7;
+            color: var(--success-fg);
+            background: var(--success-bg);
         }
 
         .pipeline-skipped {
-            color: #475569;
-            background: #f1f5f9;
+            color: var(--text-3);
+            background: var(--neutral-bg);
         }
 
         .pipeline-running {
-            color: #1d4ed8;
-            background: #dbeafe;
+            color: var(--info-fg);
+            background: var(--info-bg);
         }
 
         .pipeline-failed {
-            color: #991b1b;
-            background: #fee2e2;
+            color: var(--danger-fg);
+            background: var(--danger-bg);
         }
 
         .pipeline-arrow {
             flex: 0 0 auto;
-            color: #94a3b8;
+            color: var(--text-faint);
             font-size: 0.9rem;
         }
+
+        /* 카드 (border=True 컨테이너) */
+        div[data-testid="stVerticalBlock"]:is([class*="_card"], [class*="-card"], [class*="_panel"], .st-key-batch_group_results) {
+            background: var(--surface);
+            border-color: var(--border);
+        }
+        
+        /* 제목, 위젯 라벨, 캡션 */
+        h1, h2, h3, h4, h5, h6 { color: var(--text); }
+        [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] p { color: var(--text-2); }
+        [data-testid="stCaptionContainer"] { color: var(--text-muted); }
+        
+        /* 일반 버튼 (테마 토글 버튼은 제외) */
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"] {
+            background: var(--surface);
+            border-color: var(--border-strong);
+            color: var(--text);
+        }
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"]:hover {
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"]:disabled,
+        button[data-testid="stBaseButton-primary"]:disabled {
+            background: var(--surface-muted);
+            border-color: var(--border);
+            color: var(--text-faint);
+        }
+        
+        /* 입력창, 선택 상자 */
+        [data-testid="stTextInputRootElement"],
+        [data-baseweb="select"] > div {
+            background: var(--surface-muted);
+            border-color: var(--border-strong);
+        }
+        [data-testid="stTextInput"] input,
+        [data-baseweb="select"] * { color: var(--text); }
+        [data-testid="stTextInput"] input::placeholder {
+            color: var(--text-faint) !important;
+            opacity: 1;
+        }
+        
+        /* 파일 업로더 */
+        [data-testid="stFileUploaderDropzone"] { background: var(--surface-muted); }
+        [data-testid="stFileUploaderDropzoneInstructions"] * { color: var(--text-muted); }
+        
+        /* Expander */
+        [data-testid="stExpander"] details { border-color: var(--border); }
+        [data-testid="stExpander"] summary {
+            background: var(--surface-muted);
+            color: var(--text);
+        }
+        [data-testid="stExpander"] summary:hover { color: var(--info-fg); }
+        
+        /* Metric */
+        [data-testid="stMetricLabel"], [data-testid="stMetricLabel"] p { color: var(--text-muted); }
+        [data-testid="stMetricValue"] { color: var(--text); }
+        
+        /* 알림 상자 */
+        [data-testid="stAlertContentSuccess"] { color: var(--success-fg); }
+        [data-testid="stAlertContentInfo"] { color: var(--info-fg); }
+        [data-testid="stAlertContentWarning"] { color: var(--warning-fg); }
+        [data-testid="stAlertContentError"] { color: var(--danger-fg); }
+        
+        /* 표: 캔버스로 그려져서 색을 바꿀 수 없으므로 다크 모드에서만 반전 */
+        [data-testid="stDataFrame"] { filter: var(--df-filter); }
 
         @media (max-width: 900px) {
             .batch-summary-grid {
@@ -2498,7 +2705,7 @@ st.markdown(
 
             .evidence-section + .evidence-section {
                 border-left: 0;
-                border-top: 1px solid #e2e8f0;
+                border-top: 1px solid var(--border);
                 padding-left: 0;
                 padding-top: 1rem;
             }
