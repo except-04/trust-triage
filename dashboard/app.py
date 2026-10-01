@@ -1,3 +1,4 @@
+import inspect
 import re
 import time
 from collections import Counter
@@ -5,6 +6,7 @@ from html import escape
 
 import api_client
 import matplotlib.pyplot as plt
+import pandas as pd
 import streamlit as st
 from api_client import ApiError
 
@@ -40,6 +42,10 @@ HASH_SEARCH_KEYS = ("hash_search", "hash_search_error", "hash_search_selector")
 DETAIL_COLUMN_GAP = "medium"
 DETAIL_CARD_GAP = "small"
 SPEAKEASY_PREVIEW_LIMIT = 10
+# Deep Analysis 검색에서 일치한 칸의 색. 다크 모드에서는 표 전체에 색 반전 필터
+# (invert + hue-rotate)가 걸리므로, 반전된 뒤 남색 배경(#21458f 근처)과 밝은 파란
+# 글자(#dbeaff)가 되도록 고른 원래 색이다. 라이트 모드에서는 연한 파랑으로 보인다.
+DEEP_SEARCH_HIGHLIGHT = "background-color: #9cc0ff; color: #000f63; font-weight: 600"
 
 
 def reset_analysis_result():
@@ -56,6 +62,7 @@ def reset_analysis_result():
     st.session_state.pop("poll_timed_out", None)
     st.session_state.pop("intake_receipt", None)
     st.session_state.pop("batch_filter_query", None)
+    st.session_state.pop("deep_filter_query", None)
 
 
 def reset_analysis_session():
@@ -258,8 +265,8 @@ def render_shap_chart(target, features):
     colors = [theme["chart-malicious"] if value >= 0 else theme["chart-benign"] for value in values]
     limit = max((abs(value) for value in values), default=0.1) * 1.22
 
-    # Keep full-width labels; the tighter figure is ~230-255px in the wide panel.
-    figure, axis = plt.subplots(figsize=(6.2, 1.0))
+    # 설명 가능성 칸(약 70%)에서 옆 분석 파이프라인 카드와 높이가 비슷해지는 비율.
+    figure, axis = plt.subplots(figsize=(6.2, 1.6))
     positions = list(range(len(names)))
     axis.barh(positions, values, color=colors, height=0.55)
     axis.axvline(0, color=theme["text-muted"], linewidth=1.1, zorder=0)
@@ -1007,11 +1014,22 @@ def render_result_detail(analysis, target=st):
         ("Disagreement", "disagreement", "{:.3f}"),
         ("Difficulty", "difficulty_score", "{:.1f}"),
     ]
+    signals = analysis.get("triggered_signals") or []
+    # 예전 '라우팅 결정' 카드의 내용은 Route 오른쪽에 붙인다.
+    route_detail = (
+        '<div class="detail-route-detail">'
+        '<div class="summary-label">Reason</div>'
+        f'<div class="route-detail-value">{escape(analysis.get("reason") or "-")}</div>'
+        '<div class="summary-label">Triggered Signals</div>'
+        f'<div class="route-detail-value">{escape(", ".join(signals) if signals else "None")}</div>'
+        '</div>'
+    )
     initial.markdown(
-        '<div class="detail-verdicts">' + "".join(
+        '<div class="detail-top"><div class="detail-verdicts">' + "".join(
             f'<div><div class="summary-label">{label}</div>{badge}</div>'
             for label, badge in verdicts
-        ) + '</div><div class="summary-divider"></div><div class="detail-metrics">'
+        ) + '</div>' + route_detail
+        + '</div><div class="summary-divider"></div><div class="detail-metrics">'
         + "".join(
             f'<div><div class="summary-label">{label}</div>'
             f'<div class="summary-value">{escape(_metric_text(analysis.get(key), pattern))}</div></div>'
@@ -1020,12 +1038,15 @@ def render_result_detail(analysis, target=st):
         unsafe_allow_html=True,
     )
 
-    decision_col, pipeline_col = shell.columns(2, gap=DETAIL_COLUMN_GAP)
-    routing = detail_section(decision_col, "라우팅 결정", "routing")
-    routing.markdown(route_badge_markup(analysis.get("route") or "-"), unsafe_allow_html=True)
-    routing.write(f"**Reason**  \n{analysis.get('reason') or '-'}")
-    signals = analysis.get("triggered_signals") or []
-    routing.write("**Triggered Signals**  \n" + (", ".join(signals) if signals else "None"))
+    explain_col, pipeline_col = shell.columns([7, 3], gap=DETAIL_COLUMN_GAP)
+    explanation = detail_section(explain_col, "설명 가능성", "shap")
+    explanation.markdown("**SHAP 주요 특성 Top 5**")
+    features = analysis.get("top_features") or analysis.get("shap_features") or []
+    if features:
+        render_shap_chart(explanation, features)
+    else:
+        explanation.info("표시할 SHAP 특성이 없습니다.")
+
     pipeline = detail_section(pipeline_col, "분석 파이프라인", "pipeline")
     steps = [("ML Triage", "COMPLETED")]
     steps.extend((label, state["tools"][key]) for label, key in (
@@ -1037,21 +1058,8 @@ def render_result_detail(analysis, target=st):
         f'{pipeline_state_markup(status)}</div>' for label, status in steps
     ) + '</div>', unsafe_allow_html=True)
 
-    explanation = detail_section(shell, "설명 가능성", "shap")
-    explanation.markdown("**SHAP 주요 특성 Top 5**")
-    features = analysis.get("top_features") or analysis.get("shap_features") or []
-    if features:
-        render_shap_chart(explanation, features)
-    else:
-        explanation.info("표시할 SHAP 특성이 없습니다.")
-
     deep = detail_section(shell, "Deep Analysis", "deep")
     render_deep_analysis(analysis, deep, state)
-    technical = shell.expander("기술 세부 정보", expanded=False)
-    technical.write(f"**파일명:** {analysis.get('filename') or '-'}")
-    technical.write(f"**SHA256:** `{analysis.get('sha256') or '-'}`")
-    if analysis.get("analyzed_at"):
-        technical.write(f"**분석 시각:** {analysis['analyzed_at']}")
 
 
 def render_progressive_result(analysis, target=st):
@@ -1059,7 +1067,62 @@ def render_progressive_result(analysis, target=st):
     render_result_detail(analysis, target)
 
 
-def render_speakeasy(target, speakeasy):
+def deep_search_needle(query):
+    """검색어를 비교용으로 정리한다. 비어 있으면 None(=검색하지 않음)."""
+    needle = (query or "").strip().lower()
+    return needle or None
+
+
+def _cell_text(value):
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(str(item) for item in value).lower()
+    return str(value).lower()
+
+
+def deep_search_rows(rows, needle):
+    """어느 칸이든 검색어를 포함한 행만 남긴다. needle이 없으면 그대로."""
+    if not needle:
+        return rows
+    return [
+        row for row in rows
+        if any(needle in _cell_text(value) for value in row.values())
+    ]
+
+
+def deep_search_table(target, rows, needle, **kwargs):
+    """표를 그린다. 검색 중이면 일치한 칸을 파란색으로 칠한다."""
+    if not needle:
+        target.dataframe(rows, **kwargs)
+        return
+    if not rows:
+        target.caption("검색어와 일치하는 항목이 없습니다.")
+        return
+    styled = pd.DataFrame(rows).style.map(
+        lambda value: DEEP_SEARCH_HIGHLIGHT if needle in _cell_text(value) else ""
+    )
+    target.dataframe(styled, **kwargs)
+
+
+def deep_search_label(title, shown, total, needle):
+    """검색 중에는 표 제목 옆에 '일치 / 전체' 건수를 붙인다."""
+    return f"{title} · {len(shown)} / {len(total)}건" if needle else title
+
+
+def speakeasy_tables(speakeasy):
+    """Speakeasy 결과를 화면에 그릴 표 단위로 나눈다. (API 표, 이벤트 표 3개)"""
+    behavior = speakeasy.get("behavior") or {}
+    calls = behavior.get("api_calls") or []
+    counts = Counter(str(event["api_name"]) for event in calls if event.get("api_name"))
+    tables = {"api": [{"API": name, "Calls": count} for name, count in counts.most_common()]}
+    for key in ("files", "network", "registry"):
+        tables[key] = [
+            {str(field): str(value)[:200] for field, value in event.items()}
+            for event in (behavior.get(key) or [])
+        ]
+    return tables
+
+
+def render_speakeasy(target, speakeasy, needle=None):
     """실제 반환된 이벤트만 요약하며 행위 의미나 MITRE 매핑은 추측하지 않는다."""
     behavior = speakeasy.get("behavior") or {}
     original_counts = speakeasy.get("event_counts")
@@ -1086,7 +1149,14 @@ def render_speakeasy(target, speakeasy):
         target.caption("결과 크기 제한으로 일부 상세 이벤트가 저장되지 않았습니다.")
     elif speakeasy.get("events_truncated") and not speakeasy.get("adapter_events_truncated"):
         target.caption("일부 상세 이벤트가 저장되지 않았습니다.")
-    if counts:
+    tables = speakeasy_tables(speakeasy)
+    if counts and needle:
+        # 검색 중에는 미리보기 개수 제한 없이 일치한 API를 모두 보여 준다
+        deep_search_table(
+            target, deep_search_rows(tables["api"], needle), needle,
+            hide_index=True, width="stretch",
+        )
+    elif counts:
         target.dataframe(
             [{"API": name, "Calls": count} for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)],
             hide_index=True, width="stretch",
@@ -1119,6 +1189,12 @@ def render_speakeasy(target, speakeasy):
         target.markdown(f"**{title}** · {len(events)} events{suffix}")
         if not events:
             target.caption(empty)
+            continue
+        if needle:
+            deep_search_table(
+                target, deep_search_rows(tables[key], needle), needle,
+                hide_index=True, width="stretch",
+            )
             continue
         # 키를 그대로 유지하고 중첩 값은 길이를 제한한 텍스트로 표시한다.
         rows = [
@@ -1186,24 +1262,56 @@ def render_deep_analysis(analysis, deep, state):
     # 완료·실패 시점에 존재하는 결과만 보여 준다. 일부 필드가 없어도 나머지
     # 결과와 Initial Analysis는 계속 렌더링한다.
     capa = analysis.get("capa") or {}
-    capa_box = deep.expander("CAPA", expanded=bool(capa))
     capabilities = capa.get("capabilities") or []
-    if capabilities:
-        capa_box.dataframe(capabilities, hide_index=True, width="stretch")
-    else:
-        capa_box.caption(f"Status: {statuses.get('capa', 'NOT_REQUIRED')}")
-    render_static_detail_notice(capa_box, capa)
-
     floss = analysis.get("floss") or {}
-    floss_box = deep.expander("FLOSS", expanded=bool(floss))
     strings = floss.get("strings") or {}
     string_rows = [
         {"Type": kind, "String": value}
         for kind, values in strings.items()
         for value in (values or [])
     ]
+    speakeasy = analysis.get("speakeasy") or {}
+    speakeasy_rows = [
+        row for rows in (speakeasy_tables(speakeasy).values() if speakeasy else ())
+        for row in rows
+    ]
+    show_evidence = evidence_visible(analysis)
+    evidence = (analysis.get("evidence") or []) if show_evidence else []
+
+    # 검색창 하나로 아래 표들을 한꺼번에 거른다.
+    needle = deep_search_needle(
+        deep.text_input(
+            "Deep Analysis 결과에서 찾기",
+            key="deep_filter_query",
+            placeholder="문자열, API, 기술 ID, 규칙 이름 등의 일부",
+        )
+    )
+    capa_hits = deep_search_rows(capabilities, needle)
+    floss_hits = deep_search_rows(string_rows, needle)
+    speakeasy_hits = deep_search_rows(speakeasy_rows, needle)
+    evidence_hits = deep_search_rows(evidence, needle)
+    if needle:
+        hit_counts = [("CAPA", capa_hits), ("FLOSS", floss_hits), ("Speakeasy", speakeasy_hits)]
+        if show_evidence:
+            hit_counts.append(("MITRE", evidence_hits))
+        deep.caption(" · ".join(f"{name} {len(hits)}" for name, hits in hit_counts))
+
+    capa_box = deep.expander(
+        deep_search_label("CAPA", capa_hits, capabilities, needle),
+        expanded=bool(capa_hits) if needle else bool(capa),
+    )
+    if capabilities:
+        deep_search_table(capa_box, capa_hits, needle, hide_index=True, width="stretch")
+    else:
+        capa_box.caption(f"Status: {statuses.get('capa', 'NOT_REQUIRED')}")
+    render_static_detail_notice(capa_box, capa)
+
+    floss_box = deep.expander(
+        deep_search_label("FLOSS", floss_hits, string_rows, needle),
+        expanded=bool(floss_hits) if needle else bool(floss),
+    )
     if string_rows:
-        floss_box.dataframe(string_rows, hide_index=True, width="stretch")
+        deep_search_table(floss_box, floss_hits, needle, hide_index=True, width="stretch")
     else:
         floss_box.caption(f"Status: {statuses.get('floss', 'NOT_REQUIRED')}")
     if floss.get("limited_mode"):
@@ -1211,10 +1319,12 @@ def render_deep_analysis(analysis, deep, state):
         floss_box.caption(f"FLOSS 제한 모드: 정적 문자열 중심으로 {action}. stack·tight·decoded·언어별 추가 문자열은 분석하지 않았습니다.")
     render_static_detail_notice(floss_box, floss)
 
-    speakeasy = analysis.get("speakeasy") or {}
-    speakeasy_box = deep.expander("Speakeasy", expanded=bool(speakeasy))
+    speakeasy_box = deep.expander(
+        deep_search_label("Speakeasy", speakeasy_hits, speakeasy_rows, needle),
+        expanded=bool(speakeasy_hits) if needle else bool(speakeasy),
+    )
     if speakeasy:
-        render_speakeasy(speakeasy_box, speakeasy)
+        render_speakeasy(speakeasy_box, speakeasy, needle)
     else:
         speakeasy_box.caption(
             f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}"
@@ -1222,11 +1332,13 @@ def render_deep_analysis(analysis, deep, state):
 
     # 근거·해석·최종 평가는 심층 분석이 끝난 뒤에만 그린다. 대기·진행 중에는 위의
     # 상태 안내만 남긴다. 실패 시 MITRE는 확보된 부분 근거가 있을 때만 보여 준다.
-    if evidence_visible(analysis):
-        evidence = analysis.get("evidence") or []
-        evidence_box = deep.expander("MITRE Evidence", expanded=bool(evidence))
+    if show_evidence:
+        evidence_box = deep.expander(
+            deep_search_label("MITRE Evidence", evidence_hits, evidence, needle),
+            expanded=bool(evidence_hits) if needle else bool(evidence),
+        )
         if evidence:
-            evidence_box.dataframe(evidence, hide_index=True, width="stretch")
+            deep_search_table(evidence_box, evidence_hits, needle, hide_index=True, width="stretch")
         else:
             evidence_box.caption("표시할 MITRE ATT&CK 근거가 없습니다.")
 
@@ -1641,7 +1753,10 @@ def render_input_view():
 
 
 def render_batch_summary(batch_data):
-    """Render the analyst-priority summary derived from analysis records."""
+    """배치 화면 머리글: 제목, Batch ID, 새 파일 분석 버튼.
+
+    건수 타일과 분류 선택은 render_batch_triage()의 요약 카드가 그린다.
+    """
     summary = derive_batch_summary(batch_data["analyses"])
     batch_data["summary"] = summary
     heading, action = st.columns([6, 1], vertical_alignment="center")
@@ -1659,34 +1774,6 @@ def render_batch_summary(batch_data):
     if action.button("새 파일 분석", key="batch_new_file_analysis", width="stretch"):
         reset_analysis_session()
         st.rerun()
-    summary_card = st.container(border=True, key="batch_summary_card")
-    summary_card.markdown(
-        f"""
-        <div class="batch-summary-grid">
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Total</div>
-                <div class="batch-summary-value">{summary['total']}</div>
-            </div>
-            <div class="batch-summary-item batch-summary-priority">
-                <div class="batch-summary-label">Needs Review</div>
-                <div class="batch-summary-value">{summary['high_risk_uncertain']}</div>
-            </div>
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Auto Malicious</div>
-                <div class="batch-summary-value">{summary['auto_malicious']}</div>
-            </div>
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Auto Benign</div>
-                <div class="batch-summary-value">{summary['auto_benign']}</div>
-            </div>
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Failed</div>
-                <div class="batch-summary-value">{summary['failed']}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 def batch_group_rows(group_key, analyses):
@@ -1727,9 +1814,11 @@ def batch_group_rows(group_key, analyses):
     ]
 
 
-def render_batch_group_results(group_key, analyses):
-    """Render one triage group and bind its selection to the detail view."""
-    result_card = st.container(border=True, key="batch_group_results")
+def render_batch_group_results(group_key, analyses, result_card=st):
+    """Render one triage group and bind its selection to the detail view.
+
+    표와 파일 선택은 요약 카드 안(result_card)에 이어서 그린다.
+    """
     if not analyses:
         result_card.info("이 그룹에 해당하는 분석 결과가 없습니다.")
         return
@@ -1803,9 +1892,11 @@ def render_batch_triage(batch_data):
 
     batch_area = st.container(key="batch_triage_area")
     with batch_area:
+        # 1. 머리글: Batch Summary, Batch ID, 새 파일 분석
         render_batch_summary(batch_data)
         render_intake_notice(st, batch_data)
 
+        # 2. 검색
         query = st.text_input(
             "파일명 또는 SHA-256으로 찾기",
             key="batch_filter_query",
@@ -1820,44 +1911,67 @@ def render_batch_triage(batch_data):
                 st.info("검색 조건에 맞는 파일이 없습니다.")
                 st.stop()
         groups = group_batch_analyses(matched)
+        totals = group_batch_analyses(analyses)
 
-        st.markdown(
-            '<div class="batch-section-heading">분석 결과 분류</div>',
-            unsafe_allow_html=True,
-        )
-        format_group = lambda key: f"{labels[key]} ({len(groups[key])})"
-        if hasattr(st, "segmented_control"):
-            group_key = st.segmented_control(
-                "분석 결과 분류",
-                options=options,
-                default="needs_review",
-                format_func=format_group,
-                key="batch_group",
-                label_visibility="collapsed",
+        def count_text(shown, total):
+            # 검색 중에는 "검색 결과 / 전체", 아닐 때는 숫자 하나만 보여 준다.
+            return f"{shown} / {total}" if searching else f"{total}"
+
+        # 3. 요약 + 분류 카드: 건수 타일을 눌러 분류를 고르고, 아래에 그 목록을 보여 준다.
+        summary_card = st.container(border=True, key="batch_summary_card")
+        with summary_card:
+            total_col, group_col = st.columns([1, 4], vertical_alignment="center")
+            total_col.markdown(
+                f"""
+                <div class="batch-total-tile">
+                    <div class="batch-summary-label">Total</div>
+                    <div class="batch-summary-value">{count_text(len(matched), len(analyses))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
-        else:
-            group_key = st.radio(
-                "분석 결과 분류",
-                options=options,
-                index=0,
-                format_func=format_group,
-                key="batch_group",
-                horizontal=True,
-                label_visibility="collapsed",
+            # 타일 모양은 CSS(.st-key-batch_group)가 만든다. 첫 줄은 분류 이름, 둘째 줄은 건수.
+            format_group = lambda key: (
+                f"{labels[key]}\n{count_text(len(groups[key]), len(totals[key]))}"
             )
-        group_key = group_key or "needs_review"
-        render_batch_group_results(group_key, groups[group_key])
-        if searching and not groups[group_key]:
-            # 매칭은 있지만 지금 보는 그룹에는 없다. render_batch_group_results()는
-            # 빈 그룹에서 선택을 건드리지 않고 돌아오므로, 그대로 두면 검색과
-            # 무관한 직전 파일의 상세가 아래에 남는다. 그룹 위젯은 이미 그려졌으니
-            # 사용자가 건수가 표시된 그룹을 고르면 기존 선택 로직이 상세를 잇는다.
-            # 그룹·선택·analysis_result는 바꾸지 않는다 — 검색어를 지우면 그대로 복귀.
-            st.info(
-                f"검색 결과 {len(matched)}건은 다른 그룹에 있습니다. "
-                "위 분류에서 건수가 표시된 그룹을 선택하세요."
-            )
-            st.stop()
+            with group_col:
+                if hasattr(st, "segmented_control"):
+                    group_options = dict(
+                        options=options,
+                        default="needs_review",
+                        format_func=format_group,
+                        key="batch_group",
+                        label_visibility="collapsed",
+                    )
+                    # Streamlit 1.50부터 생긴 width 옵션의 기본값("content")은 타일을 내용 크기로
+                    # 줄인다. 지원하는 버전에서는 카드 폭을 채우도록 "stretch"를 준다.
+                    if "width" in inspect.signature(st.segmented_control).parameters:
+                        group_options["width"] = "stretch"
+                    group_key = st.segmented_control("분석 결과 분류", **group_options)
+                else:
+                    group_key = st.radio(
+                        "분석 결과 분류",
+                        options=options,
+                        index=0,
+                        format_func=format_group,
+                        key="batch_group",
+                        horizontal=True,
+                        label_visibility="collapsed",
+                    )
+            group_key = group_key or "needs_review"
+            st.markdown('<div class="summary-divider"></div>', unsafe_allow_html=True)
+            render_batch_group_results(group_key, groups[group_key], summary_card)
+            if searching and not groups[group_key]:
+                # 매칭은 있지만 지금 보는 그룹에는 없다. render_batch_group_results()는
+                # 빈 그룹에서 선택을 건드리지 않고 돌아오므로, 그대로 두면 검색과
+                # 무관한 직전 파일의 상세가 아래에 남는다. 그룹 위젯은 이미 그려졌으니
+                # 사용자가 건수가 표시된 그룹을 고르면 기존 선택 로직이 상세를 잇는다.
+                # 그룹·선택·analysis_result는 바꾸지 않는다 — 검색어를 지우면 그대로 복귀.
+                st.info(
+                    f"검색 결과 {len(matched)}건은 다른 그룹에 있습니다. "
+                    "위 분류에서 건수가 표시된 그룹을 선택하세요."
+                )
+                st.stop()
         if not groups[group_key]:
             # 빈 그룹에서 다른 그룹의 이전 상세 결과를 재사용하지 않는다.
             st.stop()
@@ -1880,7 +1994,7 @@ def render_polling_panel(batch_data, auto_refresh):
 
     st.markdown(
         f"""
-        <div class="batch-section-heading batch-section-heading-first">
+        <div class="batch-section-heading batch-section-heading-first batch-heading-left">
             <span>분석 진행 중</span>
             <span class="batch-context">
                 Batch ID · {escape(batch_id_label(batch_data))}
@@ -2055,7 +2169,6 @@ LIGHT_THEME = {
     "chart-benign": "#2563eb",
 
     "df-filter": "none",
-    "polling-accent-bg": "#fff7ed", "polling-accent-border": "#fed7aa", "polling-accent-fg": "#9a3412",
 
     # 토글
     "toggle-track": "#0f172a",
@@ -2090,7 +2203,6 @@ DARK_THEME = {
     "chart-benign": "#60a5fa",
 
     "df-filter": "invert(1) hue-rotate(180deg)",
-    "polling-accent-bg": "#172554", "polling-accent-border": "#1e3a8a", "polling-accent-fg": "#93c5fd",
 
     # 토글
     "toggle-track": "#f1f5f9",
@@ -2206,8 +2318,39 @@ st.markdown(
             gap: var(--detail-gap);
         }
 
-        .detail-verdicts, .detail-pipeline {
+        .detail-verdicts {
             grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        /* 분석 파이프라인은 좁은 오른쪽 칸에 들어가므로 2칸 x 3줄 */
+        .detail-pipeline {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        /* 분석 요약 첫 줄: 왼쪽은 판정 3개, 오른쪽은 라우팅 사유 */
+        .detail-top {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            align-items: start;
+            gap: var(--detail-gap);
+        }
+
+        .detail-route-detail {
+            border-left: 1px solid var(--border);
+            padding-left: 1.25rem;
+            min-width: 0;
+        }
+
+        .route-detail-value {
+            color: var(--text);
+            font-size: 0.95rem;
+            line-height: 1.45;
+            margin-bottom: 0.5rem;
+            overflow-wrap: anywhere;
+        }
+
+        .route-detail-value:last-child {
+            margin-bottom: 0;
         }
 
         .detail-metrics {
@@ -2224,8 +2367,19 @@ st.markdown(
         }
 
         @media (max-width: 700px) {
-            .detail-verdicts, .detail-metrics, .detail-pipeline {
+            .detail-verdicts, .detail-metrics {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .detail-top {
+                grid-template-columns: 1fr;
+            }
+
+            .detail-route-detail {
+                border-left: 0;
+                border-top: 1px solid var(--border);
+                padding-left: 0;
+                padding-top: 0.75rem;
             }
         }
 
@@ -2361,6 +2515,10 @@ st.markdown(
 
         .batch-section-heading-first {
             margin-top: 1.5rem;
+        }
+
+        .batch-heading-left {
+            justify-content: flex-start;
         }
 
         .batch-heading-inline {
@@ -2655,13 +2813,30 @@ st.markdown(
         }
         [data-testid="stTextInput"] input { color: var(--text); }
         [data-testid="stTextInput"] input::placeholder {
-            color: var(--text-faint) !important;
+            color: var(--text-muted) !important;
             opacity: 1;
         }
         
         /* 파일 업로더 */
         [data-testid="stFileUploaderDropzone"] { background: var(--surface-muted); }
         [data-testid="stFileUploaderDropzoneInstructions"] * { color: var(--text-muted); }
+
+        /* 업로더에 올린 파일 카드와 +(파일 추가), ×(삭제) 버튼 */
+        [data-testid="stFileChip"] {
+            background: var(--surface);
+            border-color: var(--border-strong);
+            color: var(--text-muted);
+        }
+        [data-testid="stFileChipName"] { color: var(--text); }
+        [data-testid="stFileChipName"] ~ div { color: var(--text-muted); }  /* 파일 크기 */
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-minimal"],
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-borderlessIcon"] {
+            color: var(--text-muted);
+        }
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-minimal"]:hover,
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-borderlessIcon"]:hover {
+            color: var(--text);
+        }
         
         /* Expander */
         [data-testid="stExpander"] details { border-color: var(--border); }
@@ -2722,7 +2897,7 @@ st.markdown(
 
         /* 분석 요약, 분석 결과 분류 카드: Streamlit 마크다운의 음수 margin 때문에 아래 여백이 사라지는 문제 */
         .st-key-detail_summary_card [data-testid="stMarkdownContainer"],
-        .st-key-batch_group_results > [data-testid="stElementContainer"]:last-child [data-testid="stMarkdownContainer"] {
+        .st-key-batch_summary_card > [data-testid="stElementContainer"]:last-child [data-testid="stMarkdownContainer"] {
             margin-bottom: 0;
         }
 
@@ -2742,21 +2917,96 @@ st.markdown(
             background: var(--chart-benign) !important;
         }
 
-        /* 분석 진행 중 패널의 강조 칸(QUEUED): 라이트는 주황, 다크는 파랑 */
-        .st-key-batch_polling_panel .batch-summary-priority {
-            background: var(--polling-accent-bg);
-            border-color: var(--polling-accent-border);
+        /* 배치 요약 카드: TOTAL 칸 */
+        .batch-total-tile {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.25rem;
+            min-height: 5rem;
+            border-right: 1px solid var(--border);
         }
-        .st-key-batch_polling_panel .batch-summary-priority .batch-summary-label,
-        .st-key-batch_polling_panel .batch-summary-priority .batch-summary-value {
-            color: var(--polling-accent-fg);
+
+        /* 배치 요약 카드: 분류 타일 (segmented control을 타일 모양으로) */
+        /* 버전마다 버튼을 감싸는 상자 구조가 달라서, 버튼을 품은 상자 전체에 폭을 준다 */
+        .st-key-batch_group,
+        .st-key-batch_group *:has(button) {
+            width: 100% !important;
+            max-width: 100% !important;
         }
+        /* 버튼들의 바로 위 상자를 4칸 격자로 */
+        .st-key-batch_group *:has(> button) {
+            display: grid !important;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.75rem;
+        }
+        .st-key-batch_group [data-testid="stButtonGroup"] button {
+            width: 100%;
+            min-height: 5rem;
+            margin: 0 !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 0.6rem !important;
+            background: var(--surface) !important;
+        }
+        .st-key-batch_group [data-testid="stButtonGroup"] button:hover {
+            border-color: var(--text-muted) !important;
+        }
+        /* 버튼 글자는 "분류 이름\n건수" 한 덩어리라, 줄바꿈을 살리고 첫 줄만 작게 꾸민다 */
+        .st-key-batch_group [data-testid="stButtonGroup"] button p {
+            white-space: pre-line;
+            text-align: center;
+            color: var(--text) !important;
+            font-size: 1.2rem;
+            font-weight: 700;
+            line-height: 1.7;
+        }
+        .st-key-batch_group [data-testid="stButtonGroup"] button p::first-line {
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            font-weight: 500;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        /* 선택된 타일: 분류별 색 (1 Needs Review, 2 Auto Malicious, 3 Auto Benign, 4 Failed) */
+        .st-key-batch_group button[aria-checked="true"] { border-width: 2px !important; }
+        .st-key-batch_group button[aria-checked="true"] p::first-line { color: inherit; font-weight: 700; }
+        .st-key-batch_group button:nth-of-type(1)[aria-checked="true"] {
+            background: var(--warning-soft) !important;
+            border-color: var(--warning-border) !important;
+        }
+        .st-key-batch_group button:nth-of-type(1)[aria-checked="true"] p { color: var(--warning-fg) !important; }
+        .st-key-batch_group button:nth-of-type(2)[aria-checked="true"] {
+            background: var(--danger-bg) !important;
+            border-color: var(--danger-border) !important;
+        }
+        .st-key-batch_group button:nth-of-type(2)[aria-checked="true"] p { color: var(--danger-fg) !important; }
+        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] {
+            background: var(--success-bg) !important;
+            border-color: var(--success-border) !important;
+        }
+        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] p { color: var(--success-fg) !important; }
+        .st-key-batch_group button:nth-of-type(4)[aria-checked="true"] {
+            background: var(--neutral-bg) !important;
+            border-color: var(--border-strong) !important;
+        }
+        .st-key-batch_group button:nth-of-type(4)[aria-checked="true"] p { color: var(--text-2) !important; }
 
         /* 표: 캔버스로 그려져서 색을 바꿀 수 없으므로 다크 모드에서만 반전 */
         [data-testid="stDataFrame"] { filter: var(--df-filter); }
 
         @media (max-width: 900px) {
-            .batch-summary-grid {
+            /* 설명 가능성 + 분석 파이프라인 줄: 좁은 화면에서는 위아래로 쌓는다 */
+            .st-key-result_detail_shell [data-testid="stHorizontalBlock"]:has(.st-key-detail_pipeline_section) {
+                flex-wrap: wrap;
+            }
+            .st-key-result_detail_shell [data-testid="stHorizontalBlock"]:has(.st-key-detail_pipeline_section) > div {
+                flex: 1 1 100% !important;
+                min-width: 100% !important;
+            }
+
+            .batch-summary-grid,
+            .st-key-batch_group *:has(> button) {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
