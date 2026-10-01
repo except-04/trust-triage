@@ -1050,7 +1050,7 @@ def render_result_detail(analysis, target=st):
     pipeline = detail_section(pipeline_col, "분석 파이프라인", "pipeline")
     steps = [("ML Triage", "COMPLETED")]
     steps.extend((label, state["tools"][key]) for label, key in (
-        ("CAPA", "capa"), ("FLOSS", "floss"), ("Speakeasy", "speakeasy"), ("CAPE", "cape")
+        ("CAPA", "capa"), ("FLOSS", "floss"), ("Speakeasy", "speakeasy")
     ))
     steps.append(("Final", analysis.get("status") or "QUEUED"))
     pipeline.markdown('<div class="detail-pipeline">' + "".join(
@@ -2327,6 +2327,11 @@ st.markdown(
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
+        /* 단계가 홀수(5개)라 마지막 Final은 두 칸을 모두 쓴다 */
+        .detail-pipeline .pipeline-node:last-child:nth-child(odd) {
+            grid-column: 1 / -1;
+        }
+
         /* 분석 요약 첫 줄: 왼쪽은 판정 3개, 오른쪽은 라우팅 사유 */
         .detail-top {
             display: grid;
@@ -2799,11 +2804,14 @@ st.markdown(
             border-color: var(--text-muted);
             color: var(--text);
         }
+        /* 비활성 버튼. Streamlit의 :disabled:hover 기본 스타일이 덮어쓰지 않도록 !important */
         .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"]:disabled,
-        button[data-testid="stBaseButton-primary"]:disabled {
-            background: var(--surface-muted);
-            border-color: var(--border);
-            color: var(--text-faint);
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"]:disabled:hover,
+        button[data-testid="stBaseButton-primary"]:disabled,
+        button[data-testid="stBaseButton-primary"]:disabled:hover {
+            background: var(--surface-muted) !important;
+            border-color: var(--border) !important;
+            color: var(--text-muted) !important;
         }
         
         /* 입력창 */
