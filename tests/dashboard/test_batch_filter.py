@@ -231,12 +231,13 @@ def test_group_counts_follow_the_query(app, typed, screen, no_backend, stop_sign
     with pytest.raises(stop_signal):
         app.render_batch_triage(batch_data)
 
+    # 타일 라벨은 "분류 이름\n검색 결과 / 전체" 형태다
     format_group = screen["group_calls"][0]["format_func"]
     assert [format_group(key) for key in ("needs_review", "auto_malicious", "auto_benign", "failed")] == [
-        "Needs Review (0)",
-        "Auto Malicious (1)",
-        "Auto Benign (1)",
-        "Failed (0)",
+        "Needs Review\n0 / 1",
+        "Auto Malicious\n1 / 1",
+        "Auto Benign\n1 / 1",
+        "Failed\n0 / 1",
     ]
     assert screen["caption"] == ["검색 결과 2건 / 전체 4건"]
 
@@ -291,8 +292,8 @@ def test_match_only_in_another_group_hides_the_stale_detail(
     # 그룹 위젯은 stop 전에 그려져 사용자가 옮겨 갈 수 있다
     assert len(screen["group_calls"]) == 1
     format_group = screen["group_calls"][0]["format_func"]
-    assert format_group("needs_review") == "Needs Review (1)"
-    assert format_group("auto_benign") == "Auto Benign (0)"
+    assert format_group("needs_review") == "Needs Review\n1 / 1"
+    assert format_group("auto_benign") == "Auto Benign\n0 / 1"
     # 그룹·선택·analysis_result는 강제로 바꾸지 않는다
     for key in ("batch_group", "selected_analysis_id", "analysis_result",
                 "group_analysis_selector", "batch_data", "batch_ids"):
@@ -391,3 +392,17 @@ def test_new_intake_clears_the_query(app):
     app.st.session_state.batch_filter_query = "helper"
     app.reset_analysis_result()
     assert "batch_filter_query" not in app.st.session_state
+
+
+def test_tile_labels_show_only_totals_without_a_query(app, typed, screen, no_backend):
+    batch_data = seed_batch(app, selected="A1")
+    typed("")
+    app.render_batch_triage(batch_data)
+
+    format_group = screen["group_calls"][0]["format_func"]
+    assert [format_group(key) for key in ("needs_review", "auto_malicious", "auto_benign", "failed")] == [
+        "Needs Review\n1",
+        "Auto Malicious\n1",
+        "Auto Benign\n1",
+        "Failed\n1",
+    ]

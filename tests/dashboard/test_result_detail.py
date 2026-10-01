@@ -11,7 +11,8 @@ SCENARIOS = [
     ("HIGH_RISK_UNCERTAIN", "QUEUED"), ("HIGH_RISK_UNCERTAIN", "RUNNING"),
     ("HIGH_RISK_UNCERTAIN", "COMPLETED"), ("HIGH_RISK_UNCERTAIN", "FAILED"),
 ]
-SECTIONS = ["분석 요약", "라우팅 결정", "분석 파이프라인", "설명 가능성", "Deep Analysis"]
+# 라우팅 결정 내용은 분석 요약 첫 줄로 옮겨졌고, 설명 가능성과 분석 파이프라인은 한 줄에 나란히 놓인다.
+SECTIONS = ["분석 요약", "설명 가능성", "분석 파이프라인", "Deep Analysis"]
 
 
 def sample(app, verdict, state):
@@ -43,16 +44,16 @@ def test_every_route_uses_same_sections_and_spacing(app, verdict, state):
     assert [args[0] for args in target.named("subheader")] == SECTIONS
     cards = [kw for name, _, kw in target.walk() if name == "container" and kw.get("border")]
     assert {kw["key"] for kw in cards} == {
-        f"detail_{key}_card" for key in ("summary", "routing", "pipeline", "shap", "deep")
+        f"detail_{key}_card" for key in ("summary", "pipeline", "shap", "deep")
     }
     assert all(kw["height"] == "stretch" and kw["gap"] == app.DETAIL_CARD_GAP for kw in cards)
     shell = target.children[0]
-    # Summary, SHAP and Deep remain full-width siblings for every route.
-    assert len([name for name, _, _ in shell.calls if name == "container"]) == 3
-    assert [args for name, args, _ in shell.calls if name == "columns"] == [([6, 1],), (2,)]
+    # Summary and Deep remain full-width siblings; SHAP(7) and pipeline(3) share one row.
+    assert len([name for name, _, _ in shell.calls if name == "container"]) == 2
+    assert [args for name, args, _ in shell.calls if name == "columns"] == [([6, 1],), ([7, 3],)]
     assert all(kw["gap"] == app.DETAIL_COLUMN_GAP for name, _, kw in shell.calls if name == "columns")
-    routing, pipeline = [kw for kw in cards if kw["key"] in {"detail_routing_card", "detail_pipeline_card"}]
-    assert {k: v for k, v in routing.items() if k != "key"} == {
+    shap, pipeline = [kw for kw in cards if kw["key"] in {"detail_shap_card", "detail_pipeline_card"}]
+    assert {k: v for k, v in shap.items() if k != "key"} == {
         k: v for k, v in pipeline.items() if k != "key"
     }
     assert len(target.named("pyplot")) == 1
