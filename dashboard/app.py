@@ -979,12 +979,16 @@ def render_result_detail(analysis, target=st):
         return
 
     shell = target.container(key="result_detail_shell", gap=DETAIL_COLUMN_GAP)
-    context, action = shell.columns([6, 1], gap=DETAIL_COLUMN_GAP)
+    # 배치 화면에서는 Batch Summary 머리글에 같은 버튼이 있으므로 여기서는 숨긴다.
+    if not st.session_state.get("batch_data"):
+        context, action = shell.columns([6, 1], gap=DETAIL_COLUMN_GAP)
+    else:
+        context, action = shell, None
     context.caption(
         f"{analysis.get('filename') or '(이름 없음)'} · "
         f"SHA-256 {truncate_hash(analysis.get('sha256') or '-')}"
     )
-    if action.button(
+    if action is not None and action.button(
         "새 파일 분석", key="progressive_new_file_analysis", width="stretch"
     ):
         reset_analysis_session()
@@ -1640,15 +1644,21 @@ def render_batch_summary(batch_data):
     """Render the analyst-priority summary derived from analysis records."""
     summary = derive_batch_summary(batch_data["analyses"])
     batch_data["summary"] = summary
-    st.markdown(
+    heading, action = st.columns([6, 1], vertical_alignment="center")
+    heading.markdown(
         f"""
-        <div class="batch-section-heading batch-section-heading-first">
+        <div class="batch-section-heading batch-section-heading-first batch-heading-inline">
             <span>Batch Summary</span>
             <span class="batch-context">Batch ID · {escape(batch_id_label(batch_data))}</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    # 진행 중 화면에서는 이 버튼이 fragment 안에 있어서, 눌러도 fragment만 다시 그려진다.
+    # 입력 화면으로 돌아가려면 st.rerun()으로 앱 전체를 다시 실행해야 한다.
+    if action.button("새 파일 분석", key="batch_new_file_analysis", width="stretch"):
+        reset_analysis_session()
+        st.rerun()
     summary_card = st.container(border=True, key="batch_summary_card")
     summary_card.markdown(
         f"""
@@ -1685,6 +1695,7 @@ def batch_group_rows(group_key, analyses):
         return [
             {
                 "File": analysis["filename"],
+                "SHA-256": analysis.get("sha256") or "-",
                 "Status": analysis["status"],
                 "JRR Reason": analysis["reason"],
                 "Deep Analysis Status": deep_analysis_status_text(analysis),
@@ -1695,6 +1706,7 @@ def batch_group_rows(group_key, analyses):
         return [
             {
                 "File": analysis["filename"],
+                "SHA-256": analysis.get("sha256") or "-",
                 "Status": analysis["status"],
                 "Calibrated Probability": (
                     f"{analysis['calibrated_probability']:.4f}"
@@ -1706,6 +1718,7 @@ def batch_group_rows(group_key, analyses):
     return [
         {
             "File": analysis["filename"],
+            "SHA-256": analysis.get("sha256") or "-",
             "Status": analysis["status"],
             "Initial Verdict": analysis["initial_verdict"],
             "Reason": analysis["reason"],
@@ -1727,6 +1740,8 @@ def render_batch_group_results(group_key, analyses):
         hide_index=True,
         width="stretch",
         height=min(38 * (len(rows) + 1), 300),
+        # 64자 전체를 넣되 열 폭은 줄여 둔다. 셀을 클릭하면 전체 값을 보고 복사할 수 있다.
+        column_config={"SHA-256": {"width": "medium"}},
     )
 
     analysis_by_id = {analysis["analysis_id"]: analysis for analysis in analyses}
@@ -2344,6 +2359,13 @@ st.markdown(
         .batch-section-heading-first {
             margin-top: 1.5rem;
         }
+        
+        .batch-heading-inline {
+            justify-content: flex-start;
+            margin-top: 0;
+            /* Streamlit 마크다운의 -1rem 여백을 상쇄해 버튼과 세로 가운데를 맞춘다 */
+            margin-bottom: 1rem;
+        }
 
         .batch-context {
             color: var(--text-muted);
@@ -2624,8 +2646,7 @@ st.markdown(
         }
         
         /* 입력창, 선택 상자 */
-        [data-testid="stTextInputRootElement"],
-        [data-baseweb="select"] > div {
+        [data-testid="stTextInputRootElement"]{
             background: var(--surface-muted);
             border-color: var(--border-strong);
         }
@@ -2657,6 +2678,67 @@ st.markdown(
         [data-testid="stAlertContentInfo"] { color: var(--info-fg); }
         [data-testid="stAlertContentWarning"] { color: var(--warning-fg); }
         [data-testid="stAlertContentError"] { color: var(--danger-fg); }
+        
+        /* 선택 상자 (버전에 따라 구조가 달라 두 경우 모두 지정) */
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+        [data-testid="stSelectbox"] div[role="group"] {
+            background: var(--surface-muted);
+            border-color: var(--border-strong);
+            color: var(--text);
+        }
+        [data-testid="stSelectbox"] input,
+        [data-testid="stSelectbox"] [data-baseweb="select"] * {
+            color: var(--text) !important;
+        }
+        [data-testid="stSelectbox"] svg { fill: var(--text-muted); color: var(--text-muted); }
+        
+        /* 선택 상자를 펼쳤을 때 나오는 목록 */
+        [data-testid="stSelectboxVirtualDropdown"],
+        [data-baseweb="popover"] ul {
+            background: var(--surface) !important;
+        }
+        [role="listbox"] [role="option"],
+        [data-baseweb="popover"] li {
+            color: var(--text);
+        }
+        [role="listbox"] [role="option"]:hover,
+        [role="listbox"] [role="option"][aria-selected="true"],
+        [data-baseweb="popover"] li:hover {
+            background: var(--surface-muted) !important;
+        }
+        
+        /* 분류 버튼 (segmented control): 선택되지 않은 버튼 */
+        [data-testid="stButtonGroup"] button[aria-checked="false"] {
+            background: var(--surface);
+            border-color: var(--border-strong);
+            color: var(--text-2);
+        }
+        [data-testid="stButtonGroup"] button[aria-checked="false"]:hover {
+            color: var(--text);
+            border-color: var(--text-muted);
+        }
+        
+        /* 분석 요약, 분석 결과 분류 카드: Streamlit 마크다운의 음수 margin 때문에 아래 여백이 사라지는 문제 */
+        .st-key-detail_summary_card [data-testid="stMarkdownContainer"],
+        .st-key-batch_group_results > [data-testid="stElementContainer"]:last-child [data-testid="stMarkdownContainer"] {
+            margin-bottom: 0;
+        }
+        
+        /* 진행률 막대: 바탕(트랙)은 테마 색, 채워지는 부분은 파란색 */
+        [data-testid="stProgress"] [role="progressbar"] > div {
+            background: var(--border) !important;
+        }
+        [data-testid="stProgress"] [role="progressbar"] > div > div {
+            background: var(--chart-benign) !important;
+        }
+        
+        /* 분석 파이프라인 카드: 옆의 라우팅 결정 카드 높이에 맞춰 늘어나므로 내용을 세로 가운데에 둔다 */
+        .st-key-detail_pipeline_card {
+            justify-content: center;
+        }
+        .st-key-detail_pipeline_card [data-testid="stMarkdownContainer"] {
+            margin-bottom: 0;
+        }
         
         /* 표: 캔버스로 그려져서 색을 바꿀 수 없으므로 다크 모드에서만 반전 */
         [data-testid="stDataFrame"] { filter: var(--df-filter); }
