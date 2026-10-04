@@ -112,7 +112,12 @@ def _streamlit_stub():
     def stop(*args, **kwargs):
         raise Stop()
 
+    def dialog(*args, **kwargs):
+        # @st.dialog("제목", width=...) 형태. 함수는 그대로 두어 직접 호출할 수 있게 한다
+        return lambda fn: fn
+
     module.fragment = fragment
+    module.dialog = dialog
     module.rerun = rerun
     module.stop = stop
     module.set_page_config = lambda *a, **k: None

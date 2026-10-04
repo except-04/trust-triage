@@ -226,14 +226,16 @@ def test_results_reappearing_restores_the_view(
 
 def test_group_counts_follow_the_query(app, typed, screen, no_backend, stop_signal):
     batch_data = seed_batch(app)
+    screen["group"] = "needs_review"
     typed("helper")
-    # 기본 그룹(needs_review)에는 매칭이 없으므로 라벨을 그린 뒤 멈춘다
+    # Needs Review 그룹에는 매칭이 없으므로 라벨을 그린 뒤 멈춘다
     with pytest.raises(stop_signal):
         app.render_batch_triage(batch_data)
 
     # 타일 라벨은 "분류 이름\n검색 결과 / 전체" 형태다
     format_group = screen["group_calls"][0]["format_func"]
-    assert [format_group(key) for key in ("needs_review", "auto_malicious", "auto_benign", "failed")] == [
+    assert [format_group(key) for key in ("total", "needs_review", "auto_malicious", "auto_benign", "failed")] == [
+        "Total\n2 / 4",
         "Needs Review\n0 / 1",
         "Auto Malicious\n1 / 1",
         "Auto Benign\n1 / 1",
@@ -406,3 +408,14 @@ def test_tile_labels_show_only_totals_without_a_query(app, typed, screen, no_bac
         "Auto Benign\n1",
         "Failed\n1",
     ]
+
+
+def test_batch_view_opens_on_total_by_default(app, typed, screen, no_backend):
+    batch_data = seed_batch(app)
+    typed("")
+    app.render_batch_triage(batch_data)  # 그룹을 고르지 않아도 멈추지 않는다
+
+    call = screen["group_calls"][0]
+    assert call["default"] == "total"
+    assert call["options"][0] == "total"
+    assert call["format_func"]("total") == "Total\n4"
