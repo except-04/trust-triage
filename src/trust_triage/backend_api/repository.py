@@ -499,7 +499,9 @@ class PostgresAnalysisRepository:
             rows = connection.execute(
                 "SELECT analysis_id FROM api_analyses WHERE "
                 + _READY
-                + " ORDER BY updated_at, analysis_id LIMIT %s",
+                # 가벼운 INITIAL/FINALIZING 단계를 CAPA/FLOSS가 도는 WAITING_DEEP보다
+                # 먼저 처리해 이미 판정된 건이 심층 분석 뒤에 줄 서지 않게 한다.
+                + " ORDER BY (phase = 'WAITING_DEEP'), updated_at, analysis_id LIMIT %s",
                 (limit,),
             ).fetchall()
             return [row["analysis_id"] for row in rows]

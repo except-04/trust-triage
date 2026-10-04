@@ -294,7 +294,11 @@ class MemoryAnalysisRepository:
                 row.analysis_id
                 for row in sorted(
                     self.rows.values(),
-                    key=lambda row: (row.updated_at, row.analysis_id),
+                    key=lambda row: (
+                        row.phase == "WAITING_DEEP",
+                        row.updated_at,
+                        row.analysis_id,
+                    ),
                 )
                 if self._ready(row)
             ][:limit]

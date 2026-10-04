@@ -158,6 +158,46 @@ class BackendProcessor:
                 raise LeaseLost("Artifact/checkpoint ownership expired")
         return True
 
+    def _finalize(self, record, token, lease) -> AnalysisRecord:
+        """FINALIZING 단계의 최종 판정을 기록한다. DB 쓰기 한 번이라 즉시 끝난다."""
+        analysis_id = record.analysis_id
+        failed = (record.deep_result or {}).get("status") == "FAILED"
+        error = (
+            BackendError(
+                "DEEP_ANALYSIS_FAILED",
+                "심층 분석이 실패하여 전문가 검토가 필요합니다.",
+                stage="FINAL_ASSESSMENT",
+            ).to_dict()
+            if failed
+            else None
+        )
+        lease.check()
+        assessment = assess(record, failure=failed)
+        lease.saved(
+            self._checkpoint(
+                record,
+                token,
+                "FINAL_ASSESSMENT",
+                {"final_assessment": assessment, "error": error},
+                lambda transaction: transaction.finish(
+                    analysis_id,
+                    token,
+                    assessment,
+                    error=error,
+                ),
+                check=lease.check,
+            )
+        )
+        return self.repository.get(analysis_id)
+
+    def _finalize_now(self, analysis_id, token, lease) -> AnalysisRecord:
+        """방금 저장한 체크포인트를 다시 읽어 같은 lease 안에서 마무리한다."""
+        lease.check()
+        record = self.repository.get(analysis_id)
+        if record is None or record.phase != "FINALIZING":
+            raise LeaseLost("Analysis left the finalizing phase")
+        return self._finalize(record, token, lease)
+
     def resume(self, analysis_id: str) -> AnalysisRecord:
         claim = self.repository.claim(analysis_id, self.config.lease_seconds)
         record, token = claim.record, claim.token
@@ -203,6 +243,11 @@ class BackendProcessor:
                             check=lease.check,
                         )
                     )
+                    if value["route"] != "DEEP_ANALYSIS":
+                        # 심층 분석이 필요 없는 건은 같은 lease로 바로 마무리한다.
+                        # 다음 루프 바퀴로 미루면 앞선 건의 CAPA/FLOSS가 끝날 때까지
+                        # 초기 판정이 끝난 건도 RUNNING으로 남는다.
+                        return self._finalize_now(analysis_id, token, lease)
                 elif record.phase == "WAITING_DEEP":
                     created = datetime.fromisoformat(record.created_at)
                     value = None
@@ -251,35 +296,11 @@ class BackendProcessor:
                         if value["status"] in {"COMPLETED", "FAILED"}
                         else save_deep(self.repository)
                     )
+                    if value["status"] in {"COMPLETED", "FAILED"}:
+                        # 심층 분석 종료 직후에도 다음 바퀴를 기다리지 않고 마무리한다.
+                        return self._finalize_now(analysis_id, token, lease)
                 elif record.phase == "FINALIZING":
-                    failed = (record.deep_result or {}).get("status") == "FAILED"
-                    error = (
-                        BackendError(
-                            "DEEP_ANALYSIS_FAILED",
-                            "심층 분석이 실패하여 전문가 검토가 필요합니다.",
-                            stage="FINAL_ASSESSMENT",
-                        ).to_dict()
-                        if failed
-                        else None
-                    )
-                    lease.check()
-                    assessment = assess(record, failure=failed)
-                    lease.saved(
-                        self._checkpoint(
-                            record,
-                            token,
-                            "FINAL_ASSESSMENT",
-                            {"final_assessment": assessment, "error": error},
-                            lambda transaction: transaction.finish(
-                                analysis_id,
-                                token,
-                                assessment,
-                                error=error,
-                            ),
-                            check=lease.check,
-                        )
-                    )
-                    return self.repository.get(analysis_id)
+                    return self._finalize(record, token, lease)
                 else:
                     raise BackendError(
                         "INVALID_PROCESSING_PHASE",
