@@ -236,16 +236,14 @@ def test_initial_final_flow_is_durable_and_does_not_run_deep(
     harness.initial.value = initial_result(verdict)
     accepted = submit(harness)
     assert accepted.status == "QUEUED"
-    first = harness.processor.resume(accepted.analysis_id)
-    assert first.phase == "FINALIZING" and first.status == "RUNNING"
-    assert first.initial_result["initial_verdict"] == verdict
-    assert first.final_assessment is None
-    assert first.claimed is False
-    # Poll scheduling is real state: an immediate resume cannot take the lease.
-    harness.processor.resume(accepted.analysis_id)
-    assert len(harness.initial.calls) == 1
-    finished = next_step(harness, accepted.analysis_id)
+    # Non-deep routes finish in the same pass. Waiting for the next loop would
+    # leave an already-classified file RUNNING behind another file's CAPA/FLOSS.
+    finished = harness.processor.resume(accepted.analysis_id)
     assert finished.status == "COMPLETED" and finished.phase == "DONE"
+    assert finished.initial_result["initial_verdict"] == verdict
+    assert finished.claimed is False
+    assert harness.repository.calls["release"] == 0
+    assert len(harness.initial.calls) == 1
     assert finished.final_assessment["final_verdict"] == final
     assert finished.final_assessment["requires_human_review"] is review
     assert harness.deep.calls == []
@@ -319,13 +317,10 @@ def test_high_risk_waits_for_deep_then_finalizes_for_review(harness):
         harness.deep,
         harness.config,
     )
-    finalizing = next_step(harness, accepted.analysis_id)
-    assert (
-        finalizing.phase == "FINALIZING"
-        and finalizing.deep_result["status"] == "COMPLETED"
-    )
+    # A finished deep snapshot is finalized in the same pass.
     finished = next_step(harness, accepted.analysis_id)
-    assert finished.status == "COMPLETED"
+    assert finished.deep_result["status"] == "COMPLETED"
+    assert finished.status == "COMPLETED" and finished.phase == "DONE"
     assert finished.final_assessment["final_verdict"] == "UNCERTAIN"
     assert finished.final_assessment["disposition"] == "MANUAL_REVIEW"
     assert finished.final_assessment["requires_human_review"] is True
@@ -411,9 +406,9 @@ def test_finished_deep_result_is_recovered_even_after_wait_deadline(harness):
     recovered = next_step(
         harness, accepted.analysis_id, seconds=harness.config.deep_wait_seconds
     )
-    assert recovered.phase == "FINALIZING" and recovered.error is None
+    assert recovered.status == "COMPLETED" and recovered.error is None
+    assert recovered.deep_result["status"] == "COMPLETED"
     assert harness.deep.calls == []
-    assert next_step(harness, accepted.analysis_id).status == "COMPLETED"
 
 
 @pytest.mark.parametrize("guard_result", [True, False, None, "error"])
@@ -543,9 +538,7 @@ def test_retryable_initial_failure_obeys_backoff_then_recovers(harness):
     checkpoint = next_step(
         harness, accepted.analysis_id, seconds=harness.config.retry_delay_seconds
     )
-    assert checkpoint.phase == "FINALIZING" and checkpoint.error is None
-    finished = next_step(harness, accepted.analysis_id)
-    assert finished.status == "COMPLETED"
+    assert checkpoint.status == "COMPLETED" and checkpoint.error is None
     assert len(harness.initial.calls) == 2
 
 
@@ -611,9 +604,11 @@ def test_checkpoint_database_failure_is_retryable_and_preserves_input(harness):
 
 def test_database_failure_after_initial_commit_resumes_next_phase(harness):
     accepted = submit(harness)
-    harness.repository.failures["release"] = 1
+    # The initial checkpoint is committed; only the same-pass finalization fails.
+    harness.repository.failures["finish"] = 1
     retry = harness.processor.resume(accepted.analysis_id)
     assert retry.phase == "FINALIZING" and retry.initial_result is not None
+    assert retry.status == "RUNNING" and not retry.claimed
     assert retry.error["code"] == "DATABASE_ERROR"
     finished = next_step(
         harness, accepted.analysis_id, seconds=harness.config.retry_delay_seconds + 0.01
@@ -630,8 +625,7 @@ def test_database_outage_during_checkpoint_and_error_save_recovers_after_lease(h
     recovered = next_step(
         harness, accepted.analysis_id, seconds=harness.config.lease_seconds + 0.01
     )
-    assert recovered.phase == "FINALIZING"
-    assert next_step(harness, accepted.analysis_id).status == "COMPLETED"
+    assert recovered.status == "COMPLETED" and recovered.phase == "DONE"
 
 
 def test_claim_database_outage_leaves_the_request_pending(harness):
@@ -1211,3 +1205,23 @@ def test_artifact_storage_failure_is_recorded_without_a_malicious_verdict(
     assert row.status == "FAILED" and row.error["code"] == code
     assert row.final_assessment["final_verdict"] == "UNCERTAIN"
     assert harness.repository.list_artifacts(accepted.analysis_id) == []
+
+
+def test_classified_file_completes_while_another_waits_for_deep(harness):
+    """An AUTO_BENIGN file must not stay RUNNING behind a slow deep analysis."""
+    harness.initial.outcomes.extend(
+        [initial_result("HIGH_RISK_UNCERTAIN"), initial_result("AUTO_BENIGN")]
+    )
+    harness.deep.outcomes.append(
+        lambda record: deep_snapshot(
+            record, status="RUNNING", phase="WAITING_SPEAKEASY"
+        )
+    )
+    slow = submit(harness, marker=1)
+    fast = submit(harness, marker=2)
+
+    rows = {row.analysis_id: row for row in harness.processor.resume_ready()}
+
+    assert rows[slow.analysis_id].phase == "WAITING_DEEP"
+    assert rows[fast.analysis_id].status == "COMPLETED"
+    assert rows[fast.analysis_id].final_assessment["final_verdict"] == "BENIGN"
