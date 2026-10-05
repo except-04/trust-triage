@@ -235,12 +235,17 @@ def test_history_rows_chain_previous_group_and_show_newest_first(app):
 def dialog(app, monkeypatch):
     """팝업 위젯을 조종할 수 있게 하고, 호출 내용을 모아 돌려준다."""
     state = {"choice": "auto_malicious", "notes": "", "reviewer": "HongGildong", "click": True}
-    seen = {"errors": [], "buttons": [], "saves": []}
+    seen = {"errors": [], "warnings": [], "buttons": [], "saves": [], "radio_keys": []}
 
-    monkeypatch.setattr(app.st, "radio", lambda *a, **k: state["choice"], raising=False)
+    def radio(*args, **kwargs):
+        seen["radio_keys"].append(kwargs.get("key"))
+        return state["choice"]
+
+    monkeypatch.setattr(app.st, "radio", radio, raising=False)
     monkeypatch.setattr(app.st, "text_area", lambda *a, **k: state["notes"], raising=False)
     monkeypatch.setattr(app.st, "text_input", lambda *a, **k: state["reviewer"], raising=False)
     monkeypatch.setattr(app.st, "error", lambda msg, *a, **k: seen["errors"].append(msg), raising=False)
+    monkeypatch.setattr(app.st, "warning", lambda msg, *a, **k: seen["warnings"].append(msg), raising=False)
 
     def button(label, *args, **kwargs):
         seen["buttons"].append((label, kwargs))
@@ -254,9 +259,17 @@ def dialog(app, monkeypatch):
         lambda analysis_id: {"analyst_final_verdict": "MALICIOUS", "review_revision": 1},
     )
 
-    def save(*args, **kwargs):
-        seen["saves"].append(args)
-        return {}
+    def save(analysis_id, verdict, reviewer, expected_revision, notes=""):
+        # 실제 PATCH 응답 형태: 저장된 판정과 새 revision 을 돌려준다
+        seen["saves"].append((analysis_id, verdict, reviewer, expected_revision, notes))
+        return {
+            "analysis_id": analysis_id,
+            "revision": expected_revision + 1,
+            "analyst_final_verdict": verdict,
+            "analyst_notes": notes,
+            "reviewer_id": reviewer,
+            "reviewed_at": "2026-10-05T00:00:00+00:00",
+        }
 
     monkeypatch.setattr(api_client, "save_review", save)
     item = analysis("A1", "AUTO_BENIGN")
@@ -315,18 +328,65 @@ def test_dialog_rejects_invalid_reviewer_without_calling_backend(app, dialog):
     assert any("검토자명" in message for message in seen["errors"])
 
 
-def test_dialog_conflict_refreshes_to_latest_revision(app, dialog, monkeypatch):
+def test_save_keeps_patch_result_when_refetch_fails(app, dialog, monkeypatch, rerun_signal):
+    """저장은 됐는데 재조회가 실패해도 화면은 서버에 저장된 판정·revision 을 보여야 한다.
+
+    완료된 건은 폴링이 다시 조회하지 않으므로, 여기서 옛 값이 남으면 화면이 계속
+    틀린 판정을 보여 주고 다음 저장은 자기 자신과 충돌(409)한다.
+    """
+    state, seen = dialog
+
+    def unavailable(analysis_id):
+        raise ApiError("SERVICE_UNAVAILABLE", "temporary", http_status=503)
+
+    monkeypatch.setattr(api_client, "get_result", unavailable)
+
+    with pytest.raises(rerun_signal):
+        app.review_dialog("A1")
+
+    for view in (app.st.session_state.analysis_result, app.st.session_state.batch_data["analyses"][0]):
+        assert view["analyst_final_verdict"] == "MALICIOUS"
+        assert view["review_revision"] == 1
+        assert view["approval_status"] == "MODIFIED"
+        assert app.triage_group_key(view) == "auto_malicious"
+    assert "저장했습니다" in app.st.session_state.review_notice
+
+
+def test_dialog_conflict_redraws_with_latest_verdict(app, dialog, monkeypatch, rerun_signal):
+    """충돌하면 최신 판정을 받아 와서 팝업을 다시 그리고, 이전 선택은 버린다.
+
+    다시 그리지 않으면 화면에는 이전 판정이 남은 채 revision 만 새 값이 되어,
+    한 번 더 저장하면 다른 검토자의 변경을 확인 없이 덮어쓴다.
+    """
     state, seen = dialog
 
     def conflict(*args, **kwargs):
         raise ApiError("REVIEW_CONFLICT", "conflict", http_status=409)
 
     monkeypatch.setattr(api_client, "save_review", conflict)
+    monkeypatch.setattr(
+        api_client,
+        "list_reviews",
+        lambda analysis_id: {"items": [{"reviewer_id": "OtherAnalyst", "analyst_final_verdict": "MALICIOUS"}]},
+    )
 
+    with pytest.raises(rerun_signal):
+        app.review_dialog("A1")
+
+    assert app.st.session_state.analysis_result["review_revision"] == 1
+    assert "OtherAnalyst" in app.st.session_state.review_conflict["A1"]
+
+    # 다시 그린 팝업: 경고가 보이고, 선택 위젯은 최신 revision 의 새 위젯이며,
+    # 최신 판정(AUTO MALICIOUS)과 같은 선택이면 저장할 수 없다.
+    seen["buttons"].clear()
     app.review_dialog("A1")
 
-    assert any("먼저 판정이 수정" in message for message in seen["errors"])
-    assert app.st.session_state.analysis_result["review_revision"] == 1
+    assert any("먼저 판정을 수정" in message for message in seen["warnings"])
+    assert seen["radio_keys"][0] != seen["radio_keys"][-1]
+    assert seen["radio_keys"][-1].endswith("_1")
+    save_buttons = [kw for label, kw in seen["buttons"] if label == "저장"]
+    assert save_buttons[-1]["disabled"] is True
+    assert seen["saves"] == []
 
 
 # ---- api_client ----------------------------------------------------------------

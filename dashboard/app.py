@@ -1108,6 +1108,7 @@ def render_summary_section(target, analysis):
         disabled=blocker is not None,
         help=blocker,
     ):
+        st.session_state.get("review_conflict", {}).pop(analysis["analysis_id"], None)
         review_dialog(analysis["analysis_id"])
     return section.container(
         border=True, key="detail_summary_card", height="stretch", gap=DETAIL_CARD_GAP
@@ -1130,12 +1131,43 @@ def refresh_review_fields(analysis_id):
     심층 분석 상세 등 이미 받아 둔 값은 건드리지 않는다.
     """
     full = api_client.get_result(analysis_id)
-    patch = {
-        **review_fields(full),
-        "final_verdict": full.get("final_verdict"),
-        "final_assessment": full.get("final_assessment"),
-    }
+    return apply_review_patch(
+        analysis_id,
+        {
+            **review_fields(full),
+            "final_verdict": full.get("final_verdict"),
+            "final_assessment": full.get("final_assessment"),
+        },
+    )
 
+
+def apply_saved_review(analysis_id, saved):
+    """PATCH 응답만으로 화면 상태를 먼저 갱신한다.
+
+    저장 직후 재조회(get_result)가 실패해도 서버에 저장된 판정과 새 revision이
+    화면에 남도록, 재조회보다 먼저 호출한다. approval_status 계산은 백엔드
+    views.analysis 와 같다.
+    """
+    target = review_target(analysis_id) or {}
+    verdict = saved.get("analyst_final_verdict")
+    if verdict is None:
+        approval = "PENDING"
+    elif verdict == target.get("final_verdict"):
+        approval = "APPROVED"
+    else:
+        approval = "MODIFIED"
+    return apply_review_patch(
+        analysis_id,
+        {
+            "analyst_final_verdict": verdict,
+            "approval_status": approval,
+            "review_revision": saved["revision"],
+        },
+    )
+
+
+def apply_review_patch(analysis_id, patch):
+    """배치 목록과 현재 상세 결과 양쪽에서 해당 건에 patch를 덮어쓴다."""
     updated = None
     batch_data = st.session_state.get("batch_data")
     if batch_data:
@@ -1183,6 +1215,37 @@ def review_history_rows(items, analysis):
     return list(reversed(rows))
 
 
+def handle_review_conflict(analysis_id):
+    """다른 검토자가 먼저 저장한 경우. 최신 판정을 불러온 뒤 팝업을 다시 그린다.
+
+    팝업을 다시 그리지 않으면 화면에는 이전 판정이 남은 채 내부 revision만 새 값이
+    되어, 다시 저장하면 다른 검토자의 변경을 확인 없이 덮어쓰게 된다.
+    """
+    try:
+        latest = refresh_review_fields(analysis_id) or review_target(analysis_id) or {}
+    except ApiError as e:
+        # 최신 값을 모르면 revision도 옛 값 그대로이므로 다시 저장해도 409로 막힌다
+        message = (
+            "다른 검토자가 먼저 판정을 수정했지만 최신 판정을 불러오지 못했습니다. "
+            f"팝업을 닫았다가 다시 열어 주세요. ({e.message})"
+        )
+    else:
+        who = ""
+        try:
+            items = (api_client.list_reviews(analysis_id) or {}).get("items") or []
+            if items:
+                who = f"{items[-1].get('reviewer_id')}님이 "
+        except ApiError:
+            pass
+        group = BATCH_GROUP_LABELS[triage_group_key(latest) or "needs_review"].upper()
+        message = (
+            f"다른 검토자가 먼저 판정을 수정했습니다. {who}{group}(으)로 저장한 상태입니다. "
+            "최신 판정을 확인한 뒤 다시 선택해 저장하세요."
+        )
+    st.session_state.setdefault("review_conflict", {})[analysis_id] = message
+    st.rerun(scope="fragment")
+
+
 @st.dialog("판정 수정", width="large")
 def review_dialog(analysis_id):
     """분석가 판정 수정 팝업. 저장에 성공하면 앱 전체를 다시 그려 팝업을 닫는다."""
@@ -1191,6 +1254,9 @@ def review_dialog(analysis_id):
         st.error("선택한 분석을 찾을 수 없습니다. 화면을 새로 고친 뒤 다시 시도하세요.")
         return
 
+    conflict = st.session_state.get("review_conflict", {}).get(analysis_id)
+    if conflict:
+        st.warning(conflict)
     current = triage_group_key(analysis)
     original = initial_group_key(analysis)
     st.caption(
@@ -1212,7 +1278,10 @@ def review_dialog(analysis_id):
         index=REVIEW_GROUPS.index(current) if current in REVIEW_GROUPS else 0,
         format_func=lambda key: BATCH_GROUP_LABELS[key].upper(),
         horizontal=True,
-        key=f"review_choice_{analysis_id}",
+        # revision을 key에 넣어, 충돌로 최신 판정을 받아 오면 이전 선택이 남지 않고
+        # 최신 판정이 선택된 새 위젯으로 다시 만들어지게 한다. (key가 같으면 브라우저가
+        # 이전 선택을 계속 보여 줘서 화면과 실제 선택값이 어긋난다)
+        key=f"review_choice_{analysis_id}_{analysis.get('review_revision') or 0}",
     )
     notes = st.text_area(
         "메모 (선택)",
@@ -1239,7 +1308,7 @@ def review_dialog(analysis_id):
             st.error("검토자명은 영문, 숫자, _ . @ - 로 1~128자여야 합니다.")
         else:
             try:
-                api_client.save_review(
+                saved = api_client.save_review(
                     analysis_id,
                     REVIEW_VERDICT_BY_GROUP[choice],
                     reviewer,
@@ -1248,15 +1317,7 @@ def review_dialog(analysis_id):
                 )
             except ApiError as e:
                 if e.code == "REVIEW_CONFLICT":
-                    # 다른 화면에서 먼저 저장했다. 최신 값을 받아 와서 다시 고르게 한다.
-                    try:
-                        refresh_review_fields(analysis_id)
-                    except ApiError:
-                        pass
-                    st.error(
-                        "다른 곳에서 먼저 판정이 수정되었습니다. 최신 판정으로 갱신했으니 "
-                        "확인한 뒤 다시 저장하세요."
-                    )
+                    handle_review_conflict(analysis_id)
                 elif e.code == "REVIEW_FORBIDDEN":
                     st.error(
                         "판정 수정 권한이 없습니다. 대시보드의 "
@@ -1266,11 +1327,15 @@ def review_dialog(analysis_id):
                     st.error(f"저장 실패: {e.message} (코드 {e.code})")
             else:
                 st.session_state.reviewer_id = reviewer
+                st.session_state.get("review_conflict", {}).pop(analysis_id, None)
+                # 재조회가 실패해도 저장된 판정·revision이 화면에 남도록 응답부터 반영한다
+                apply_saved_review(analysis_id, saved)
                 try:
                     refresh_review_fields(analysis_id)
                 except ApiError as e:
                     st.session_state.review_notice = (
-                        f"저장했지만 최신 결과를 불러오지 못했습니다: {e.message}"
+                        f"판정을 {BATCH_GROUP_LABELS[choice].upper()}(으)로 저장했습니다. "
+                        f"(다른 결과 항목은 새로 불러오지 못했습니다: {e.message})"
                     )
                 else:
                     st.session_state.review_notice = (
