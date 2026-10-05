@@ -663,7 +663,8 @@ def pending_analyses(batch_data):
 def poll_status_counts(analyses):
     """진행 상황 패널용 상태별 건수.
 
-    완료 화면의 derive_batch_summary()는 초기 판정을 세고, 이쪽은 작업 상태를 센다.
+    완료 화면의 derive_batch_summary()는 판정 그룹(분석가 수정 반영)을 세고, 이쪽은
+    작업 상태를 센다.
     서로 다른 집계이므로 합치지 않는다.
     """
     counts = {"QUEUED": 0, "RUNNING": 0, "COMPLETED": 0, "FAILED": 0}
@@ -1108,8 +1109,7 @@ def render_summary_section(target, analysis):
         disabled=blocker is not None,
         help=blocker,
     ):
-        st.session_state.get("review_conflict", {}).pop(analysis["analysis_id"], None)
-        review_dialog(analysis["analysis_id"])
+        open_review_dialog(analysis["analysis_id"])
     return section.container(
         border=True, key="detail_summary_card", height="stretch", gap=DETAIL_CARD_GAP
     )
@@ -1215,6 +1215,23 @@ def review_history_rows(items, analysis):
     return list(reversed(rows))
 
 
+def open_review_dialog(analysis_id):
+    """판정 수정 팝업을 연다. 열기 직전에 판정 관련 값을 한 번 새로 받아 온다.
+
+    완료된 건은 폴링이 다시 조회하지 않아서, 다른 검토자가 그사이 바꾼 판정이 화면에
+    없을 수 있다. 그대로 열면 '현재 판정'은 옛 값인데 아래 수정 이력(매번 서버에서
+    읽음)에는 새 저장이 보여 서로 어긋난다. 팝업 안에서 다시 그릴 때마다 받아 오면
+    고르던 중에 선택이 바뀔 수 있으므로, 여는 순간 한 번만 받는다. 실패하면 화면에
+    있던 값으로 열고, 저장 시 revision 확인(409)이 마지막 안전장치가 된다.
+    """
+    st.session_state.get("review_conflict", {}).pop(analysis_id, None)
+    try:
+        refresh_review_fields(analysis_id)
+    except ApiError:
+        pass
+    review_dialog(analysis_id)
+
+
 def handle_review_conflict(analysis_id):
     """다른 검토자가 먼저 저장한 경우. 최신 판정을 불러온 뒤 팝업을 다시 그린다.
 
@@ -1226,7 +1243,7 @@ def handle_review_conflict(analysis_id):
     except ApiError as e:
         # 최신 값을 모르면 revision도 옛 값 그대로이므로 다시 저장해도 409로 막힌다
         message = (
-            "다른 검토자가 먼저 판정을 수정했지만 최신 판정을 불러오지 못했습니다. "
+            "그사이 판정이 먼저 수정되었지만 최신 판정을 불러오지 못했습니다. "
             f"팝업을 닫았다가 다시 열어 주세요. ({e.message})"
         )
     else:
@@ -1238,8 +1255,10 @@ def handle_review_conflict(analysis_id):
         except ApiError:
             pass
         group = BATCH_GROUP_LABELS[triage_group_key(latest) or "needs_review"].upper()
+        # 저장 버튼을 두 번 눌렀거나 응답 전에 연결이 끊겨 내 저장이 먼저 반영된
+        # 경우에도 409가 나므로 '다른 검토자'라고 단정하지 않는다.
         message = (
-            f"다른 검토자가 먼저 판정을 수정했습니다. {who}{group}(으)로 저장한 상태입니다. "
+            f"그사이 판정이 먼저 수정되었습니다. {who}{group}(으)로 저장한 상태입니다. "
             "최신 판정을 확인한 뒤 다시 선택해 저장하세요."
         )
     st.session_state.setdefault("review_conflict", {})[analysis_id] = message
@@ -1984,6 +2003,8 @@ def hash_search_rows(analyses):
             "Status": analysis.get("status") or "-",
             "Initial Verdict": analysis.get("initial_verdict") or "-",
             "Final Verdict": analysis.get("final_verdict") or "-",
+            # 분석가가 판정을 수정한 이력도 배치 표와 같은 글자로 보여 준다
+            REVIEW_COLUMN: review_mark(analysis),
         }
         for analysis in analyses
     ]

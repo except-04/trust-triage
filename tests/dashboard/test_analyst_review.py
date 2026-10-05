@@ -381,12 +381,58 @@ def test_dialog_conflict_redraws_with_latest_verdict(app, dialog, monkeypatch, r
     seen["buttons"].clear()
     app.review_dialog("A1")
 
-    assert any("먼저 판정을 수정" in message for message in seen["warnings"])
+    assert any("먼저 수정되었습니다" in message for message in seen["warnings"])
     assert seen["radio_keys"][0] != seen["radio_keys"][-1]
     assert seen["radio_keys"][-1].endswith("_1")
     save_buttons = [kw for label, kw in seen["buttons"] if label == "저장"]
     assert save_buttons[-1]["disabled"] is True
     assert seen["saves"] == []
+
+
+def test_opening_dialog_refreshes_review_state_once(app, monkeypatch):
+    """완료된 건은 자동 재조회가 없으므로, 팝업을 여는 순간 최신 판정을 한 번 받아 온다.
+
+    그러지 않으면 '현재 판정'은 옛 값인데 수정 이력(매번 서버 조회)에는 다른 검토자의
+    새 저장이 보여 서로 어긋난다.
+    """
+    item = analysis("A1", "AUTO_BENIGN")
+    app.st.session_state.batch_data = {"analyses": [item]}
+    app.st.session_state.analysis_result = item
+    app.st.session_state.review_conflict = {"A1": "stale warning"}
+    seen = {}
+    monkeypatch.setattr(
+        api_client,
+        "get_result",
+        lambda analysis_id: {"analyst_final_verdict": "MALICIOUS", "review_revision": 3,
+                             "approval_status": "MODIFIED", "final_verdict": "BENIGN"},
+    )
+    monkeypatch.setattr(app, "review_dialog", lambda analysis_id: seen.setdefault("opened", app.review_target(analysis_id)))
+
+    app.open_review_dialog("A1")
+
+    opened = seen["opened"]
+    assert opened["review_revision"] == 3
+    assert app.triage_group_key(opened) == "auto_malicious"
+    assert app.st.session_state.batch_data["analyses"][0]["review_revision"] == 3
+    # 이전에 열었을 때의 충돌 안내는 새로 열면 지운다
+    assert "A1" not in app.st.session_state.review_conflict
+
+
+def test_opening_dialog_still_works_when_refresh_fails(app, monkeypatch):
+    item = analysis("A1", "AUTO_BENIGN")
+    app.st.session_state.analysis_result = item
+    opened = []
+
+    def unavailable(analysis_id):
+        raise ApiError("SERVICE_UNAVAILABLE", "temporary", http_status=503)
+
+    monkeypatch.setattr(api_client, "get_result", unavailable)
+    monkeypatch.setattr(app, "review_dialog", opened.append)
+
+    app.open_review_dialog("A1")
+
+    assert opened == ["A1"]
+    assert app.st.session_state.analysis_result["review_revision"] == 0
 
 
 # ---- api_client ----------------------------------------------------------------
