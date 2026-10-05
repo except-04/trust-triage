@@ -248,6 +248,7 @@ def test_single_result_lists_only_backend_provided_columns(app, search):
         "Status",
         "Initial Verdict",
         "Final Verdict",
+        "Analyst Review",
     ]
     assert rows[0]["Analysis ID"] == "A1"
     assert rows[0]["Created At"] == "2026-09-16T10:00:00+00:00"

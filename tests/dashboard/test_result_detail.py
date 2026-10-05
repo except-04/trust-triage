@@ -12,7 +12,7 @@ SCENARIOS = [
     ("HIGH_RISK_UNCERTAIN", "COMPLETED"), ("HIGH_RISK_UNCERTAIN", "FAILED"),
 ]
 # 라우팅 결정 내용은 분석 요약 첫 줄로 옮겨졌고, 설명 가능성과 분석 파이프라인은 한 줄에 나란히 놓인다.
-SECTIONS = ["분석 요약", "설명 가능성", "분석 파이프라인", "Deep Analysis"]
+SECTIONS = ["분석 요약", "설명 가능성", "분석 파이프라인", "심층 분석"]
 
 
 def sample(app, verdict, state):
@@ -62,7 +62,8 @@ def test_every_route_uses_same_sections_and_spacing(app, verdict, state):
         assert set(app.result_detail_state(result)["tools"].values()) == {"NOT_REQUIRED"}
         assert not set(target.expanders()) & {"Speakeasy", "MITRE Evidence", "LLM Summary"}
     elif state in ("QUEUED", "RUNNING"):
-        assert any(f"Status: {state}" in args[0] for args in target.named("markdown"))
+        label = {"QUEUED": "대기", "RUNNING": "진행 중"}[state]
+        assert any(f"**{label}**" in args[0] for args in target.named("markdown"))
         assert not target.named("json")
     elif state == "FAILED":
         assert target.named("error")

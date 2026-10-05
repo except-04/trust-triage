@@ -11,6 +11,9 @@ import requests
 
 BASE_URL = os.getenv("TRUST_TRIAGE_API", "http://127.0.0.1:8000").rstrip("/")
 API_TOKEN = os.getenv("TRUST_TRIAGE_API_TOKEN", "")
+# 판정 수정(PATCH /analyses/{id}/verdict) 전용 키. 백엔드에 BACKEND_REVIEWER_TOKEN이
+# 설정돼 있으면 같은 값을 넣어야 한다. 비어 있으면 헤더를 보내지 않는다.
+REVIEWER_TOKEN = os.getenv("TRUST_TRIAGE_REVIEWER_TOKEN", "")
 TIMEOUT_SEC = 30
 # ZIP은 백엔드가 해제·항목 검증까지 수행하므로(기본 상한 60초) 더 오래 기다린다.
 ZIP_TIMEOUT_SEC = 150
@@ -51,12 +54,12 @@ def _to_api_error(response):
     )
 
 
-def _request(method, path, *, timeout=None, **kwargs):
+def _request(method, path, *, timeout=None, extra_headers=None, **kwargs):
     try:
         response = requests.request(
             method,
             f"{BASE_URL}{path}",
-            headers=_headers(),
+            headers={**_headers(), **(extra_headers or {})},
             timeout=timeout or TIMEOUT_SEC,
             **kwargs,
         )
@@ -149,6 +152,35 @@ def search_analyses(sha256, limit=20, offset=0, sort="newest"):
     """
     params = {"sha256": sha256, "limit": limit, "offset": offset, "sort": sort}
     return _request("GET", "/analyses", params=params)
+
+
+def save_review(analysis_id, analyst_final_verdict, reviewer_id, expected_revision, analyst_notes=""):
+    """분석가 판정을 저장한다. 시스템 판정(initial/final)은 백엔드가 그대로 둔다.
+
+    analyst_final_verdict: "BENIGN" / "MALICIOUS" / None(보류)
+    expected_revision: 종합 결과의 review_revision. 그사이 다른 저장이 있었으면
+    409 REVIEW_CONFLICT, 분석이 끝나지 않았으면 409 ANALYSIS_NOT_FINISHED다.
+
+    반환: analysis_id / revision / analyst_final_verdict / analyst_notes / reviewer_id / reviewed_at
+    """
+    payload = {
+        "analyst_final_verdict": analyst_final_verdict,
+        "analyst_notes": analyst_notes,
+        "reviewer_id": reviewer_id,
+        "expected_revision": expected_revision,
+    }
+    extra = {"X-Reviewer-Key": REVIEWER_TOKEN} if REVIEWER_TOKEN else None
+    return _request(
+        "PATCH", f"/analyses/{analysis_id}/verdict", json=payload, extra_headers=extra
+    )
+
+
+def list_reviews(analysis_id):
+    """판정 수정 이력을 revision 오름차순으로 가져온다.
+
+    반환: {"analysis_id": ..., "items": [...]}. 이력이 없으면 items가 빈 목록이다.
+    """
+    return _request("GET", f"/analyses/{analysis_id}/reviews")
 
 
 def health():
