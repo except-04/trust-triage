@@ -14,6 +14,10 @@ on:
   push:
     branches:
       - main
+    # Skip the EC2 deploy when a push only changes the landing page (deployed by landing-pages.yml).
+    paths-ignore:
+      - "landing/**"
+      - ".github/workflows/landing-pages.yml"
 
 permissions:
   contents: read
