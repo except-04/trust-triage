@@ -328,9 +328,8 @@ def test_http_request_dispatches_worker_and_resumes_after_restart(
     assert h.worker.run_once() == Outcome.COMPLETED
     assert h.service.repository.get(identity).status == "RUNNING"
     h.restart()
-    h.tick()  # read Worker DB result -> normalize evidence/LLM -> FINALIZING
-    assert h.service.repository.get(identity).phase == "FINALIZING"
-    h.tick()  # Backend final assessment and durable result
+    h.tick()  # read Worker DB result -> evidence/LLM -> final assessment, same pass
+    assert h.service.repository.get(identity).phase == "DONE"
 
     final = h.client.get(f"/analyses/{identity}").json()
     deep = h.client.get(f"/analyses/{identity}/deep-analysis").json()

@@ -101,7 +101,7 @@ def test_compact_chart_preserves_top_five_values_order_and_label_space(app):
     figure = target.figure
     axis = figure.axes[0]
     assert target.options == {"width": "stretch"}
-    assert tuple(figure.get_size_inches()) == pytest.approx((6.2, 1.0))
+    assert tuple(figure.get_size_inches()) == pytest.approx((6.2, 1.6))
     assert [bar.get_width() for bar in axis.patches] == pytest.approx(
         [0.4, 0.2, -0.1, -0.3, 0.05]
     )
@@ -131,5 +131,6 @@ def test_compact_chart_preserves_top_five_values_order_and_label_space(app):
     bounds = figure.get_tightbbox(renderer)
     padding = app.plt.rcParams["savefig.pad_inches"] * 2
     aspect_ratio = (bounds.height + padding) / (bounds.width + padding)
-    for container_width in (1320, 1450):
-        assert 225 <= container_width * aspect_ratio <= 260
+    # 설명 가능성은 결과 화면 폭의 약 70% 칸에 놓인다(옆은 분석 파이프라인).
+    for container_width in (820, 890):
+        assert 210 <= container_width * aspect_ratio <= 250
