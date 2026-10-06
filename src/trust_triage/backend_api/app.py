@@ -613,6 +613,39 @@ def create_app(
     ):
         return svc.reviews(analysis_id)
 
+
+    from .schemas import BudgetConfigRequest, BudgetConfigResponse, PriorityRecommendationResponse
+
+    @app.get(
+        "/analyst/budget",
+        response_model=BudgetConfigResponse,
+        tags=["Analyst"], summary="일일 예산 조회",
+        description="### 목적\n현재 분석가의 일일 검토 예산과 오늘 완료된 분석(리뷰) 개수, 남은 예산을 조회합니다. 이는 하루 동안 분석가가 수동으로 완료한 리뷰 수를 기반으로 합니다."
+    )
+    def get_budget(svc: Annotated[BackendService, Depends(backend)]):
+        return svc.get_budget_config()
+
+    @app.put(
+        "/analyst/budget",
+        tags=["Analyst"], summary="일일 예산 설정",
+        description="### 목적\n분석가의 일일 검토 예산을 새로운 값으로 설정합니다. 이 값은 하루 동안 분석가가 수동으로 완료해야 하는 목표 수량을 의미합니다."
+    )
+    def set_budget(
+        payload: BudgetConfigRequest,
+        svc: Annotated[BackendService, Depends(backend)]
+    ):
+        svc.set_daily_budget(payload.daily_budget)
+        return {"status": "success"}
+
+    @app.get(
+        "/analyst/recommendations",
+        response_model=PriorityRecommendationResponse,
+        tags=["Analyst"], summary="우선순위 추천 목록 조회",
+        description="### 목적\n분석가의 남은 예산에 맞추어 악성 확률이 높은 대기열의 파일들을 우선 추천 항목으로 제공합니다. 비정상 데이터는 따로 분리되어 응답에 포함됩니다."
+    )
+    def get_recommendations(svc: Annotated[BackendService, Depends(backend)]):
+        return svc.get_priority_recommendations()
+
     default_openapi = app.openapi
 
     def openapi():

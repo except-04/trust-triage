@@ -48,6 +48,44 @@ def _validate_idempotency_key(key):
 
 
 class BackendService:
+
+    def get_budget_config(self) -> dict[str, Any]:
+        return self.repository.get_budget_config()
+
+    def set_daily_budget(self, budget: int) -> None:
+        self.repository.set_daily_budget(budget)
+
+    def get_priority_recommendations(self) -> dict[str, Any]:
+        candidates = self.repository.get_priority_recommendations()
+        budget_info = self.repository.get_budget_config()
+        rem_budget = budget_info["remaining_budget"]
+        
+
+        valid_candidates = []
+        error_candidates = []
+        for c in candidates:
+            if c.get("priority_score", 0) < 0:
+                error_candidates.append({
+                    "analysis_id": c["analysis_id"],
+                    "filename": c["filename"],
+                    "sha256": c["sha256"],
+                    "selection_reason": c["selection_reason"],
+                    "initial_verdict": c["initial_verdict"],
+                })
+            else:
+                c.pop("created_at", None)
+                valid_candidates.append(c)
+                
+        # Re-rank valid
+        for i, c in enumerate(valid_candidates):
+            c["rank"] = i + 1
+            
+        return {
+            "recommendations": valid_candidates[:rem_budget],
+            "waiting_outside_budget": valid_candidates[rem_budget:],
+            "error_candidates": error_candidates,
+            "budget_info": budget_info
+        }
     def __init__(
         self,
         repository: AnalysisRepository,

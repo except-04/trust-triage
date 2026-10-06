@@ -62,6 +62,94 @@ class MemoryAnalysisRepository:
     def advance(self, seconds):
         self.now += timedelta(seconds=seconds)
 
+
+    def get_budget_config(self):
+        self._fault("get_budget_config")
+        daily_budget = getattr(self, "daily_budget", 100)
+        today_completed = 0
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        
+        now_seoul = self.now.astimezone(ZoneInfo('Asia/Seoul'))
+        completed_first_times = {}
+        for rev_item in self.reviews.values():
+            rev_list = rev_item if isinstance(rev_item, list) else [rev_item]
+            for review in rev_list:
+                if review.get("review_status") == "COMPLETED":
+                    rev_time = datetime.fromisoformat(review["reviewed_at"])
+                    rev_time_seoul = rev_time.astimezone(ZoneInfo('Asia/Seoul'))
+                    a_id = review.get("analysis_id")
+                    if a_id not in completed_first_times or rev_time_seoul < completed_first_times[a_id]:
+                        completed_first_times[a_id] = rev_time_seoul
+                        
+        for a_id, first_time in completed_first_times.items():
+            if first_time.date() == now_seoul.date():
+                today_completed += 1
+                    
+        return {
+            "daily_budget": daily_budget,
+            "today_completed_count": today_completed,
+            "remaining_budget": max(daily_budget - today_completed, 0),
+            "updated_at": self.now.isoformat()
+        }
+
+    def set_daily_budget(self, budget):
+        self._fault("set_daily_budget")
+        self.daily_budget = budget
+
+    def get_priority_recommendations(self):
+        self._fault("get_priority_recommendations")
+        candidates = []
+        for a_id, record in self.rows.items():
+            if record.initial_result is None or record.analyst_final_verdict is not None or record.review_revision > 0:
+                continue
+            
+            # check pending review
+            pending = any(r.get("analysis_id") == a_id and r.get("review_status") == "PENDING" for r in self.reviews.values())
+            if pending:
+                continue
+                
+            
+            pred = record.initial_result.get("prediction", {})
+            prob = pred.get("calibrated_probability")
+            try:
+                if prob is None or prob == "":
+                    raise ValueError()
+                prob_float = float(prob)
+                import math
+                if math.isnan(prob_float) or prob_float < 0.0 or prob_float > 1.0:
+                    raise ValueError()
+                priority_score = prob_float
+                score_policy = "probability-v1"
+                selection_reason = "보정된 악성 확률이 높아 우선 추천"
+            except ValueError:
+                prob_float = -1.0
+                priority_score = -1.0
+                score_policy = "error"
+                selection_reason = "확률 값 누락/비정상 - 별도 검토 필요"
+
+                
+            candidates.append({
+                "analysis_id": a_id,
+                "filename": record.filename,
+                "sha256": record.sha256,
+                "calibrated_probability": prob_float,
+                "priority_score": priority_score,
+                "score_policy": score_policy,
+                "impact_score": None,
+                "impact_reason": None,
+                "selection_reason": selection_reason,
+                "initial_verdict": record.initial_result.get("initial_verdict"),
+                "triggered_signals": record.initial_result.get("triggered_signals"),
+                "review_status": "PENDING",
+                "created_at": record.created_at,
+            })
+            
+        candidates.sort(key=lambda x: (-x["priority_score"], x["created_at"] or "", x["analysis_id"]))
+        for i, c in enumerate(candidates):
+            c["rank"] = i + 1
+        return candidates
+
     def initialize(self):
         self._fault("initialize")
 

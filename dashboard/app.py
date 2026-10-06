@@ -2809,6 +2809,74 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+
+def render_analyst_priority_queue():
+    st.markdown("---")
+    st.subheader("분석가 일일 업무 할당 (Priority Queue)")
+    
+    # 1. 예산 조회 및 설정
+    col1, col2 = st.columns([1, 1])
+    try:
+        budget_data = api_client.get_analyst_budget()
+        current_budget = budget_data.get("daily_budget", 0)
+        today_completed = budget_data.get("today_completed_count", 0)
+        remaining = budget_data.get("remaining_budget", 0)
+    except api_client.ApiError as e:
+        st.error(f"예산 설정 조회 실패: {e.message}")
+        return
+        
+    with col1:
+        st.metric("오늘 분석 완료", today_completed)
+    with col2:
+        new_budget = st.number_input("일일 검토 한도 (Budget)", min_value=0, value=current_budget, step=1)
+        if new_budget != current_budget:
+            try:
+                api_client.set_analyst_budget(new_budget)
+                st.success("예산이 업데이트되었습니다. 다시 불러옵니다...")
+                st.rerun()
+            except api_client.ApiError as e:
+                st.error(f"예산 설정 실패: {e.message}")
+
+    st.write(f"**남은 검토 한도:** {remaining}개")
+    
+    # 2. 추천 목록 조회
+    try:
+        recs_data = api_client.get_priority_recommendations()
+        recs = recs_data.get("recommendations", [])
+        waiting = recs_data.get("waiting_outside_budget", [])
+    except api_client.ApiError as e:
+        st.error(f"추천 목록 조회 실패: {e.message}")
+        return
+        
+    if not recs:
+        st.info("현재 예산 내에 할당된 검토 대상이 없습니다.")
+    else:
+        st.write("### 예산 내 추천 목록")
+        import pandas as pd
+        df = pd.DataFrame(recs)
+        df = df[["rank", "filename", "sha256", "calibrated_probability", "priority_score", "selection_reason", "initial_verdict"]]
+        df.columns = ["순위", "파일명", "SHA-256", "악성 확률", "우선순위 점수", "선정 근거", "초기 판정"]
+        
+        # Display as dataframe
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        
+    if waiting:
+        with st.expander(f"예산 초과 대기열 ({len(waiting)}건)"):
+            import pandas as pd
+            df_w = pd.DataFrame(waiting)
+            df_w = df_w[["rank", "filename", "sha256", "calibrated_probability", "priority_score", "selection_reason", "initial_verdict"]]
+            df_w.columns = ["순위", "파일명", "SHA-256", "악성 확률", "우선순위 점수", "선정 근거", "초기 판정"]
+            st.dataframe(df_w, use_container_width=True, hide_index=True)
+
+    error_cands = recs_data.get("error_candidates", [])
+    if error_cands:
+        with st.expander(f"확률 값 누락 / 비정상 파일 ({len(error_cands)}건)"):
+            df_e = pd.DataFrame(error_cands)
+            df_e = df_e[["filename", "sha256", "selection_reason", "initial_verdict"]]
+            df_e.columns = ["파일명", "SHA-256", "선정 근거", "초기 판정"]
+            st.dataframe(df_e, use_container_width=True, hide_index=True)
+
 if "analysis_result" not in st.session_state:
     st.session_state.analysis_result = None
 if "batch_results" not in st.session_state:
@@ -2826,6 +2894,7 @@ result = st.session_state.analysis_result
 if result is None:
     render_input_view()
     render_hash_search()
+    render_analyst_priority_queue()
 
 else:
     batch_data = st.session_state.get("batch_data")

@@ -164,3 +164,9 @@ CREATE TABLE IF NOT EXISTS api_reviews (
     UNIQUE (analysis_id, revision),
     CHECK ((review_status = 'PENDING') = (analyst_final_verdict IS NULL))
 );
+
+CREATE TABLE IF NOT EXISTS api_budget_config (
+    id integer PRIMARY KEY CHECK (id = 1),
+    daily_budget integer NOT NULL CHECK (daily_budget >= 0),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);

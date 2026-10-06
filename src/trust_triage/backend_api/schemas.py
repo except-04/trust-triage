@@ -561,3 +561,46 @@ class BatchResponse(BatchInputReceipt):
         description="배치 진행 상태입니다. COMPLETED는 처리가 모두 종료됐다는 의미이며 일부 실패 또는 전체 SKIPPED를 포함할 수 있습니다.",
     )
     summary: BatchSummary = Field(default_factory=BatchSummary)
+
+
+class BudgetConfigRequest(APIModel):
+    daily_budget: int = Field(ge=0, description="분석가의 일일 검토 한도")
+
+
+class BudgetConfigResponse(APIModel):
+    daily_budget: int
+    today_completed_count: int = Field(description="오늘(Asia/Seoul 기준) 검토 완료된 파일 수")
+    remaining_budget: int = Field(description="남은 예산 (max(daily_budget - today_completed_count, 0))")
+    updated_at: AwareDatetime
+
+
+class PriorityCandidate(APIModel):
+    rank: int = Field(description="추천 순위")
+    analysis_id: AnalysisId
+    filename: str
+    sha256: Sha256
+    calibrated_probability: Probability = Field(description="보정된 악성 확률")
+    priority_score: float = Field(description="우선순위 점수")
+    score_policy: str = Field(description="사용한 점수 정책 (예: probability-v1)")
+    impact_score: float | None = Field(default=None, description="치명도 (지원되는 경우)")
+    impact_reason: str | None = Field(default=None, description="치명도 산출 근거")
+    selection_reason: str = Field(description="선정 근거")
+    initial_verdict: InitialVerdict
+    triggered_signals: TriggeredSignals | None = None
+    review_status: str = Field(description="검토 상태")
+
+
+
+class ErrorCandidate(APIModel):
+    analysis_id: AnalysisId
+    filename: str
+    sha256: Sha256
+    selection_reason: str = Field(description="선정 근거")
+    initial_verdict: InitialVerdict | None = None
+    created_at: AwareDatetime | None = None
+
+class PriorityRecommendationResponse(APIModel):
+    recommendations: list[PriorityCandidate] = Field(description="budget 내 우선순위순 추천 목록")
+    waiting_outside_budget: list[PriorityCandidate] = Field(description="budget 밖 대기열 (순위 유지)")
+    error_candidates: list[ErrorCandidate] = Field(default_factory=list)
+    budget_info: BudgetConfigResponse

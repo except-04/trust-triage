@@ -443,3 +443,4 @@ def analysis(record: AnalysisRecord) -> AnalysisResponse:
 
 def review(value: dict[str, Any]) -> ReviewResponse:
     return ReviewResponse(**{key: value[key] for key in ReviewResponse.model_fields})
+

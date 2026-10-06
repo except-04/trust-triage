@@ -154,3 +154,13 @@ def search_analyses(sha256, limit=20, offset=0, sort="newest"):
 def health():
     """서버가 살아 있는지 확인한다."""
     return _request("GET", "/health")
+
+
+def get_analyst_budget():
+    return _request("GET", "/analyst/budget")
+
+def set_analyst_budget(budget):
+    return _request("PUT", "/analyst/budget", json={"daily_budget": budget})
+
+def get_priority_recommendations():
+    return _request("GET", "/analyst/recommendations")

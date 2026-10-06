@@ -179,6 +179,121 @@ class AnalysisRepository(Protocol):
 
 
 class PostgresAnalysisRepository:
+
+    def get_budget_config(self) -> dict[str, Any]:
+        with self._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT daily_budget, updated_at FROM api_budget_config WHERE id = 1")
+            row = cur.fetchone()
+            if not row:
+                cur.execute("INSERT INTO api_budget_config (id, daily_budget) VALUES (1, 100) RETURNING daily_budget, updated_at")
+                row = cur.fetchone()
+            
+            daily_budget = row["daily_budget"]
+            updated_at = row["updated_at"]
+            
+            cur.execute("""
+                SELECT count(*) as c
+                FROM (
+                    SELECT analysis_id
+                    FROM api_reviews
+                    WHERE review_status = 'COMPLETED'
+                    GROUP BY analysis_id
+                    HAVING min(reviewed_at) AT TIME ZONE 'Asia/Seoul' >= date_trunc('day', clock_timestamp() AT TIME ZONE 'Asia/Seoul')
+                ) t
+            """)
+            today_completed = cur.fetchone()["c"]
+            
+            return {
+                "daily_budget": daily_budget,
+                "today_completed_count": today_completed,
+                "remaining_budget": max(daily_budget - today_completed, 0),
+                "updated_at": updated_at
+            }
+
+    def set_daily_budget(self, budget: int) -> None:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO api_budget_config (id, daily_budget, updated_at)
+                VALUES (1, %s, clock_timestamp())
+                ON CONFLICT (id) DO UPDATE SET daily_budget = EXCLUDED.daily_budget, updated_at = clock_timestamp()
+            """, (budget,))
+
+    def get_priority_recommendations(self) -> list[dict[str, Any]]:
+        with self._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("""
+                SELECT
+                    a.analysis_id,
+                    a.filename,
+                    a.sha256,
+                    a.initial_result,
+                    a.created_at
+                FROM api_analyses a
+                WHERE a.initial_result IS NOT NULL
+                AND a.analyst_final_verdict IS NULL
+                AND a.review_revision = 0
+                AND (
+                    a.initial_result->>'initial_verdict' IS NULL OR
+                    a.initial_result->>'initial_verdict' NOT IN ('AUTO_BENIGN', 'AUTO_MALICIOUS')
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM api_reviews r 
+                    WHERE r.analysis_id = a.analysis_id AND r.review_status = 'PENDING'
+                )
+            """)
+            rows = cur.fetchall()
+            
+            candidates = []
+            seen_sha256 = set()
+            for row in rows:
+                if row["sha256"] in seen_sha256:
+                    continue
+                seen_sha256.add(row["sha256"])
+                
+                initial_result = row["initial_result"]
+                prob = initial_result.get("prediction", {}).get("calibrated_probability")
+                
+                try:
+                    if prob is None or prob == "":
+                        raise ValueError()
+                    prob_float = float(prob)
+                    import math
+                    if math.isnan(prob_float) or prob_float < 0.0 or prob_float > 1.0:
+                        raise ValueError()
+                    priority_score = prob_float
+                    score_policy = "probability-v1"
+                    selection_reason = "보정된 악성 확률 내림차순 기준, 남은 budget 내 선정"
+                except ValueError:
+                    prob_float = -1.0
+                    priority_score = -1.0
+                    score_policy = "error"
+                    selection_reason = "확률 값 누락/비정상 - 별도 검토 필요"
+
+                candidates.append({
+                    "analysis_id": row["analysis_id"],
+                    "filename": row["filename"],
+                    "sha256": row["sha256"],
+                    "calibrated_probability": prob_float,
+                    "priority_score": priority_score,
+                    "score_policy": score_policy,
+                    "impact_score": None,
+                    "impact_reason": None,
+                    "selection_reason": selection_reason,
+                    "initial_verdict": initial_result.get("initial_verdict"),
+                    "triggered_signals": initial_result.get("triggered_signals"),
+                    "review_status": "PENDING",
+                    "created_at": row["created_at"],
+                })
+            
+            candidates.sort(key=lambda x: (
+                -x["priority_score"],
+                x["created_at"],
+                x["analysis_id"]
+            ))
+            
+            for i, cand in enumerate(candidates):
+                cand["rank"] = i + 1
+                
+            return candidates
     """One bounded transaction per call; no network details enter public errors."""
 
     def __init__(
