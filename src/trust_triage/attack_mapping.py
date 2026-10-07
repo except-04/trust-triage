@@ -8,7 +8,6 @@ from typing import Any
 
 from .evidence import AttackTechnique
 
-
 _TECHNIQUE_ID_PATTERN = re.compile(
     r"(?<![A-Z0-9])T\d{4}(?:\.\d{3})?(?!\d)",
     re.IGNORECASE,
@@ -101,7 +100,9 @@ def normalize_attack_label(label: Any) -> AttackTechnique:
     )
 
 
-def normalize_attack_labels(labels: Iterable[Any] | None) -> tuple[AttackTechnique, ...]:
+def normalize_attack_labels(
+    labels: Iterable[Any] | None,
+) -> tuple[AttackTechnique, ...]:
     """Normalize labels and de-duplicate repeated technique references."""
 
     if labels is None:

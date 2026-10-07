@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-
 DASHBOARD_DIR = Path(__file__).parents[2] / "dashboard"
 
 # app.py 가 `import api_client` 로 형제 모듈을 부른다. 테스트 모듈도 ApiError 를

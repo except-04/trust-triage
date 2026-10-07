@@ -20,7 +20,6 @@ import pytest
 
 from trust_triage import feature_names as fn
 
-
 REPO = Path(__file__).parents[1]
 SCHEMA_JSON = REPO / "docs" / "feature-extraction" / "ember-v3-schema.json"
 MANIFEST_JSON = (
@@ -45,7 +44,11 @@ def _thrember_lists(features_py: Path) -> dict[str, list[str]]:
         if not isinstance(node, ast.ClassDef):
             continue
         init = next(
-            (n for n in node.body if isinstance(n, ast.FunctionDef) and n.name == "__init__"),
+            (
+                n
+                for n in node.body
+                if isinstance(n, ast.FunctionDef) and n.name == "__init__"
+            ),
             None,
         )
         if init is None:
@@ -128,7 +131,9 @@ def test_every_top500_feature_gets_a_label_without_guessing():
 
 def test_every_index_of_every_group_is_covered_exactly_once():
     for group, dimension in fn.GROUP_DIMENSIONS.items():
-        labels = [fn.resolve(f"{group}[{i}]", schema_version=V) for i in range(dimension)]
+        labels = [
+            fn.resolve(f"{group}[{i}]", schema_version=V) for i in range(dimension)
+        ]
         assert all(r.kind != "unknown" for r in labels)
         assert len({r.display_name for r in labels}) == dimension  # 라벨 충돌 없음
         assert fn.resolve(f"{group}[{dimension}]", schema_version=V).kind == "unknown"
@@ -158,7 +163,9 @@ def test_tables_match_the_installed_thrember_files():
     assert tuple(sorted(lists["_regexes"])) == fn.STRING_PATTERNS
 
     warnings_file = location / "pefile_warnings.txt"
-    lines = [line.strip() for line in warnings_file.read_text(encoding="utf-8").splitlines()]
+    lines = [
+        line.strip() for line in warnings_file.read_text(encoding="utf-8").splitlines()
+    ]
     assert tuple(line for line in lines if line) == fn.PEFILE_WARNINGS
     assert len(fn.PEFILE_WARNINGS) == 87
 
@@ -265,7 +272,9 @@ def test_segment_boundaries_follow_the_hstack_order(name, label):
 # --- 6. fallback: 추측하지 않는다 ---------------------------------------------
 
 
-@pytest.mark.parametrize("version", [None, "", "synthetic-v1", "ember2024-v3-pe-000000000000"])
+@pytest.mark.parametrize(
+    "version", [None, "", "synthetic-v1", "ember2024-v3-pe-000000000000"]
+)
 def test_other_schema_versions_fall_back_to_the_raw_name(version):
     resolved = fn.resolve("header[9]", schema_version=version)
     assert resolved.kind == "unknown"
@@ -284,7 +293,9 @@ def test_unknown_names_fall_back_to_the_raw_name(name):
 
 def test_module_has_no_heavy_imports():
     """백엔드가 top-level 로 import 하므로 thrember/lightgbm/shap 를 끌어오면 안 된다."""
-    source = (REPO / "src" / "trust_triage" / "feature_names.py").read_text(encoding="utf-8")
+    source = (REPO / "src" / "trust_triage" / "feature_names.py").read_text(
+        encoding="utf-8"
+    )
     tree = ast.parse(source)
     imported = set()
     for node in ast.walk(tree):

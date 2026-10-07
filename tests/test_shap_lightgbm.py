@@ -16,7 +16,6 @@ from trust_triage.explanation import (
     ShapExplanationError,
 )
 
-
 TEST_SCHEMA_VERSION = "ember2024-v3-pe-test0000000"
 
 
@@ -418,8 +417,7 @@ def test_official_explain_returns_top5_and_additivity_holds(tmp_path: Path) -> N
         assert all(isinstance(item.feature_value, float) for item in result)
         assert all(isinstance(item.contribution, float) for item in result)
         assert all(
-            item.direction in ("MALICIOUS", "BENIGN", "NEUTRAL")
-            for item in result
+            item.direction in ("MALICIOUS", "BENIGN", "NEUTRAL") for item in result
         )
         assert {
             "feature_name",

@@ -57,7 +57,9 @@ class FlossOutputLimitExceeded(ValueError):
     def __init__(self, stream_name: str, limit_bytes: int) -> None:
         self.stream_name = stream_name
         self.limit_bytes = limit_bytes
-        super().__init__(f"FLOSS {stream_name} exceeded the {limit_bytes} byte output limit")
+        super().__init__(
+            f"FLOSS {stream_name} exceeded the {limit_bytes} byte output limit"
+        )
 
 
 @dataclass(frozen=True)
@@ -424,7 +426,9 @@ class FlossAnalyzer:
                     sample_size=sample_size,
                 )
             except subprocess.TimeoutExpired as exc:
-                diagnostics = _diagnostic_lines(_decode_output(exc.stderr or exc.stdout))
+                diagnostics = _diagnostic_lines(
+                    _decode_output(exc.stderr or exc.stdout)
+                )
                 return self._failure_result(
                     sha256=sample_sha256,
                     command=command,
@@ -813,7 +817,9 @@ def _run_bounded_floss(
                 raise FlossOutputLimitExceeded(*overflow[0])
             if read_errors:
                 raise read_errors[0]
-            if process.poll() is not None and all(not reader.is_alive() for reader in readers):
+            if process.poll() is not None and all(
+                not reader.is_alive() for reader in readers
+            ):
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -871,7 +877,12 @@ def _is_unsupported_static_option(completed: subprocess.CompletedProcess[str]) -
     ).casefold()
     return "--only" in message and any(
         marker in message
-        for marker in ("unrecognized", "unknown option", "invalid option", "no such option")
+        for marker in (
+            "unrecognized",
+            "unknown option",
+            "invalid option",
+            "no such option",
+        )
     )
 
 
@@ -885,7 +896,10 @@ def _limited_metadata(reason: str | None, sample_size: int) -> dict[str, Any]:
         "file_size_bytes": sample_size,
         "deobfuscation_threshold_bytes": DEFAULT_DEOBFUSCATION_LIMIT_BYTES,
         "skipped_string_types": [
-            "stack_strings", "tight_strings", "decoded_strings", "language_strings"
+            "stack_strings",
+            "tight_strings",
+            "decoded_strings",
+            "language_strings",
         ],
     }
 
@@ -898,7 +912,8 @@ def _limited_evidence_scope(metadata: Mapping[str, Any]) -> dict[str, Any]:
     scope: dict[str, Any] = {"limited_mode": True}
     reason = metadata.get("limited_reason")
     if isinstance(reason, str) and reason in {
-        "INPUT_EXCEEDS_16_MIB", "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+        "INPUT_EXCEEDS_16_MIB",
+        "FLOSS_DEOBFUSCATION_SIZE_ERROR",
     }:
         scope["limited_reason"] = reason
     skipped = metadata.get("skipped_string_types")
@@ -906,7 +921,10 @@ def _limited_evidence_scope(metadata: Mapping[str, Any]) -> dict[str, Any]:
         scope["skipped_string_types"] = [
             name
             for name in (
-                "stack_strings", "tight_strings", "decoded_strings", "language_strings"
+                "stack_strings",
+                "tight_strings",
+                "decoded_strings",
+                "language_strings",
             )
             if name in skipped
         ]
@@ -918,15 +936,20 @@ def _validate_static_only_report(parsed: ParsedFlossReport) -> None:
     if analysis.get("enable_static_strings") is not True or any(
         analysis.get(field) is not False
         for field in (
-            "enable_stack_strings", "enable_tight_strings", "enable_decoded_strings"
+            "enable_stack_strings",
+            "enable_tight_strings",
+            "enable_decoded_strings",
         )
     ):
         raise ValueError("FLOSS report contradicts requested static-only analysis")
     if analysis.get("enable_language_strings") is True or any(
         parsed.string_counts.get(group, 0) > 0
         for group in (
-            "stack_strings", "tight_strings", "decoded_strings",
-            "language_strings", "language_strings_missed",
+            "stack_strings",
+            "tight_strings",
+            "decoded_strings",
+            "language_strings",
+            "language_strings_missed",
         )
     ):
         raise ValueError("FLOSS report contains strings outside static-only scope")

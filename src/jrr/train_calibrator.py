@@ -22,6 +22,7 @@ AI 모델의 원시 예측 확률을 실제 신뢰도로 보정하고
 from __future__ import annotations
 
 import os
+
 import joblib
 import mlflow
 import numpy as np
@@ -48,10 +49,13 @@ OUT_PROBA_PATH = "data/jrr_calibrated_proba.npy"
 # main
 # --------------------------------------------------------------------------
 
+
 def main() -> int:
     print("[train_calibrator] JRR 확률 보정 모델 학습 시작 (4-way Calibration Set)\n")
 
-    if not all(os.path.exists(p) for p in [Y_CALIB_PATH, X_CALIB_PATH, TOP_N_PATH, MODEL_PATH]):
+    if not all(
+        os.path.exists(p) for p in [Y_CALIB_PATH, X_CALIB_PATH, TOP_N_PATH, MODEL_PATH]
+    ):
         print("에러: 데이터를 찾을 수 없습니다. 경로를 확인해주세요.")
         return 1
 
@@ -61,7 +65,6 @@ def main() -> int:
     mlflow.set_experiment("JRR_Calibration")
 
     with mlflow.start_run(run_name="07_Isotonic_Calibration_4way"):
-
         # 1. 로컬 데이터 및 모델 로드
         print("Calibration 데이터 및 모델 로드 중...")
         y_calib = np.load(Y_CALIB_PATH)
@@ -95,8 +98,8 @@ def main() -> int:
 
         print("\n=== [최종 결과] ===")
         print(f"JRR 확정 임계값(Threshold): {optimal_threshold:.6f}")
-        print(f"보정 후 악성 탐지율(TPR): {tpr_at_fpr*100:.2f}%")
-        print(f"보정 후 정상 오탐률(FPR): {fpr_at_fpr*100:.4f}%")
+        print(f"보정 후 악성 탐지율(TPR): {tpr_at_fpr * 100:.2f}%")
+        print(f"보정 후 정상 오탐률(FPR): {fpr_at_fpr * 100:.4f}%")
         print("===================\n")
 
         # 5. MLflow 기록
@@ -109,10 +112,12 @@ def main() -> int:
 
         # 6. 로컬 파일 저장
         print(f"라우터 연동용 로컬 파일({OUT_CALIBRATOR_PATH}) 저장 중...")
-        joblib.dump({'model': calibrator, 'threshold': optimal_threshold}, OUT_CALIBRATOR_PATH)
+        joblib.dump(
+            {"model": calibrator, "threshold": optimal_threshold}, OUT_CALIBRATOR_PATH
+        )
 
         # 7. Eval 데이터에 대한 예측 및 확률 보정 파일(jrr_calibrated_proba.npy) 생성
-        print(f"\n평가셋(Eval) 원시 확률 추론 및 보정 적용 중...")
+        print("\n평가셋(Eval) 원시 확률 추론 및 보정 적용 중...")
         if os.path.exists(X_EVAL_PATH):
             X_eval = np.load(X_EVAL_PATH, mmap_mode="r")
             X_eval_500 = X_eval[:, top_indices]
@@ -122,11 +127,14 @@ def main() -> int:
             print(f"보정된 확률 파일({OUT_PROBA_PATH}) 저장 중...")
             np.save(OUT_PROBA_PATH, calibrated_eval_proba)
         else:
-            print(f"경고: {X_EVAL_PATH} 파일이 없어 jrr_calibrated_proba.npy를 생성하지 못했습니다.")
+            print(
+                f"경고: {X_EVAL_PATH} 파일이 없어 jrr_calibrated_proba.npy를 생성하지 못했습니다."
+            )
 
         print("\n[train_calibrator] 완료되었습니다.")
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

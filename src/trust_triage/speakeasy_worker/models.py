@@ -335,7 +335,8 @@ def result_from_analysis(
             "details_omitted": True,
             "event_counts": event_counts,
             "events_truncated": True,
-            "adapter_events_truncated": source_metadata.get("adapter_events_truncated") is True,
+            "adapter_events_truncated": source_metadata.get("adapter_events_truncated")
+            is True,
             "worker_events_truncated": True,
             "service_creation_calls": service_calls,
         },

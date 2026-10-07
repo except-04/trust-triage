@@ -795,7 +795,8 @@ def _tool_result_preview(
             summary["limited_mode"] = True
             reason = metadata.get("limited_reason")
             if isinstance(reason, str) and reason in {
-                "INPUT_EXCEEDS_16_MIB", "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+                "INPUT_EXCEEDS_16_MIB",
+                "FLOSS_DEOBFUSCATION_SIZE_ERROR",
             }:
                 summary["limited_reason"] = reason
         counts = result.get("string_counts")

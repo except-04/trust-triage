@@ -176,12 +176,13 @@ dir C:\EMBER\result\.state
 
 ```python
 import numpy as np, pandas as pd
-X_tr  = np.load(r"C:\EMBER\result\out\dev\X_tr.npy",  mmap_mode="r")  # lazy
-y_tr  = np.load(r"C:\EMBER\result\out\dev\y_tr.npy")                  # 작음
+
+X_tr = np.load(r"C:\EMBER\result\out\dev\X_tr.npy", mmap_mode="r")  # lazy
+y_tr = np.load(r"C:\EMBER\result\out\dev\y_tr.npy")  # 작음
 X_val = np.load(r"C:\EMBER\result\out\dev\X_val.npy", mmap_mode="r")
 y_val = np.load(r"C:\EMBER\result\out\dev\y_val.npy")
-arch  = np.load(r"C:\EMBER\result\out\dev\arch_tr.npy")   # 0=Win32, 1=Win64, 2=기타
-meta  = pd.read_pickle(r"C:\EMBER\result\out\index\meta_train.pkl")
+arch = np.load(r"C:\EMBER\result\out\dev\arch_tr.npy")  # 0=Win32, 1=Win64, 2=기타
+meta = pd.read_pickle(r"C:\EMBER\result\out\index\meta_train.pkl")
 ```
 
 지표는 **arch별로 분해**해서 보세요. Win32:Win64가 약 3:1이라 집계 지표는

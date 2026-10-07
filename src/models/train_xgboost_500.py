@@ -11,9 +11,17 @@ import mlflow
 import xgboost as xgb
 
 try:
-    from .data_contract import load_top_indices, require_new_output, validate_four_way_contract
+    from .data_contract import (
+        load_top_indices,
+        require_new_output,
+        validate_four_way_contract,
+    )
 except ImportError:  # pragma: no cover - 파일을 직접 실행할 때 사용
-    from data_contract import load_top_indices, require_new_output, validate_four_way_contract
+    from data_contract import (
+        load_top_indices,
+        require_new_output,
+        validate_four_way_contract,
+    )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

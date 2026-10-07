@@ -133,7 +133,12 @@ FPR 0.1% 같은 강한 방어선을 지키면서도(=오탐을 최소화), 확�
 `route_sample()` 최상단에서 4개 입력값의 NaN 여부를 가장 먼저 검사합니다.
 
 ```python
-if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isnan(difficulty_score):
+if (
+    np.isnan(p_calib)
+    or np.isnan(disagreement)
+    or np.isnan(ood_score)
+    or np.isnan(difficulty_score)
+):
     return {
         "initial_verdict": "HIGH_RISK_UNCERTAIN",
         "route": "DEEP_ANALYSIS",
@@ -141,7 +146,7 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
         "disagreement": -1.0,
         "ood_score": 0.0,
         "difficulty_score": 0.0,
-        "reason": "System Error: NaN values detected (Fail-Closed)"
+        "reason": "System Error: NaN values detected (Fail-Closed)",
     }
 ```
 

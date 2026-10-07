@@ -60,12 +60,32 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (  # noqa: E402
-    ARCH_NAMES, DEFAULT_CHUNK, DEV_SPLITS, LABEL_UNKNOWN, PE_FILE_TYPES,
-    SPLIT_WEEKS, WEEK_CALIB_END, WEEK_CALIB_START, WEEK_EVAL_START, WEEK_MAX,
-    WEEK_TRAIN_END, WEEK_VAL_END, WEEK_VAL_START,
-    Layout, Timer, add_root_arg, get_dim, iter_chunks, label_stats, load_meta,
-    load_y, open_dat, setup_logging, split_contract, write_json,
+from common import (
+    ARCH_NAMES,
+    DEFAULT_CHUNK,
+    DEV_SPLITS,
+    LABEL_UNKNOWN,
+    PE_FILE_TYPES,
+    SPLIT_WEEKS,
+    WEEK_CALIB_END,
+    WEEK_CALIB_START,
+    WEEK_EVAL_START,
+    WEEK_MAX,
+    WEEK_TRAIN_END,
+    WEEK_VAL_END,
+    WEEK_VAL_START,
+    Layout,
+    Timer,
+    add_root_arg,
+    get_dim,
+    iter_chunks,
+    label_stats,
+    load_meta,
+    load_y,
+    open_dat,
+    setup_logging,
+    split_contract,
+    write_json,
 )
 
 
@@ -143,9 +163,11 @@ def main() -> int:
     add_root_arg(ap)
     ap.add_argument("--chunk", type=int, default=DEFAULT_CHUNK)
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("--qc-subsets", default="train,test,challenge",
-                    help="non-finite 검사를 수행할 subset (쉼표 구분). "
-                         "'none'이면 건너뜀")
+    ap.add_argument(
+        "--qc-subsets",
+        default="train,test,challenge",
+        help="non-finite 검사를 수행할 subset (쉼표 구분). 'none'이면 건너뜀",
+    )
     args = ap.parse_args()
 
     layout = Layout(args.root)
@@ -183,13 +205,16 @@ def main() -> int:
     y_train = load_y(layout, "train")
     arch_train = np.load(layout.arch_path("train"))
     if not (len(meta) == y_train.size == arch_train.size):
-        log.error("행 수 불일치: meta=%d, y=%d, arch=%d — 03단계를 재실행하세요.",
-                  len(meta), y_train.size, arch_train.size)
+        log.error(
+            "행 수 불일치: meta=%d, y=%d, arch=%d — 03단계를 재실행하세요.",
+            len(meta),
+            y_train.size,
+            arch_train.size,
+        )
         return 1
 
     # 메타 label과 y의 정합성 재확인 (03에서 이미 검증했지만 저비용이라 재확인).
-    if not (meta["label"].to_numpy(dtype=np.int64)
-            == y_train.astype(np.int64)).all():
+    if not (meta["label"].to_numpy(dtype=np.int64) == y_train.astype(np.int64)).all():
         log.error("meta.label과 y_train이 불일치합니다 — 03단계를 재실행하세요.")
         return 1
 
@@ -201,7 +226,7 @@ def main() -> int:
     log.info("  라벨 분포: %s", report["train_raw"])
 
     # --- 마스크: -1 제외 + 비PE(.NET 등) 제외 --------------------------
-    keep = (y_train != LABEL_UNKNOWN)
+    keep = y_train != LABEL_UNKNOWN
     n_unknown = int((~keep).sum())
     log.info("라벨 -1(미분류): %d행 → 마스크로 제외 (행 삭제 아님)", n_unknown)
 
@@ -209,11 +234,15 @@ def main() -> int:
     n_nonpe = int((keep & ~is_pe).sum())
     if n_nonpe:
         import collections
-        excluded_types = collections.Counter(
-            file_type[keep & ~is_pe].tolist()
+
+        excluded_types = collections.Counter(file_type[keep & ~is_pe].tolist())
+        log.warning(
+            ".NET/비PE 혼입 감지: file_type ∉ %s 인 %d행을 함께 제외합니다. "
+            "제외 분포: %s",
+            list(PE_FILE_TYPES),
+            n_nonpe,
+            dict(excluded_types),
         )
-        log.warning(".NET/비PE 혼입 감지: file_type ∉ %s 인 %d행을 함께 제외합니다. "
-                    "제외 분포: %s", list(PE_FILE_TYPES), n_nonpe, dict(excluded_types))
         keep &= is_pe
         report["nonpe_excluded"] = {
             "n_excluded": n_nonpe,
@@ -229,19 +258,20 @@ def main() -> int:
     in_range = (week >= 0) & (week <= WEEK_MAX)
     n_oob = int((keep & ~in_range).sum())
     if n_oob:
-        log.warning("week_id가 0–%d 밖인 %d행을 제외합니다 (누락/이상치). "
-                    "정상이라면 0이어야 합니다.", WEEK_MAX, n_oob)
+        log.warning(
+            "week_id가 0–%d 밖인 %d행을 제외합니다 (누락/이상치). "
+            "정상이라면 0이어야 합니다.",
+            WEEK_MAX,
+            n_oob,
+        )
         keep &= in_range
     report["week_out_of_range_excluded"] = n_oob
 
     n_keep = int(keep.sum())
-    log.info("분할 대상(유효 PE): %d행 (%.2f%%)",
-             n_keep, 100.0 * n_keep / y_train.size)
+    log.info("분할 대상(유효 PE): %d행 (%.2f%%)", n_keep, 100.0 * n_keep / y_train.size)
 
     # --- 시간 분할 ------------------------------------------------------
-    span = " / ".join(
-        f"{SPLIT_WEEKS[n][0]}–{SPLIT_WEEKS[n][1]}" for n in DEV_SPLITS
-    )
+    span = " / ".join(f"{SPLIT_WEEKS[n][0]}–{SPLIT_WEEKS[n][1]}" for n in DEV_SPLITS)
     with Timer(log, f"시간 {len(DEV_SPLITS)}분할 (weeks {span})"):
         splits = time_split(week, keep)
 
@@ -256,7 +286,9 @@ def main() -> int:
         )
         log.info(
             "%-6s %8d행 (%.1f%%)  악성비율=%s  주차=%s  arch=%s",
-            name, idx.size, 100.0 * idx.size / max(n_keep, 1),
+            name,
+            idx.size,
+            100.0 * idx.size / max(n_keep, 1),
             None if st["malicious_ratio"] is None else f"{st['malicious_ratio']:.4f}",
             report[f"split_{name}"]["week_range"],
             {k: v["n_total"] for k, v in st.get("per_arch", {}).items()},
@@ -266,6 +298,7 @@ def main() -> int:
     # 분할 쌍을 하드코딩하지 않고 조합으로 전부 돈다. 분할이 하나 늘어나도
     # (3분할 → 4분할처럼) 검사에서 빠지는 쌍이 생기지 않는다.
     import itertools
+
     overlap = sum(
         len(np.intersect1d(splits[a], splits[b]))
         for a, b in itertools.combinations(DEV_SPLITS, 2)
@@ -278,8 +311,9 @@ def main() -> int:
     # week를 0–51로 제한한 keep 집합은 정확히 분할된다. 어긋나면 상류 버그다.
     total = sum(int(idx.size) for idx in splits.values())
     if total != n_keep:
-        log.error("분할 합계(%d)가 유효 행 수(%d)와 다릅니다 — 경계 로직 오류.",
-                  total, n_keep)
+        log.error(
+            "분할 합계(%d)가 유효 행 수(%d)와 다릅니다 — 경계 로직 오류.", total, n_keep
+        )
         return 1
     log.info("분할 무결성 확인: 중복 0건, 커버리지 일치")
 
@@ -290,13 +324,20 @@ def main() -> int:
     expect = 0
     for lo, hi in covered:
         if lo != expect:
-            log.error("주차 구간이 연속적이지 않습니다: %d주차에서 끊김 "
-                      "(구간=%s) — WEEK_* 상수를 확인하세요.", expect, covered)
+            log.error(
+                "주차 구간이 연속적이지 않습니다: %d주차에서 끊김 "
+                "(구간=%s) — WEEK_* 상수를 확인하세요.",
+                expect,
+                covered,
+            )
             return 1
         expect = hi + 1
     if expect != WEEK_MAX + 1:
-        log.error("주차 구간이 0–%d를 덮지 않습니다 (마지막=%d) — "
-                  "WEEK_* 상수를 확인하세요.", WEEK_MAX, expect - 1)
+        log.error(
+            "주차 구간이 0–%d를 덮지 않습니다 (마지막=%d) — WEEK_* 상수를 확인하세요.",
+            WEEK_MAX,
+            expect - 1,
+        )
         return 1
     log.info("주차 구간 연속성 확인: %s → 0–%d 빈틈 없음", covered, WEEK_MAX)
 
@@ -304,15 +345,23 @@ def main() -> int:
     kept_meta = meta.loc[keep]
     wk = kept_meta.groupby("week_id")["label"].agg(["mean", "size"])
     report["weekly_malicious_ratio"] = {
-        "per_week": {int(k): {"mean": float(v["mean"]), "size": int(v["size"])}
-                     for k, v in wk.to_dict("index").items()},
+        "per_week": {
+            int(k): {"mean": float(v["mean"]), "size": int(v["size"])}
+            for k, v in wk.to_dict("index").items()
+        },
         "describe": {k: float(v) for k, v in wk["mean"].describe().to_dict().items()},
     }
-    log.info("주차별 악성 비율 describe(mean): %s",
-             {k: round(v, 4) for k, v in
-              report["weekly_malicious_ratio"]["describe"].items()})
-    log.info("  주차별 mean이 뒤로 갈수록 뚜렷이 움직이면 base rate 드리프트 신호 — "
-             "calibration 임계값이 test에서 그대로 통하지 않을 수 있습니다.")
+    log.info(
+        "주차별 악성 비율 describe(mean): %s",
+        {
+            k: round(v, 4)
+            for k, v in report["weekly_malicious_ratio"]["describe"].items()
+        },
+    )
+    log.info(
+        "  주차별 mean이 뒤로 갈수록 뚜렷이 움직이면 base rate 드리프트 신호 — "
+        "calibration 임계값이 test에서 그대로 통하지 않을 수 있습니다."
+    )
 
     # ------------------------------------------------------------------
     # 2) lockbox: 필터링하지 않고 valid 마스크만 저장
@@ -326,31 +375,41 @@ def main() -> int:
         arch_path = layout.arch_path(subset)
         arch = np.load(arch_path) if arch_path.is_file() else None
 
-        mask = (y != LABEL_UNKNOWN)
+        mask = y != LABEL_UNKNOWN
         np.save(layout.valid_mask_path(subset), mask)
         st = label_stats(y, arch)
         report[f"lockbox_{subset}"] = st
-        log.info("%s (원본 보존): %d행, 유효 %d행, 악성비율=%s",
-                 subset, y.size, int(mask.sum()), st["malicious_ratio"])
+        log.info(
+            "%s (원본 보존): %d행, 유효 %d행, 악성비율=%s",
+            subset,
+            y.size,
+            int(mask.sum()),
+            st["malicious_ratio"],
+        )
         log.info("  → 원본은 필터링하지 않고 valid_mask_%s.npy만 저장했습니다.", subset)
 
         if subset == "challenge" and arch is not None:
-            dist = {ARCH_NAMES.get(int(a), str(a)): int((arch == a).sum())
-                    for a in np.unique(arch)}
+            dist = {
+                ARCH_NAMES.get(int(a), str(a)): int((arch == a).sum())
+                for a in np.unique(arch)
+            }
             log.info("  challenge arch 분포: %s", dist)
             n_pe = int(((arch == 0) | (arch == 1)).sum())
             report["challenge_win_count"] = n_pe
             log.warning(
                 "  challenge의 Win32/Win64는 %d건뿐입니다. 표본이 작아 탐지율 "
-                "비교 시 신뢰구간을 반드시 함께 보고하세요.", n_pe,
+                "비교 시 신뢰구간을 반드시 함께 보고하세요.",
+                n_pe,
             )
 
     # ------------------------------------------------------------------
     # 3) non-finite 검사
     # ------------------------------------------------------------------
-    qc_targets = [] if args.qc_subsets.strip().lower() == "none" else [
-        s.strip() for s in args.qc_subsets.split(",") if s.strip()
-    ]
+    qc_targets = (
+        []
+        if args.qc_subsets.strip().lower() == "none"
+        else [s.strip() for s in args.qc_subsets.split(",") if s.strip()]
+    )
     report["nonfinite"] = {}
     for subset in qc_targets:
         try:
@@ -365,8 +424,12 @@ def main() -> int:
             log.warning(
                 "%s: non-finite를 포함한 행 %d개 / 영향 컬럼 %d개 "
                 "(NaN %d, +inf %d, -inf %d)",
-                subset, res["n_rows_with_nonfinite"], res["n_columns_with_nonfinite"],
-                res["total_nan"], res["total_posinf"], res["total_neginf"],
+                subset,
+                res["n_rows_with_nonfinite"],
+                res["n_columns_with_nonfinite"],
+                res["total_nan"],
+                res["total_posinf"],
+                res["total_neginf"],
             )
             log.warning(
                 "  LightGBM은 NaN을 네이티브로 처리하므로 보통 그대로 두는 것이 "
@@ -380,11 +443,14 @@ def main() -> int:
     write_json(layout.reports / "qc_report.json", report)
     log.info("QC 리포트: %s", layout.reports / "qc_report.json")
 
-    layout.mark_done("split_qc", {
-        "split_method": "time",
-        "week_boundaries": week_boundaries,
-        "n_per_split": {n: int(idx.size) for n, idx in splits.items()},
-    })
+    layout.mark_done(
+        "split_qc",
+        {
+            "split_method": "time",
+            "week_boundaries": week_boundaries,
+            "n_per_split": {n: int(idx.size) for n, idx in splits.items()},
+        },
+    )
     log.info("다음 단계: python materialize.py --root %s", args.root)
     return 0
 

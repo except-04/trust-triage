@@ -7,9 +7,8 @@ review_revision 만 갱신한다. 그래서 그룹 이동, 표의 수정 여부 
 
 from __future__ import annotations
 
-import pytest
-
 import api_client
+import pytest
 from api_client import ApiError
 
 
@@ -32,7 +31,9 @@ def analysis(
         "initial_verdict": verdict,
         "route": "DEEP_ANALYSIS" if verdict == "HIGH_RISK_UNCERTAIN" else "FINAL",
         "reason": "test",
-        "final_verdict": {"AUTO_BENIGN": "BENIGN", "AUTO_MALICIOUS": "MALICIOUS"}.get(verdict),
+        "final_verdict": {"AUTO_BENIGN": "BENIGN", "AUTO_MALICIOUS": "MALICIOUS"}.get(
+            verdict
+        ),
         "final_assessment": None,
         "calibrated_probability": 0.5,
         "raw_probability": 0.5,
@@ -71,7 +72,9 @@ def analysis(
         ("AUTO_MALICIOUS", None, 3, "needs_review"),
     ],
 )
-def test_group_follows_analyst_verdict_once_reviewed(app, verdict, analyst, revision, expected):
+def test_group_follows_analyst_verdict_once_reviewed(
+    app, verdict, analyst, revision, expected
+):
     item = analysis(verdict=verdict, analyst=analyst, revision=revision)
     assert app.triage_group_key(item) == expected
 
@@ -106,7 +109,10 @@ def test_group_counts_and_summary_move_with_the_review(app):
     [
         (analysis(), "-"),
         (analysis(analyst="MALICIOUS", revision=1), "수정됨 · 원래 AUTO BENIGN"),
-        (analysis("A1", "HIGH_RISK_UNCERTAIN", analyst="BENIGN", revision=1), "수정됨 · 원래 NEEDS REVIEW"),
+        (
+            analysis("A1", "HIGH_RISK_UNCERTAIN", analyst="BENIGN", revision=1),
+            "수정됨 · 원래 NEEDS REVIEW",
+        ),
         # 저장은 했지만 원래 그룹으로 돌아온 경우
         (analysis(analyst="BENIGN", revision=2), "확인됨"),
     ],
@@ -126,7 +132,10 @@ def test_auto_verdict_moved_to_needs_review_shows_not_run(app):
     moved = analysis(verdict="AUTO_BENIGN", analyst=None, revision=1)
     assert app.deep_analysis_status_text(moved) == "NOT RUN"
     # 원래 검토 대상은 기존처럼 도구 상태를 요약한다
-    assert app.deep_analysis_status_text(analysis(verdict="HIGH_RISK_UNCERTAIN")) == "COMPLETED"
+    assert (
+        app.deep_analysis_status_text(analysis(verdict="HIGH_RISK_UNCERTAIN"))
+        == "COMPLETED"
+    )
 
 
 # ---- 상세 화면: Final Verdict 배지와 버튼 상태 ----------------------------------
@@ -136,9 +145,21 @@ def test_auto_verdict_moved_to_needs_review_shows_not_run(app):
     "item,label,badge_text",
     [
         (analysis(), "Final Verdict", "정상 (Benign)"),
-        (analysis(analyst="MALICIOUS", revision=1, approval="MODIFIED"), "Final Verdict · 수정됨", "악성 (Malicious)"),
-        (analysis(analyst="BENIGN", revision=1, approval="APPROVED"), "Final Verdict · 분석가 승인", "정상 (Benign)"),
-        (analysis(analyst=None, revision=1, approval="PENDING"), "Final Verdict · 분석가 보류", "판정 보류 (Uncertain)"),
+        (
+            analysis(analyst="MALICIOUS", revision=1, approval="MODIFIED"),
+            "Final Verdict · 수정됨",
+            "악성 (Malicious)",
+        ),
+        (
+            analysis(analyst="BENIGN", revision=1, approval="APPROVED"),
+            "Final Verdict · 분석가 승인",
+            "정상 (Benign)",
+        ),
+        (
+            analysis(analyst=None, revision=1, approval="PENDING"),
+            "Final Verdict · 분석가 보류",
+            "판정 보류 (Uncertain)",
+        ),
     ],
 )
 def test_final_verdict_cell(app, item, label, badge_text):
@@ -218,8 +239,18 @@ def test_refresh_updates_batch_and_detail_but_keeps_loaded_details(app, monkeypa
 
 def test_history_rows_chain_previous_group_and_show_newest_first(app):
     items = [
-        {"analyst_final_verdict": "MALICIOUS", "reviewer_id": "a", "analyst_notes": "", "reviewed_at": None},
-        {"analyst_final_verdict": None, "reviewer_id": "b", "analyst_notes": "n", "reviewed_at": None},
+        {
+            "analyst_final_verdict": "MALICIOUS",
+            "reviewer_id": "a",
+            "analyst_notes": "",
+            "reviewed_at": None,
+        },
+        {
+            "analyst_final_verdict": None,
+            "reviewer_id": "b",
+            "analyst_notes": "n",
+            "reviewed_at": None,
+        },
     ]
     rows = app.review_history_rows(items, analysis(verdict="AUTO_BENIGN"))
     assert [row["Change"] for row in rows] == [
@@ -234,7 +265,12 @@ def test_history_rows_chain_previous_group_and_show_newest_first(app):
 @pytest.fixture
 def dialog(app, monkeypatch):
     """팝업 위젯을 조종할 수 있게 하고, 호출 내용을 모아 돌려준다."""
-    state = {"choice": "auto_malicious", "notes": "", "reviewer": "HongGildong", "click": True}
+    state = {
+        "choice": "auto_malicious",
+        "notes": "",
+        "reviewer": "HongGildong",
+        "click": True,
+    }
     seen = {"errors": [], "warnings": [], "buttons": [], "saves": [], "radio_keys": []}
 
     def radio(*args, **kwargs):
@@ -242,10 +278,21 @@ def dialog(app, monkeypatch):
         return state["choice"]
 
     monkeypatch.setattr(app.st, "radio", radio, raising=False)
-    monkeypatch.setattr(app.st, "text_area", lambda *a, **k: state["notes"], raising=False)
-    monkeypatch.setattr(app.st, "text_input", lambda *a, **k: state["reviewer"], raising=False)
-    monkeypatch.setattr(app.st, "error", lambda msg, *a, **k: seen["errors"].append(msg), raising=False)
-    monkeypatch.setattr(app.st, "warning", lambda msg, *a, **k: seen["warnings"].append(msg), raising=False)
+    monkeypatch.setattr(
+        app.st, "text_area", lambda *a, **k: state["notes"], raising=False
+    )
+    monkeypatch.setattr(
+        app.st, "text_input", lambda *a, **k: state["reviewer"], raising=False
+    )
+    monkeypatch.setattr(
+        app.st, "error", lambda msg, *a, **k: seen["errors"].append(msg), raising=False
+    )
+    monkeypatch.setattr(
+        app.st,
+        "warning",
+        lambda msg, *a, **k: seen["warnings"].append(msg),
+        raising=False,
+    )
 
     def button(label, *args, **kwargs):
         seen["buttons"].append((label, kwargs))
@@ -256,7 +303,10 @@ def dialog(app, monkeypatch):
     monkeypatch.setattr(
         api_client,
         "get_result",
-        lambda analysis_id: {"analyst_final_verdict": "MALICIOUS", "review_revision": 1},
+        lambda analysis_id: {
+            "analyst_final_verdict": "MALICIOUS",
+            "review_revision": 1,
+        },
     )
 
     def save(analysis_id, verdict, reviewer, expected_revision, notes=""):
@@ -295,7 +345,9 @@ def test_dialog_saves_mapped_verdict_and_reruns(app, dialog, rerun_signal):
 def test_dialog_sends_the_current_revision(app, dialog, rerun_signal):
     """이미 수정된 건은 화면이 들고 있는 review_revision 을 그대로 보내야 409가 나지 않는다."""
     state, seen = dialog
-    item = analysis("A1", "AUTO_BENIGN", analyst="MALICIOUS", revision=2, approval="MODIFIED")
+    item = analysis(
+        "A1", "AUTO_BENIGN", analyst="MALICIOUS", revision=2, approval="MODIFIED"
+    )
     app.st.session_state.batch_data = {"analyses": [item]}
     app.st.session_state.analysis_result = item
     state["choice"] = "needs_review"
@@ -328,7 +380,9 @@ def test_dialog_rejects_invalid_reviewer_without_calling_backend(app, dialog):
     assert any("검토자명" in message for message in seen["errors"])
 
 
-def test_save_keeps_patch_result_when_refetch_fails(app, dialog, monkeypatch, rerun_signal):
+def test_save_keeps_patch_result_when_refetch_fails(
+    app, dialog, monkeypatch, rerun_signal
+):
     """저장은 됐는데 재조회가 실패해도 화면은 서버에 저장된 판정·revision 을 보여야 한다.
 
     완료된 건은 폴링이 다시 조회하지 않으므로, 여기서 옛 값이 남으면 화면이 계속
@@ -344,7 +398,10 @@ def test_save_keeps_patch_result_when_refetch_fails(app, dialog, monkeypatch, re
     with pytest.raises(rerun_signal):
         app.review_dialog("A1")
 
-    for view in (app.st.session_state.analysis_result, app.st.session_state.batch_data["analyses"][0]):
+    for view in (
+        app.st.session_state.analysis_result,
+        app.st.session_state.batch_data["analyses"][0],
+    ):
         assert view["analyst_final_verdict"] == "MALICIOUS"
         assert view["review_revision"] == 1
         assert view["approval_status"] == "MODIFIED"
@@ -352,7 +409,9 @@ def test_save_keeps_patch_result_when_refetch_fails(app, dialog, monkeypatch, re
     assert "저장했습니다" in app.st.session_state.review_notice
 
 
-def test_dialog_conflict_redraws_with_latest_verdict(app, dialog, monkeypatch, rerun_signal):
+def test_dialog_conflict_redraws_with_latest_verdict(
+    app, dialog, monkeypatch, rerun_signal
+):
     """충돌하면 최신 판정을 받아 와서 팝업을 다시 그리고, 이전 선택은 버린다.
 
     다시 그리지 않으면 화면에는 이전 판정이 남은 채 revision 만 새 값이 되어,
@@ -367,7 +426,11 @@ def test_dialog_conflict_redraws_with_latest_verdict(app, dialog, monkeypatch, r
     monkeypatch.setattr(
         api_client,
         "list_reviews",
-        lambda analysis_id: {"items": [{"reviewer_id": "OtherAnalyst", "analyst_final_verdict": "MALICIOUS"}]},
+        lambda analysis_id: {
+            "items": [
+                {"reviewer_id": "OtherAnalyst", "analyst_final_verdict": "MALICIOUS"}
+            ]
+        },
     )
 
     with pytest.raises(rerun_signal):
@@ -403,10 +466,18 @@ def test_opening_dialog_refreshes_review_state_once(app, monkeypatch):
     monkeypatch.setattr(
         api_client,
         "get_result",
-        lambda analysis_id: {"analyst_final_verdict": "MALICIOUS", "review_revision": 3,
-                             "approval_status": "MODIFIED", "final_verdict": "BENIGN"},
+        lambda analysis_id: {
+            "analyst_final_verdict": "MALICIOUS",
+            "review_revision": 3,
+            "approval_status": "MODIFIED",
+            "final_verdict": "BENIGN",
+        },
     )
-    monkeypatch.setattr(app, "review_dialog", lambda analysis_id: seen.setdefault("opened", app.review_target(analysis_id)))
+    monkeypatch.setattr(
+        app,
+        "review_dialog",
+        lambda analysis_id: seen.setdefault("opened", app.review_target(analysis_id)),
+    )
 
     app.open_review_dialog("A1")
 
@@ -445,14 +516,18 @@ class _Response:
         return {"ok": True}
 
 
-@pytest.mark.parametrize("token,expected_key", [("", None), ("reviewer-secret", "reviewer-secret")])
+@pytest.mark.parametrize(
+    "token,expected_key", [("", None), ("reviewer-secret", "reviewer-secret")]
+)
 def test_save_review_request(monkeypatch, token, expected_key):
     calls = []
     monkeypatch.setattr(api_client, "REVIEWER_TOKEN", token)
     monkeypatch.setattr(
         api_client.requests,
         "request",
-        lambda method, url, **kwargs: calls.append((method, url, kwargs)) or _Response(),
+        lambda method, url, **kwargs: (
+            calls.append((method, url, kwargs)) or _Response()
+        ),
     )
 
     api_client.save_review("A1", None, "HongGildong", 3, "memo")

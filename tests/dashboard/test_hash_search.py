@@ -8,9 +8,7 @@
 from __future__ import annotations
 
 import pytest
-
 from api_client import ApiError
-
 
 HASH = "a" * 64
 
@@ -157,7 +155,12 @@ def search(app, monkeypatch):
 def seeded_batch_state(app):
     """접수/폴링이 진행 중인 화면 상태."""
     pending = {"analysis_id": "P1", "status": "RUNNING", "filename": "pending.exe"}
-    batch_data = {"batch_ids": ["B9"], "analyses": [pending], "skipped": [], "errors": []}
+    batch_data = {
+        "batch_ids": ["B9"],
+        "analyses": [pending],
+        "skipped": [],
+        "errors": [],
+    }
     app.st.session_state.update(
         analysis_result=pending,
         batch_data=batch_data,

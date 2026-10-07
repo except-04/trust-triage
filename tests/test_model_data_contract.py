@@ -13,14 +13,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODELS_DIR = PROJECT_ROOT / "src" / "models"
 sys.path.insert(0, str(MODELS_DIR))
 
-from data_contract import DataContractError, validate_four_way_contract  # noqa: E402
+from data_contract import DataContractError, validate_four_way_contract
 
 EXPECTED_TEST_ROWS = {"tr": 4, "val": 3, "calib": 3, "eval": 3}
 
 
 def write_contract(root: Path, *, feature_dim=3):
     for split, rows in EXPECTED_TEST_ROWS.items():
-        np.save(root / f"X_{split}.npy", np.zeros((rows, feature_dim), dtype=np.float32))
+        np.save(
+            root / f"X_{split}.npy", np.zeros((rows, feature_dim), dtype=np.float32)
+        )
         np.save(root / f"y_{split}.npy", np.arange(rows, dtype=np.int8) % 2)
 
 
@@ -53,7 +55,8 @@ def test_missing_validation_does_not_fallback(tmp_path):
 def names_used_in_function(path: Path, function_name: str):
     tree = ast.parse(path.read_text(encoding="utf-8"))
     function = next(
-        node for node in ast.walk(tree)
+        node
+        for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == function_name
     )

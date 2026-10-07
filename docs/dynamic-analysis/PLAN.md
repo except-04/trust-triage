@@ -144,8 +144,7 @@ Speakeasy에서 .NET 지원을 억지로 추가하지 않는다. .NET 분석 결
 
 ```python
 class DynamicAnalyzer(Protocol):
-    def analyze(self, sample_path: str | Path) -> DynamicAnalysisResult:
-        ...
+    def analyze(self, sample_path: str | Path) -> DynamicAnalysisResult: ...
 ```
 
 모든 분석기는 최소한 다음 정보를 반환해야 한다.

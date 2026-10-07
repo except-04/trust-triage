@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import pytest
-
 from api_client import ApiError
 
 
@@ -214,9 +213,7 @@ def test_all_skipped_zip_is_not_promoted_and_does_not_crash(app, monkeypatch):
     monkeypatch.setattr(
         app.api_client,
         "upload_zip",
-        lambda name, content: receipt(
-            "B1", skipped=[("readme.txt", "PE 가 아닙니다")]
-        ),
+        lambda name, content: receipt("B1", skipped=[("readme.txt", "PE 가 아닙니다")]),
     )
 
     recorder = Recorder(app)

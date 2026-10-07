@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-
 # 앞 12자리와 뒤 8자리가 다르게 만들어 prefix 검색과 substring 검색을 구분한다
 HASH_A = "a1b2c3d4" + "e5f60718" * 7
 HASH_B = "f0e1d2c3" * 8
@@ -189,8 +188,14 @@ def test_no_match_hides_the_detail_view_but_keeps_the_selection(
     # 그룹 위젯까지 가지 않는다
     assert screen["group_calls"] == []
     # 직전 선택은 지우지 않는다 — 검색어를 지우면 그대로 돌아오기 위해서
-    for key in ("analysis_result", "selected_analysis_id", "batch_data", "batch_ids",
-                "poll_started_at", "poll_timed_out"):
+    for key in (
+        "analysis_result",
+        "selected_analysis_id",
+        "batch_data",
+        "batch_ids",
+        "poll_started_at",
+        "poll_timed_out",
+    ):
         assert app.st.session_state[key] == before[key], key
 
 
@@ -207,7 +212,9 @@ def test_clearing_the_query_restores_the_previous_view(
 
     assert app.st.session_state.analysis_result["analysis_id"] == "A1"
     assert screen["info"] == ["검색 조건에 맞는 파일이 없습니다."]  # 새 안내는 없음
-    assert screen["caption"] == ["검색 결과 0건 / 전체 4건"]  # 빈 검색어엔 건수 표시 없음
+    assert screen["caption"] == [
+        "검색 결과 0건 / 전체 4건"
+    ]  # 빈 검색어엔 건수 표시 없음
 
 
 def test_results_reappearing_restores_the_view(
@@ -234,7 +241,10 @@ def test_group_counts_follow_the_query(app, typed, screen, no_backend, stop_sign
 
     # 타일 라벨은 "분류 이름\n검색 결과 / 전체" 형태다
     format_group = screen["group_calls"][0]["format_func"]
-    assert [format_group(key) for key in ("total", "needs_review", "auto_malicious", "auto_benign", "failed")] == [
+    assert [
+        format_group(key)
+        for key in ("total", "needs_review", "auto_malicious", "auto_benign", "failed")
+    ] == [
         "Total\n2 / 4",
         "Needs Review\n0 / 1",
         "Auto Malicious\n1 / 1",
@@ -260,7 +270,12 @@ def two_group_batch(app):
     """리뷰 재현용: A1(Auto Benign) 선택 중, 매칭은 Needs Review의 A2뿐."""
     a1 = analysis("A1", "benign.exe", HASH_A, "AUTO_BENIGN")
     a2 = analysis("A2", "malware.exe", HASH_B, "HIGH_RISK_UNCERTAIN")
-    batch_data = {"batch_ids": ["B1"], "analyses": [a1, a2], "skipped": [], "errors": []}
+    batch_data = {
+        "batch_ids": ["B1"],
+        "analyses": [a1, a2],
+        "skipped": [],
+        "errors": [],
+    }
     app.st.session_state.update(
         analysis_result=a1,
         batch_data=batch_data,
@@ -297,8 +312,14 @@ def test_match_only_in_another_group_hides_the_stale_detail(
     assert format_group("needs_review") == "Needs Review\n1 / 1"
     assert format_group("auto_benign") == "Auto Benign\n0 / 1"
     # 그룹·선택·analysis_result는 강제로 바꾸지 않는다
-    for key in ("batch_group", "selected_analysis_id", "analysis_result",
-                "group_analysis_selector", "batch_data", "batch_ids"):
+    for key in (
+        "batch_group",
+        "selected_analysis_id",
+        "analysis_result",
+        "group_analysis_selector",
+        "batch_data",
+        "batch_ids",
+    ):
         assert app.st.session_state[key] == before[key], key
     assert app.st.session_state.analysis_result["filename"] == "benign.exe"
 
@@ -340,9 +361,7 @@ def test_clearing_the_query_after_a_group_mismatch_restores_the_old_view(
     assert app.st.session_state.analysis_result["analysis_id"] == "A1"
 
 
-def test_match_in_the_current_group_does_not_stop(
-    app, typed, screen, no_backend
-):
+def test_match_in_the_current_group_does_not_stop(app, typed, screen, no_backend):
     batch_data = two_group_batch(app)
     screen["group"] = "auto_benign"
     typed("benign")
@@ -375,19 +394,34 @@ def test_summary_card_keeps_whole_batch_counts(app, typed, screen, no_backend):
     assert batch_data["summary"]["total"] == 4
 
 
-def test_search_leaves_hash_search_and_polling_state_alone(app, typed, screen, no_backend):
+def test_search_leaves_hash_search_and_polling_state_alone(
+    app, typed, screen, no_backend
+):
     batch_data = seed_batch(app)
-    app.st.session_state.hash_search = {"query": HASH_A, "total_count": 1, "analyses": []}
+    app.st.session_state.hash_search = {
+        "query": HASH_A,
+        "total_count": 1,
+        "analyses": [],
+    }
     app.st.session_state.hash_search_error = None
     screen["group"] = "auto_malicious"
     typed("helper")
     app.render_batch_triage(batch_data)
 
-    assert app.st.session_state.hash_search == {"query": HASH_A, "total_count": 1, "analyses": []}
+    assert app.st.session_state.hash_search == {
+        "query": HASH_A,
+        "total_count": 1,
+        "analyses": [],
+    }
     assert app.st.session_state.batch_data is batch_data
     assert app.st.session_state.batch_ids == ["B1"]
     assert app.st.session_state.poll_started_at == 1.0
-    assert [a["analysis_id"] for a in batch_data["analyses"]] == ["A1", "A2", "A3", "A4"]
+    assert [a["analysis_id"] for a in batch_data["analyses"]] == [
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+    ]
 
 
 def test_new_intake_clears_the_query(app):
@@ -402,7 +436,10 @@ def test_tile_labels_show_only_totals_without_a_query(app, typed, screen, no_bac
     app.render_batch_triage(batch_data)
 
     format_group = screen["group_calls"][0]["format_func"]
-    assert [format_group(key) for key in ("needs_review", "auto_malicious", "auto_benign", "failed")] == [
+    assert [
+        format_group(key)
+        for key in ("needs_review", "auto_malicious", "auto_benign", "failed")
+    ] == [
         "Needs Review\n1",
         "Auto Malicious\n1",
         "Auto Benign\n1",

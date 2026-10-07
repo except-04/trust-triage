@@ -40,6 +40,100 @@ _OWNED = (
 )
 
 
+def evaluate_emergency_evidence(
+    evidence: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    best_level = None
+    best_obs_level = 99
+    best_category = ""
+    best_reason = ""
+
+    for ev in evidence:
+        source = ev.get("source", "").lower()
+        status = ev.get("status", "").upper()
+        techniques = ev.get("attack_techniques", [])
+
+        if status != "OBSERVED":
+            continue
+
+        if source == "speakeasy":
+            obs_level = 1
+            act_str = "동적 관측—결과 미확인"
+        elif source == "capa":
+            obs_level = 2
+            act_str = "정적 규칙 일치"
+        else:
+            continue
+
+        for t in techniques:
+            t_id = t.get("technique_id")
+            if t_id:
+                t_id = str(t_id).upper()
+            else:
+                t_id = ""
+
+            t_name = t.get("technique_name")
+            if t_name:
+                t_name = str(t_name).lower()
+            else:
+                t_name = ""
+
+            level = None
+            cat = ""
+
+            if (
+                t_id in ["T1485", "T1561"]
+                or "data destruction" in t_name
+                or "disk structure wipe" in t_name
+            ):
+                level = 1
+                cat = "데이터 파괴"
+            elif (
+                t_id in ["T1486"]
+                or "data encrypted for impact" in t_name
+                or "ransomware" in t_name
+            ):
+                # Normal encrypting APIs are ignored, strictly ransomware tag/id
+                level = 1
+                cat = "랜섬웨어 암호화"
+            elif (
+                t_id in ["T1490"]
+                or "inhibit system recovery" in t_name
+                or "delete volume shadow" in t_name
+            ):
+                level = 2
+                cat = "복구 방해"
+            elif (
+                t_id in ["T1489"]
+                or "service stop" in t_name
+                or "stop services" in t_name
+            ):
+                level = 2
+                cat = "서비스 중단"
+
+            if level is not None:
+                if (
+                    best_level is None
+                    or level < best_level
+                    or (level == best_level and obs_level < best_obs_level)
+                ):
+                    best_level = level
+                    best_obs_level = obs_level
+                    best_category = cat
+
+                    src_display = source.upper() if source else "UNKNOWN"
+                    best_reason = f"{src_display}: {cat} ({act_str})"
+
+    if best_level is not None:
+        return {
+            "emergency_level": best_level,
+            "emergency_obs_level": best_obs_level,
+            "emergency_category": best_category,
+            "emergency_reason": best_reason,
+        }
+    return None
+
+
 @dataclass(frozen=True)
 class AnalysisRecord:
     analysis_id: str
@@ -117,6 +211,7 @@ class AnalysisRepository(Protocol):
         *,
         batch_id: str | None = None,
         verdict: str | None = None,
+        overturned_only: bool = False,
         sort: str = "newest",
     ) -> tuple[list[AnalysisRecord], int]: ...
     def get_batch(self, batch_id: str) -> list[AnalysisRecord] | None: ...
@@ -179,44 +274,241 @@ class AnalysisRepository(Protocol):
 
 
 class PostgresAnalysisRepository:
-
     def get_budget_config(self) -> dict[str, Any]:
         with self._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT daily_budget, updated_at FROM api_budget_config WHERE id = 1")
+            cur.execute(
+                "SELECT daily_budget, emergency_budget, deep_budget, fp_budget, is_unlimited, updated_at FROM api_budget_config WHERE id = 1"
+            )
             row = cur.fetchone()
             if not row:
-                cur.execute("INSERT INTO api_budget_config (id, daily_budget) VALUES (1, 100) RETURNING daily_budget, updated_at")
+                cur.execute(
+                    "INSERT INTO api_budget_config (id, daily_budget, emergency_budget, deep_budget, fp_budget, is_unlimited) VALUES (1, 100, 0, 100, 0, FALSE) RETURNING daily_budget, emergency_budget, deep_budget, fp_budget, is_unlimited, updated_at"
+                )
                 row = cur.fetchone()
-            
+                conn.commit()
+
             daily_budget = row["daily_budget"]
+            emergency_budget = row["emergency_budget"]
+            deep_budget = row["deep_budget"]
+            fp_budget = row["fp_budget"]
+            is_unlimited = row["is_unlimited"]
             updated_at = row["updated_at"]
-            
+
+            # Calculate completed tasks today using Seoul time boundary (KST UTC+9)
+            # Find the *first* completed review per analysis_id, then count those that happened today.
+            # "min(review_queue)처럼 문자열 최솟값으로 큐를 선택하지 말고, 최초 완료 기록에 연결된 큐를 집계해주세요."
             cur.execute("""
-                SELECT count(*) as c
-                FROM (
-                    SELECT analysis_id
-                    FROM api_reviews
-                    WHERE review_status = 'COMPLETED'
-                    GROUP BY analysis_id
-                    HAVING min(reviewed_at) AT TIME ZONE 'Asia/Seoul' >= date_trunc('day', clock_timestamp() AT TIME ZONE 'Asia/Seoul')
-                ) t
+                WITH first_reviews AS (
+                    SELECT 
+                        a.sha256,
+                        r.review_queue,
+                        r.reviewed_at,
+                        ROW_NUMBER() OVER(PARTITION BY a.sha256 ORDER BY r.reviewed_at ASC) as rn
+                    FROM api_reviews r
+                    JOIN api_analyses a ON r.analysis_id = a.analysis_id
+                    WHERE r.review_status = 'COMPLETED'
+                )
+                SELECT review_queue, COUNT(*) as cnt
+                FROM first_reviews
+                WHERE rn = 1
+                  AND reviewed_at AT TIME ZONE 'Asia/Seoul' >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date
+                GROUP BY review_queue
             """)
-            today_completed = cur.fetchone()["c"]
-            
+            counts = cur.fetchall()
+
+            today_em = 0
+            today_deep = 0
+            today_auto = 0
+            today_fp = 0
+            today_unknown = 0
+
+            for c in counts:
+                q = c["review_queue"]
+                if q == "EMERGENCY":
+                    today_em = c["cnt"]
+                elif q == "DEEP":
+                    today_deep = c["cnt"]
+                elif q == "FP":
+                    today_fp = c["cnt"]
+                elif q == "AUTO":
+                    today_auto = c["cnt"]
+                else:
+                    today_unknown += c["cnt"]
+
+            today_total = today_em + today_deep + today_fp + today_unknown + today_auto
+            # Note: AUTO doesn't cost budget, so maybe we only subtract manual reviews.
+            # But "과거 리뷰의 큐 정보가 없는 경우도 전체 완료량에서 조용히 빠지지 않도록"
+            # So today_total_manual = today_em + today_deep + today_fp + today_unknown
+            today_total_manual = today_em + today_deep + today_fp + today_unknown
+
             return {
                 "daily_budget": daily_budget,
-                "today_completed_count": today_completed,
-                "remaining_budget": max(daily_budget - today_completed, 0),
-                "updated_at": updated_at
+                "emergency_budget": emergency_budget,
+                "deep_budget": deep_budget,
+                "fp_budget": fp_budget,
+                "is_unlimited": is_unlimited,
+                "today_completed_count": today_total_manual,
+                "today_completed_emergency": today_em,
+                "today_completed_deep": today_deep,
+                "today_completed_fp": today_fp,
+                "remaining_budget": max(daily_budget - today_total_manual, 0),
+                "remaining_emergency": max(emergency_budget - today_em, 0),
+                "remaining_deep": max(deep_budget - today_deep, 0),
+                "remaining_fp": max(fp_budget - today_fp, 0),
+                "updated_at": updated_at,
             }
 
-    def set_daily_budget(self, budget: int) -> None:
+    def set_budget_config(self, config: dict[str, Any]) -> None:
+        if (
+            not config.get("is_unlimited", False)
+            and config["emergency_budget"] + config["deep_budget"] + config["fp_budget"]
+            > config["daily_budget"]
+        ):
+            raise ValueError("Queue budgets exceed total daily budget")
         with self._connection() as conn, conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO api_budget_config (id, daily_budget, updated_at)
-                VALUES (1, %s, clock_timestamp())
-                ON CONFLICT (id) DO UPDATE SET daily_budget = EXCLUDED.daily_budget, updated_at = clock_timestamp()
-            """, (budget,))
+            cur.execute(
+                """
+                INSERT INTO api_budget_config (id, daily_budget, emergency_budget, deep_budget, fp_budget, is_unlimited, updated_at)
+                VALUES (1, %(daily_budget)s, %(emergency_budget)s, %(deep_budget)s, %(fp_budget)s, %(is_unlimited)s, clock_timestamp())
+                ON CONFLICT (id) DO UPDATE SET 
+                    daily_budget = EXCLUDED.daily_budget,
+                    emergency_budget = EXCLUDED.emergency_budget,
+                    deep_budget = EXCLUDED.deep_budget,
+                    fp_budget = EXCLUDED.fp_budget,
+                    is_unlimited = EXCLUDED.is_unlimited,
+                    updated_at = clock_timestamp()
+            """,
+                config,
+            )
+
+    def _determine_queue(
+        self, prob_float, initial_verdict, triggered_signals, risk_signals, deep_result
+    ) -> dict[str, Any]:
+        # Handle ERROR state for invalid probability
+        if prob_float < 0.0:
+            return {
+                "queue_name": "ERROR",
+                "queue_reason": "비정상/누락된 악성 확률 값",
+                "priority_score": -1.0,
+                "score_policy": "error-v1",
+                "priority_reason": "오류 상태로 점수 산정 불가",
+                "selection_reason": "확률 값 오류 검토 필요",
+            }
+
+        is_emergency = False
+        emergency_reason = ""
+        evidence = deep_result.get("evidence", []) if deep_result else []
+
+        emergency_level = None
+        emergency_obs_level = 99
+        emergency_category = ""
+
+        em_eval = evaluate_emergency_evidence(evidence)
+        if em_eval is not None:
+            is_emergency = True
+            emergency_level = em_eval["emergency_level"]
+            emergency_obs_level = em_eval["emergency_obs_level"]
+            emergency_category = em_eval["emergency_category"]
+            emergency_reason = em_eval["emergency_reason"]
+
+        is_auto = initial_verdict in ["AUTO_BENIGN", "AUTO_MALICIOUS"]
+        auto_reason = "자동 판정 기준 충족 (추가 수집 경로 없음)" if is_auto else ""
+
+        is_deep = False
+        deep_reasons = []
+        deep_priority_score = prob_float
+        deep_score_policy = "probability-v1"
+        deep_priority_reason = "단순 악성 확률순"
+        deep_queue_reason = ""
+
+        raw_ood = float(risk_signals.get("ood_score", 0))
+        disagreement = float(risk_signals.get("disagreement", 0))
+        difficulty = float(risk_signals.get("difficulty_score", 0))
+
+        has_uncertainty = "UNCERTAIN_PROBABILITY" in triggered_signals
+        has_disagreement = "DISAGREEMENT" in triggered_signals
+        has_ood = "OOD" in triggered_signals
+        has_difficulty = "DIFFICULTY" in triggered_signals
+
+        if has_uncertainty or has_disagreement or has_ood or has_difficulty:
+            is_deep = True
+            if has_uncertainty:
+                deep_reasons.append("JRR 확률 보류 구간")
+            if has_disagreement:
+                deep_reasons.append(f"모델 간 확률 차이 {disagreement * 100:.2f}%p")
+            if has_ood:
+                deep_reasons.append("학습 분포에서 벗어남")
+            if has_difficulty:
+                deep_reasons.append(f"PE 구조 경고 점수 {int(difficulty)}")
+
+            if has_uncertainty:
+                deep_priority_score = 1.0 - 2.0 * abs(prob_float - 0.5)
+                deep_score_policy = "uncertainty-v2"
+                deep_priority_reason = "확률 불확실성"
+                deep_queue_reason = "JRR 확률 보류 구간"
+            elif has_disagreement:
+                deep_priority_score = disagreement
+                deep_score_policy = "disagreement-v2"
+                deep_priority_reason = "모델 불일치"
+                deep_queue_reason = f"모델 간 확률 차이 {disagreement * 100:.2f}%p"
+            elif has_ood:
+                deep_priority_score = max(0.0, -raw_ood)
+                deep_score_policy = "ood-v2"
+                deep_priority_reason = "분포 이탈"
+                deep_queue_reason = "학습 분포에서 벗어남"
+            elif has_difficulty:
+                deep_priority_score = difficulty
+                deep_score_policy = "difficulty-v2"
+                deep_priority_reason = "분석 난이도"
+                deep_queue_reason = f"PE 구조 경고 점수 {int(difficulty)}"
+        elif initial_verdict == "HIGH_RISK_UNCERTAIN":
+            is_deep = True
+            deep_priority_score = 0.0
+            deep_score_policy = "exception-v2"
+            deep_priority_reason = "예외 처리"
+            deep_queue_reason = "위험 신호 없는 불확실 파일"
+
+        queue_name = "UNKNOWN"
+        queue_reason = ""
+        priority_score = -1.0
+        score_policy = "none"
+        priority_reason = ""
+        selection_reason = ""
+
+        if is_emergency:
+            queue_name = "EMERGENCY"
+            queue_reason = emergency_reason
+            priority_score = prob_float
+            score_policy = "emergency-v1"
+            priority_reason = emergency_category
+            selection_reason = f"긴급 대응: {emergency_reason}"
+        elif is_deep:
+            queue_name = "DEEP"
+            queue_reason = deep_queue_reason
+            priority_score = deep_priority_score
+            score_policy = deep_score_policy
+            priority_reason = deep_priority_reason
+            selection_reason = f"심층 분석 필요 ({priority_reason})"
+        elif is_auto:
+            queue_name = "AUTO"
+            queue_reason = auto_reason
+            priority_score = prob_float
+            score_policy = "probability-v1"
+            priority_reason = "자동 처리 대상"
+            selection_reason = "자동 분류"
+
+        return {
+            "queue_name": queue_name,
+            "queue_reason": queue_reason,
+            "priority_score": priority_score,
+            "score_policy": score_policy,
+            "priority_reason": priority_reason,
+            "selection_reason": selection_reason,
+            "_emergency_level": emergency_level if emergency_level is not None else 99,
+            "_emergency_obs_level": emergency_obs_level
+            if emergency_level is not None
+            else 99,
+        }
 
     def get_priority_recommendations(self) -> list[dict[str, Any]]:
         with self._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -226,74 +518,143 @@ class PostgresAnalysisRepository:
                     a.filename,
                     a.sha256,
                     a.initial_result,
-                    a.created_at
+                    a.deep_result,
+                    a.created_at,
+                    a.final_assessment
                 FROM api_analyses a
                 WHERE a.initial_result IS NOT NULL
-                AND a.analyst_final_verdict IS NULL
                 AND a.review_revision = 0
-                AND (
-                    a.initial_result->>'initial_verdict' IS NULL OR
-                    a.initial_result->>'initial_verdict' NOT IN ('AUTO_BENIGN', 'AUTO_MALICIOUS')
-                )
                 AND NOT EXISTS (
                     SELECT 1 FROM api_reviews r 
-                    WHERE r.analysis_id = a.analysis_id AND r.review_status = 'PENDING'
+                    WHERE r.analysis_id = a.analysis_id AND r.review_status IN ('PENDING', 'COMPLETED')
                 )
+                AND NOT EXISTS (
+                    SELECT 1 FROM api_reviews r2 
+                    JOIN api_analyses a2 ON r2.analysis_id = a2.analysis_id
+                    WHERE a2.sha256 = a.sha256 AND r2.review_status = 'COMPLETED'
+                )
+                ORDER BY a.created_at DESC
             """)
             rows = cur.fetchall()
-            
+
             candidates = []
             seen_sha256 = set()
             for row in rows:
                 if row["sha256"] in seen_sha256:
                     continue
                 seen_sha256.add(row["sha256"])
-                
+
                 initial_result = row["initial_result"]
-                prob = initial_result.get("prediction", {}).get("calibrated_probability")
-                
+                deep_result = row.get("deep_result") or {}
+
+                initial_verdict = initial_result.get("initial_verdict")
+                triggered_signals = initial_result.get("triggered_signals") or []
+                risk_signals = initial_result.get("risk_signals") or {}
+
+                prob = initial_result.get("prediction", {}).get(
+                    "calibrated_probability"
+                )
                 try:
+                    import math
+
                     if prob is None or prob == "":
                         raise ValueError()
                     prob_float = float(prob)
-                    import math
-                    if math.isnan(prob_float) or prob_float < 0.0 or prob_float > 1.0:
+                    if (
+                        math.isnan(prob_float)
+                        or math.isinf(prob_float)
+                        or prob_float < 0.0
+                        or prob_float > 1.0
+                    ):
                         raise ValueError()
-                    priority_score = prob_float
-                    score_policy = "probability-v1"
-                    selection_reason = "보정된 악성 확률 내림차순 기준, 남은 budget 내 선정"
-                except ValueError:
+                except (ValueError, TypeError):
                     prob_float = -1.0
-                    priority_score = -1.0
-                    score_policy = "error"
-                    selection_reason = "확률 값 누락/비정상 - 별도 검토 필요"
 
-                candidates.append({
-                    "analysis_id": row["analysis_id"],
-                    "filename": row["filename"],
-                    "sha256": row["sha256"],
-                    "calibrated_probability": prob_float,
-                    "priority_score": priority_score,
-                    "score_policy": score_policy,
-                    "impact_score": None,
-                    "impact_reason": None,
-                    "selection_reason": selection_reason,
-                    "initial_verdict": initial_result.get("initial_verdict"),
-                    "triggered_signals": initial_result.get("triggered_signals"),
-                    "review_status": "PENDING",
-                    "created_at": row["created_at"],
-                })
-            
-            candidates.sort(key=lambda x: (
-                -x["priority_score"],
-                x["created_at"],
-                x["analysis_id"]
-            ))
-            
-            for i, cand in enumerate(candidates):
-                cand["rank"] = i + 1
-                
+                q = self._determine_queue(
+                    prob_float,
+                    initial_verdict,
+                    triggered_signals,
+                    risk_signals,
+                    deep_result,
+                )
+                if q["queue_name"] == "UNKNOWN":
+                    continue
+
+                candidates.append(
+                    {
+                        "analysis_id": row["analysis_id"],
+                        "filename": row["filename"],
+                        "sha256": row["sha256"],
+                        "queue_name": q["queue_name"],
+                        "queue_reason": q["queue_reason"],
+                        "calibrated_probability": prob_float
+                        if prob_float >= 0.0
+                        else None,
+                        "priority_score": q["priority_score"],
+                        "score_policy": q["score_policy"],
+                        "priority_reason": q["priority_reason"],
+                        "selection_reason": q["selection_reason"],
+                        "_emergency_level": q.get("_emergency_level", 99),
+                        "_emergency_obs_level": q.get("_emergency_obs_level", 99),
+                        "initial_verdict": initial_verdict,
+                        "triggered_signals": triggered_signals,
+                        "review_status": "PENDING",
+                        "created_at": row["created_at"],
+                    }
+                )
+
+            def policy_rank(policy):
+                order = {
+                    "uncertainty-v2": 0,
+                    "disagreement-v2": 1,
+                    "ood-v2": 2,
+                    "difficulty-v2": 3,
+                    "exception-v2": 4,
+                    "probability-v1": 5,
+                    "error-v1": 99,
+                }
+                return order.get(policy, 99)
+
+            def get_sort_key(x):
+                if x["queue_name"] == "AUTO":
+                    return (
+                        x["queue_name"],
+                        0,
+                        0,
+                        0.0,
+                        -x["created_at"].timestamp(),
+                        x["analysis_id"],
+                    )
+                elif x["queue_name"] == "EMERGENCY":
+                    # For EMERGENCY:
+                    # Risk Level -> Observation Level -> -Calibrated Probability -> created_at -> analysis_id
+                    # We inject this by overriding policy rank to be emergency_level, and priority score handling.
+                    # To keep it in the same tuple format:
+                    return (
+                        x["queue_name"],
+                        x.get("_emergency_level", 99),
+                        x.get("_emergency_obs_level", 99),
+                        -x["priority_score"],
+                        x["created_at"].timestamp(),
+                        x["analysis_id"],
+                    )
+                else:
+                    return (
+                        x["queue_name"],
+                        policy_rank(x["score_policy"]),
+                        0,  # placeholder for emergency_obs_level
+                        -x["priority_score"],
+                        x["created_at"].timestamp(),
+                        x["analysis_id"],
+                    )
+
+            candidates.sort(key=get_sort_key)
+            for i, c in enumerate(candidates):
+                c["rank"] = i + 1
+                c.pop("_emergency_level", None)
+                c.pop("_emergency_obs_level", None)
             return candidates
+
     """One bounded transaction per call; no network details enter public errors."""
 
     def __init__(
@@ -524,6 +885,7 @@ class PostgresAnalysisRepository:
         *,
         batch_id: str | None = None,
         verdict: str | None = None,
+        overturned_only: bool = False,
         sort: str = "newest",
     ) -> tuple[list[AnalysisRecord], int]:
         _limit(limit)
@@ -546,6 +908,15 @@ class PostgresAnalysisRepository:
         if verdict is not None:
             conditions.append("initial_result ->> 'initial_verdict' = %s")
             params.append(verdict)
+        if overturned_only:
+            conditions.append(
+                "("
+                "  analyst_final_verdict IS NOT NULL AND ("
+                "    (initial_result->>'initial_verdict' LIKE '%%BENIGN' AND analyst_final_verdict = 'MALICIOUS') OR"
+                "    (initial_result->>'initial_verdict' LIKE '%%MALICIOUS' AND analyst_final_verdict = 'BENIGN')"
+                "  )"
+                ")"
+            )
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         with self._connection() as connection:
             # One MVCC snapshot keeps count and page consistent under concurrent writes.
@@ -935,10 +1306,11 @@ class PostgresAnalysisRepository:
             analyst_final_verdict, analyst_notes, reviewer_id, expected_revision
         )
         with self._connection() as connection:
-            row = connection.execute(
-                "SELECT status, review_revision FROM api_analyses WHERE analysis_id = %s FOR UPDATE",
+            rows = connection.execute(
+                "SELECT analysis_id, status, review_revision, initial_result, deep_result FROM api_analyses WHERE sha256 = (SELECT sha256 FROM api_analyses WHERE analysis_id = %s) FOR UPDATE",
                 (analysis_id,),
-            ).fetchone()
+            ).fetchall()
+            row = next((r for r in rows if r["analysis_id"] == analysis_id), None)
             if row is None:
                 raise BackendError(
                     "ANALYSIS_NOT_FOUND", "Analysis was not found", http_status=404
@@ -955,11 +1327,33 @@ class PostgresAnalysisRepository:
                     "A newer analyst review already exists",
                     http_status=409,
                 )
+
+            initial_result = row["initial_result"] or {}
+            deep_result = row["deep_result"] or {}
+            initial_verdict = initial_result.get("initial_verdict")
+            triggered_signals = initial_result.get("triggered_signals") or []
+            risk_signals = initial_result.get("risk_signals") or {}
+            prob = initial_result.get("prediction", {}).get("calibrated_probability")
+            try:
+                prob_float = float(prob) if prob is not None and prob != "" else -1.0
+            except (ValueError, TypeError):
+                prob_float = -1.0
+
+            q = self._determine_queue(
+                prob_float,
+                initial_verdict,
+                triggered_signals,
+                risk_signals,
+                deep_result,
+            )
+            queue_name = q["queue_name"]
+            score_policy = q["score_policy"]
+
             revision = expected_revision + 1
             review = connection.execute(
                 """INSERT INTO api_reviews
-                   (review_id, analysis_id, revision, analyst_final_verdict, analyst_notes, reviewer_id, review_status)
-                   VALUES (%s::uuid, %s, %s, %s, %s, %s, %s) RETURNING *""",
+                   (review_id, analysis_id, revision, analyst_final_verdict, analyst_notes, reviewer_id, review_status, review_queue, review_policy)
+                   VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
                 (
                     str(uuid4()),
                     analysis_id,
@@ -968,6 +1362,8 @@ class PostgresAnalysisRepository:
                     analyst_notes,
                     reviewer_id,
                     "PENDING" if analyst_final_verdict is None else "COMPLETED",
+                    queue_name,
+                    score_policy,
                 ),
             ).fetchone()
             connection.execute(

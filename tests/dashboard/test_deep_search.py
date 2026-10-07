@@ -23,25 +23,44 @@ def completed_analysis():
             "status": "COMPLETED",
             "capabilities": [
                 {"name": "create process", "namespace": "host-interaction/process"},
-                {"name": "run PowerShell expression", "namespace": "load-code/powershell"},
+                {
+                    "name": "run PowerShell expression",
+                    "namespace": "load-code/powershell",
+                },
             ],
         },
         "floss": {
             "status": "COMPLETED",
-            "strings": {"decoded": ["powershell.exe"], "static": ["kernel32.dll", "cmd.exe"]},
+            "strings": {
+                "decoded": ["powershell.exe"],
+                "static": ["kernel32.dll", "cmd.exe"],
+            },
         },
         "speakeasy": {
             "status": "COMPLETED",
             "behavior": {
-                "api_calls": [{"api_name": "CreateProcessW"}, {"api_name": "RegSetValueExW"}],
+                "api_calls": [
+                    {"api_name": "CreateProcessW"},
+                    {"api_name": "RegSetValueExW"},
+                ],
                 "registry": [{"key": "HKCU\\Software\\Run", "access": "set"}],
             },
         },
         "evidence": [
-            {"technique_id": "T1059.001", "technique_name": "PowerShell",
-             "sources": ["CAPA"], "summary": "run PowerShell", "evidence_ids": ["evt-1"]},
-            {"technique_id": "T1518", "technique_name": "Software Discovery",
-             "sources": ["CAPA"], "summary": "query software", "evidence_ids": ["evt-2"]},
+            {
+                "technique_id": "T1059.001",
+                "technique_name": "PowerShell",
+                "sources": ["CAPA"],
+                "summary": "run PowerShell",
+                "evidence_ids": ["evt-1"],
+            },
+            {
+                "technique_id": "T1518",
+                "technique_name": "Software Discovery",
+                "sources": ["CAPA"],
+                "summary": "query software",
+                "evidence_ids": ["evt-2"],
+            },
         ],
         "deep_status": "COMPLETED",
         "status": "COMPLETED",
@@ -49,7 +68,10 @@ def completed_analysis():
 
 
 def state():
-    return {"deep": "COMPLETED", "tools": {"capa": "COMPLETED", "floss": "COMPLETED", "speakeasy": "COMPLETED"}}
+    return {
+        "deep": "COMPLETED",
+        "tools": {"capa": "COMPLETED", "floss": "COMPLETED", "speakeasy": "COMPLETED"},
+    }
 
 
 def expander_titles(tree):
