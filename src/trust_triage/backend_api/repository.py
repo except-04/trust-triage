@@ -520,13 +520,16 @@ class PostgresAnalysisRepository:
                     a.initial_result,
                     a.deep_result,
                     a.created_at,
-                    a.final_assessment
+                    a.final_assessment,
+                    EXISTS (
+                        SELECT 1 FROM api_reviews r 
+                        WHERE r.analysis_id = a.analysis_id AND r.review_status = 'PENDING'
+                    ) AS is_pending
                 FROM api_analyses a
                 WHERE a.initial_result IS NOT NULL
-                AND a.review_revision = 0
                 AND NOT EXISTS (
                     SELECT 1 FROM api_reviews r 
-                    WHERE r.analysis_id = a.analysis_id AND r.review_status IN ('PENDING', 'COMPLETED')
+                    WHERE r.analysis_id = a.analysis_id AND r.review_status = 'COMPLETED'
                 )
                 AND NOT EXISTS (
                     SELECT 1 FROM api_reviews r2 
@@ -598,7 +601,7 @@ class PostgresAnalysisRepository:
                         "_emergency_obs_level": q.get("_emergency_obs_level", 99),
                         "initial_verdict": initial_verdict,
                         "triggered_signals": triggered_signals,
-                        "review_status": "PENDING",
+                        "review_status": "검토 보류" if row.get("is_pending") else "PENDING",
                         "created_at": row["created_at"],
                     }
                 )

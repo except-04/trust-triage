@@ -59,6 +59,11 @@ def test_analyst_priority_recommendations():
         review_revision=1,
         created_at="2026-10-04T00:30:00+00:00",
     )
+    repo.reviews['rev-test-4'] = {
+        'analysis_id': 'test-4',
+        'review_status': 'COMPLETED',
+        'reviewed_at': '2026-10-04T00:35:00+00:00'
+    }
     # Include as error candidate due to missing probability
     repo.rows["test-5"] = AnalysisRecord(
         analysis_id="test-5",
@@ -69,6 +74,7 @@ def test_analyst_priority_recommendations():
         initial_result={"other_data": "none"},
         created_at="2026-10-04T00:30:00+00:00",
     )
+
 
     recs = repo.get_priority_recommendations()
     assert len(recs) == 4
@@ -123,4 +129,6 @@ def test_budget_logic():
     }
 
     recs = repo.get_priority_recommendations()
-    assert len(recs) == 0  # Excluded due to pending review
+    assert len(recs) == 1  # Included despite pending review
+    assert recs[0]["analysis_id"] == "test-pending"
+    assert recs[0]["review_status"] == "검토 보류"

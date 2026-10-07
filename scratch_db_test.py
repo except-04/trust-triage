@@ -156,7 +156,7 @@ try:
     pre_budget_dict = pre_budget_state if isinstance(pre_budget_state, dict) else pre_budget_state.model_dump()
     pre_completed = pre_budget_dict["today_completed_count"]
 
-    # C. 리뷰 저장을 위한 COMPLETED 변환
+    # C-1. PENDING (보류) 상태 저장
     with svc.repository._connection() as conn:
         conn.execute("""
             UPDATE api_analyses 
@@ -167,11 +167,52 @@ try:
             WHERE analysis_id = %s
         """, (dummy_id,))
 
+    req_pending = ReviewRequest(
+        analyst_final_verdict=None, 
+        analyst_notes="Need more time (PENDING)", 
+        reviewer_id="test_user", 
+        expected_revision=0
+    )
+    svc.review(dummy_id, req_pending)
+
+    # 검증 1: 보류 저장으로 추천/대기 대상에 남고 상태가 '검토 보류'인지
+    recs_after_pending = svc.get_priority_recommendations()
+    PriorityRecommendationResponse.model_validate(recs_after_pending)
+    recs_after_pending_dict = recs_after_pending if isinstance(recs_after_pending, dict) else recs_after_pending.model_dump()
+    
+    pending_item = next((r for r in recs_after_pending_dict["deep_recommendations"] if r["analysis_id"] == dummy_id), None)
+    assert pending_item is not None, "보류 상태일 때 추천 목록에서 제외되었습니다!"
+    assert pending_item["review_status"] == "검토 보류", "후보 응답에 '검토 보류' 상태가 올바르게 표시되지 않았습니다."
+
+    # 검증 2: 보류 저장은 오늘 완료량에 영향을 주지 않음
+    pending_budget_state = svc.get_budget_config()
+    pending_budget_dict = pending_budget_state if isinstance(pending_budget_state, dict) else pending_budget_state.model_dump()
+    assert pending_budget_dict["today_completed_count"] == pre_completed, "보류 리뷰 저장 시 완료량이 비정상적으로 증가했습니다!"
+
+    # 검증 3: 예산 부족 시 보류 건도 대기 목록으로 밀려남
+    svc.set_budget({"daily_budget": 999999, "emergency_budget": 99999, "deep_budget": 0, "fp_budget": 99999, "is_unlimited": False})
+    recs_no_budget = svc.get_priority_recommendations()
+    recs_no_budget_dict = recs_no_budget if isinstance(recs_no_budget, dict) else recs_no_budget.model_dump()
+    assert dummy_id in [r["analysis_id"] for r in recs_no_budget_dict["deep_waiting"]], "예산 부족 시 보류 건이 waiting 큐에 나타나지 않았습니다."
+    
+    # 예산 넉넉히 원복
+    svc.set_budget({"daily_budget": 999999, "emergency_budget": 99999, "deep_budget": 99999, "fp_budget": 99999, "is_unlimited": False})
+
+    # 검증 6-1: revision 충돌 검사
+    from trust_triage.backend_api.errors import BackendError
+    try:
+        req_conflict = ReviewRequest(analyst_final_verdict="MALICIOUS", analyst_notes="conflict", reviewer_id="test_user", expected_revision=0)
+        svc.review(dummy_id, req_conflict)
+        assert False, "잘못된 expected_revision에도 리뷰가 덮어씌워졌습니다 (충돌 무시)."
+    except BackendError as e:
+        assert "newer" in e.message or "already exists" in e.message or e.code == "STALE_REVISION", f"충돌 검사 오류 메시지가 예상과 다릅니다. (실제: {e.code} / {e.message})"
+
+    # C-2. 최종 완료(COMPLETED) 저장 (revision 1)
     req = ReviewRequest(
         analyst_final_verdict="MALICIOUS", 
         analyst_notes="Test migration deep queue", 
         reviewer_id="test_user", 
-        expected_revision=0
+        expected_revision=1
     )
     svc.review(dummy_id, req)
     
@@ -179,11 +220,12 @@ try:
     # 리뷰가 정확히 저장되었는지 확인
     reviews_after = svc.reviews(dummy_id)
     r_items = reviews_after["items"] if isinstance(reviews_after, dict) else reviews_after.items
-    assert len(r_items) == 1, "리뷰 저장 실패"
-    assert r_items[0].analyst_final_verdict == "MALICIOUS", "리뷰 판정 불일치"
-    assert r_items[0].analyst_notes == "Test migration deep queue", "리뷰 메모 불일치"
+    assert len(r_items) >= 1, "리뷰 저장 실패"
+    completed_review = next((r for r in r_items if r.analyst_final_verdict == "MALICIOUS"), None)
+    assert completed_review is not None, "MALICIOUS 판정의 리뷰가 없습니다."
+    assert completed_review.analyst_notes == "Test migration deep queue", "리뷰 메모 불일치"
     with svc.repository._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("SELECT review_queue FROM api_reviews WHERE analysis_id = %s", (dummy_id,))
+        cur.execute("SELECT review_queue FROM api_reviews WHERE analysis_id = %s AND review_status = 'COMPLETED'", (dummy_id,))
         saved_q = cur.fetchone()["review_queue"]
         assert saved_q == "DEEP", "DB에 저장된 리뷰 큐가 DEEP이 아닙니다."
     

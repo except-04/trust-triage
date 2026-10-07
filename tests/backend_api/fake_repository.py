@@ -304,16 +304,22 @@ class MemoryAnalysisRepository:
             if record.sha256 in completed_hashes:
                 continue
 
-            if record.initial_result is None or record.review_revision > 0:
+            if record.initial_result is None:
                 continue
 
-            pending = any(
+            completed = any(
                 r.get("analysis_id") == record.analysis_id
-                and r.get("review_status") in ("PENDING", "COMPLETED")
+                and r.get("review_status") == "COMPLETED"
                 for r in self.reviews.values()
             )
-            if pending:
+            if completed:
                 continue
+
+            is_pending = any(
+                r.get("analysis_id") == record.analysis_id
+                and r.get("review_status") == "PENDING"
+                for r in self.reviews.values()
+            )
 
             seen_sha256.add(record.sha256)
 
@@ -368,7 +374,7 @@ class MemoryAnalysisRepository:
                     "_emergency_obs_level": q.get("_emergency_obs_level", 99),
                     "initial_verdict": record.initial_result.get("initial_verdict"),
                     "triggered_signals": record.initial_result.get("triggered_signals"),
-                    "review_status": "PENDING",
+                    "review_status": "검토 보류" if is_pending else "PENDING",
                     "created_at": record.created_at,
                 }
             )
