@@ -303,4 +303,4 @@ def test_module_has_no_heavy_imports():
             imported.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
-    assert imported <= {"__future__", "re", "dataclasses", "typing"}
+    assert imported <= {"__future__", "re", "dataclasses", "typing", "collections"}
