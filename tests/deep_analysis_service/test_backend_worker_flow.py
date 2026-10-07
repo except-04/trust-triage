@@ -26,7 +26,7 @@ from backend_api.test_storage import FakeS3
 from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
-from speakeasy_worker.fakes import MemoryRepository
+from tests.speakeasy_worker.fakes import MemoryRepository
 
 from trust_triage.backend_api import runtime as backend_runtime
 from trust_triage.backend_api.app import create_app
