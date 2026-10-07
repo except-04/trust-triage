@@ -109,7 +109,7 @@ def test_budget_logic():
     assert budget["today_completed_count"] == 1
     assert budget["remaining_budget"] == 1
 
-    # Add pending review - should exclude from candidates
+    # Add pending review - should remain in candidates
     repo.rows["test-pending"] = AnalysisRecord(
         analysis_id="test-pending",
         sha256="1111111111111111111111111111111111111111111111111111111111111111",
@@ -131,7 +131,7 @@ def test_budget_logic():
     recs = repo.get_priority_recommendations()
     assert len(recs) == 1  # Included despite pending review
     assert recs[0]["analysis_id"] == "test-pending"
-    assert recs[0]["review_status"] == "검토 보류"
+    assert recs[0]["review_status"] == "검토 중"
 
 def test_pending_review_lifecycle():
     repo = MemoryAnalysisRepository()
@@ -170,7 +170,7 @@ def test_pending_review_lifecycle():
     recs = repo.get_priority_recommendations()
     assert len(recs) == 1
     assert recs[0]["analysis_id"] == "test-lifecycle"
-    assert recs[0]["review_status"] == "검토 보류"
+    assert recs[0]["review_status"] == "검토 중"
 
     # 예산 불변 검증
     budget_pending = repo.get_budget_config()

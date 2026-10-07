@@ -636,7 +636,7 @@ class PriorityCandidate(APIModel):
     selection_reason: str = Field(description="상위 선정 근거")
     initial_verdict: InitialVerdict | None = None
     triggered_signals: TriggeredSignals | None = None
-    review_status: str = Field(description="검토 상태")
+    review_status: str | None = Field(default=None, description="검토 상태")
     created_at: AwareDatetime | None = None
 
 

@@ -175,14 +175,16 @@ try:
     )
     svc.review(dummy_id, req_pending)
 
-    # 검증 1: 보류 저장으로 추천/대기 대상에 남고 상태가 '검토 보류'인지
+    # 검증 1: 보류 저장으로 추천/대기 대상에 남고 상태가 '검토 중'인지
     recs_after_pending = svc.get_priority_recommendations()
     PriorityRecommendationResponse.model_validate(recs_after_pending)
     recs_after_pending_dict = recs_after_pending if isinstance(recs_after_pending, dict) else recs_after_pending.model_dump()
     
     pending_item = next((r for r in recs_after_pending_dict["deep_recommendations"] if r["analysis_id"] == dummy_id), None)
     assert pending_item is not None, "보류 상태일 때 추천 목록에서 제외되었습니다!"
-    assert pending_item["review_status"] == "검토 보류", "후보 응답에 '검토 보류' 상태가 올바르게 표시되지 않았습니다."
+    assert pending_item["review_status"] == "검토 중", (
+        f"후보 응답 상태 불일치: 예상='검토 중', 실제={pending_item['review_status']!r}"
+    )
 
     # 검증 2: 보류 저장은 오늘 완료량에 영향을 주지 않음
     pending_budget_state = svc.get_budget_config()

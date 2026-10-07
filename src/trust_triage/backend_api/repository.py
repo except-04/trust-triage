@@ -601,7 +601,7 @@ class PostgresAnalysisRepository:
                         "_emergency_obs_level": q.get("_emergency_obs_level", 99),
                         "initial_verdict": initial_verdict,
                         "triggered_signals": triggered_signals,
-                        "review_status": "검토 보류" if row.get("is_pending") else "PENDING",
+                        "review_status": "검토 중" if row.get("is_pending") else "검토 필요",
                         "created_at": row["created_at"],
                     }
                 )

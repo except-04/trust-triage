@@ -1107,7 +1107,7 @@ def render_summary_section(target, analysis):
     title.subheader("분석 요약")
     blocker = review_blocker(analysis)
     if action.button(
-        "판정 수정",
+        "판정 검토",
         key="open_review_dialog",
         width="stretch",
         disabled=blocker is not None,
@@ -1271,7 +1271,7 @@ def handle_review_conflict(analysis_id):
     st.rerun(scope="fragment")
 
 
-@st.dialog("판정 수정", width="large")
+@st.dialog("판정 검토", width="large")
 def review_dialog(analysis_id):
     """분석가 판정 수정 팝업. 저장에 성공하면 앱 전체를 다시 그려 팝업을 닫는다."""
     analysis = review_target(analysis_id)
@@ -1323,11 +1323,8 @@ def review_dialog(analysis_id):
 
     # 같은 판정으로는 저장하지 않는다(메모만 남기는 저장도 막는다). 선택을 바꾸면
     # 팝업이 다시 그려지므로 버튼 상태가 바로 따라 바뀐다.
-    unchanged = choice == current
-    if unchanged:
-        st.caption("현재 판정과 같습니다. 다른 판정을 선택해야 저장할 수 있습니다.")
     if st.button(
-        "저장", type="primary", key=f"review_save_{analysis_id}", disabled=unchanged
+        "저장", type="primary", key=f"review_save_{analysis_id}"
     ):
         if not REVIEWER_ID_PATTERN.fullmatch(reviewer):
             st.error("검토자명은 영문, 숫자, _ . @ - 로 1~128자여야 합니다.")

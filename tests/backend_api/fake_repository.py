@@ -377,7 +377,7 @@ class MemoryAnalysisRepository:
                     "_emergency_obs_level": q.get("_emergency_obs_level", 99),
                     "initial_verdict": record.initial_result.get("initial_verdict"),
                     "triggered_signals": record.initial_result.get("triggered_signals"),
-                    "review_status": "검토 보류" if is_pending else "PENDING",
+                    "review_status": "검토 중" if is_pending else "검토 필요",
                     "created_at": record.created_at,
                 }
             )
