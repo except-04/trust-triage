@@ -359,15 +359,24 @@ def test_dialog_sends_the_current_revision(app, dialog, rerun_signal):
 
 
 @pytest.mark.parametrize("notes", ["", "메모만 남기기"])
-def test_dialog_disables_save_for_the_current_verdict(app, dialog, notes):
+def test_dialog_saves_the_current_verdict(app, dialog, notes, monkeypatch, rerun_signal):
     state, seen = dialog
     state["choice"], state["notes"] = "auto_benign", notes
 
-    app.review_dialog("A1")
+    monkeypatch.setattr(
+        api_client,
+        "get_result",
+        lambda analysis_id: {"analyst_final_verdict": "BENIGN", "review_revision": 1},
+    )
+
+    with pytest.raises(rerun_signal):
+        app.review_dialog("A1")
 
     save_buttons = [kw for label, kw in seen["buttons"] if label == "저장"]
-    assert save_buttons and save_buttons[0]["disabled"] is True
-    assert seen["saves"] == []
+    assert save_buttons and not save_buttons[0].get("disabled", False)
+    assert seen["saves"] == [("A1", "BENIGN", "HongGildong", 0, notes)]
+    assert app.st.session_state.analysis_result["analyst_final_verdict"] == "BENIGN"
+    assert app.st.session_state.analysis_result["review_revision"] == 1
 
 
 def test_dialog_rejects_invalid_reviewer_without_calling_backend(app, dialog):
@@ -422,6 +431,7 @@ def test_dialog_conflict_redraws_with_latest_verdict(
     def conflict(*args, **kwargs):
         raise ApiError("REVIEW_CONFLICT", "conflict", http_status=409)
 
+    save_review = api_client.save_review
     monkeypatch.setattr(api_client, "save_review", conflict)
     monkeypatch.setattr(
         api_client,
@@ -440,16 +450,32 @@ def test_dialog_conflict_redraws_with_latest_verdict(
     assert "OtherAnalyst" in app.st.session_state.review_conflict["A1"]
 
     # 다시 그린 팝업: 경고가 보이고, 선택 위젯은 최신 revision 의 새 위젯이며,
-    # 최신 판정(AUTO MALICIOUS)과 같은 선택이면 저장할 수 없다.
+    # 사용자가 다시 누르기 전에는 저장하지 않으며 같은 판정도 저장 가능하다.
     seen["buttons"].clear()
+    state["click"] = False
     app.review_dialog("A1")
 
     assert any("먼저 수정되었습니다" in message for message in seen["warnings"])
     assert seen["radio_keys"][0] != seen["radio_keys"][-1]
     assert seen["radio_keys"][-1].endswith("_1")
     save_buttons = [kw for label, kw in seen["buttons"] if label == "저장"]
-    assert save_buttons[-1]["disabled"] is True
+    assert not save_buttons[-1].get("disabled", False)
     assert seen["saves"] == []
+
+    # 최신 판정을 확인한 뒤 다시 저장하면 갱신된 revision을 사용한다.
+    monkeypatch.setattr(api_client, "save_review", save_review)
+    monkeypatch.setattr(
+        api_client,
+        "get_result",
+        lambda analysis_id: {"analyst_final_verdict": "MALICIOUS", "review_revision": 2},
+    )
+    state["click"] = True
+    with pytest.raises(rerun_signal):
+        app.review_dialog("A1")
+
+    assert seen["saves"] == [("A1", "MALICIOUS", "HongGildong", 1, "")]
+    assert app.st.session_state.analysis_result["review_revision"] == 2
+    assert "A1" not in app.st.session_state.review_conflict
 
 
 def test_opening_dialog_refreshes_review_state_once(app, monkeypatch):

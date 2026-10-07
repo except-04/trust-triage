@@ -1321,8 +1321,8 @@ def review_dialog(analysis_id):
         key=f"review_reviewer_{analysis_id}",
     ).strip()
 
-    # 같은 판정으로는 저장하지 않는다(메모만 남기는 저장도 막는다). 선택을 바꾸면
-    # 팝업이 다시 그려지므로 버튼 상태가 바로 따라 바뀐다.
+    # 현재 판정에 동의하는 검토도 저장할 수 있다. 같은 판정과 메모만 저장하는
+    # 경우에도 현재 revision으로 요청하여 다른 검토자의 변경과 충돌을 검사한다.
     if st.button(
         "저장", type="primary", key=f"review_save_{analysis_id}"
     ):
