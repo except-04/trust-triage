@@ -651,7 +651,7 @@ def create_app(
         response_model=PriorityRecommendationResponse,
         tags=["Analyst"],
         summary="우선순위 추천 목록 조회",
-        description="### 목적\n분석가의 남은 예산에 맞추어 악성 확률이 높은 대기열의 파일들을 우선 추천 항목으로 제공합니다. 비정상 데이터는 따로 분리되어 응답에 포함됩니다.",
+        description="### 목적\n큐별 정책에 따라 긴급 대응은 고위험 증거를, 심층 분석은 불확실성·모델 불일치·분포 이탈·분석 난이도 신호를 기준으로 우선 추천합니다.",
     )
     def get_recommendations(svc: Annotated[BackendService, Depends(backend)]):
         return svc.get_priority_recommendations()
