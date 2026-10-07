@@ -286,7 +286,8 @@ class MemoryAnalysisRepository:
         for a_id, row in self.rows.items():
             completed = any(
                 r.get("analysis_id") == a_id and r.get("review_status") == "COMPLETED"
-                for r in self.reviews.values()
+                for rev_list in self.reviews.values() 
+                for r in (rev_list if isinstance(rev_list, list) else [rev_list])
             )
             if completed:
                 completed_hashes.add(row.sha256)
@@ -310,7 +311,8 @@ class MemoryAnalysisRepository:
             completed = any(
                 r.get("analysis_id") == record.analysis_id
                 and r.get("review_status") == "COMPLETED"
-                for r in self.reviews.values()
+                for rev_list in self.reviews.values()
+                for r in (rev_list if isinstance(rev_list, list) else [rev_list])
             )
             if completed:
                 continue
@@ -318,7 +320,8 @@ class MemoryAnalysisRepository:
             is_pending = any(
                 r.get("analysis_id") == record.analysis_id
                 and r.get("review_status") == "PENDING"
-                for r in self.reviews.values()
+                for rev_list in self.reviews.values()
+                for r in (rev_list if isinstance(rev_list, list) else [rev_list])
             )
 
             seen_sha256.add(record.sha256)

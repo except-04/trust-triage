@@ -3820,6 +3820,7 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         "priority_reason": "검토 유형",
         "calibrated_probability_display": "악성 확률",
         "queue_reason": "검토 이유",
+        "review_status": "검토 상태",
     }
 
     if queue_name.lower() == "auto":

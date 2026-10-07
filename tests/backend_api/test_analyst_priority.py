@@ -132,3 +132,63 @@ def test_budget_logic():
     assert len(recs) == 1  # Included despite pending review
     assert recs[0]["analysis_id"] == "test-pending"
     assert recs[0]["review_status"] == "검토 보류"
+
+def test_pending_review_lifecycle():
+    repo = MemoryAnalysisRepository()
+    repo.set_daily_budget(100)
+
+    # 초기 데이터 삽입
+    repo.rows["test-lifecycle"] = AnalysisRecord(
+        analysis_id="test-lifecycle",
+        sha256="6666666666666666666666666666666666666666666666666666666666666666",
+        file_location="loc6",
+        filename="test6.exe",
+        size_bytes=100,
+        initial_result={
+            "prediction": {"calibrated_probability": 0.9},
+            "initial_verdict": "HIGH_RISK_UNCERTAIN",
+        },
+        created_at="2026-10-04T00:00:00+00:00",
+        status="COMPLETED",
+        phase="DONE",
+        completed_at="2026-10-04T00:10:00+00:00",
+    )
+
+    budget_init = repo.get_budget_config()
+    completed_count_init = budget_init["today_completed_count"]
+
+    # 1. save_review() 로 보류(PENDING) 저장
+    repo.save_review(
+        analysis_id="test-lifecycle",
+        expected_revision=0,
+        reviewer_id="tester",
+        analyst_notes="Needs more time",
+        analyst_final_verdict=None
+    )
+
+    # 추천 유지 검증
+    recs = repo.get_priority_recommendations()
+    assert len(recs) == 1
+    assert recs[0]["analysis_id"] == "test-lifecycle"
+    assert recs[0]["review_status"] == "검토 보류"
+
+    # 예산 불변 검증
+    budget_pending = repo.get_budget_config()
+    assert budget_pending["today_completed_count"] == completed_count_init
+
+    # 2. save_review() 로 최종 완료(COMPLETED) 저장
+    repo.save_review(
+        analysis_id="test-lifecycle",
+        expected_revision=1,
+        reviewer_id="tester",
+        analyst_notes="Finalize",
+        analyst_final_verdict="MALICIOUS"
+    )
+
+    # 추천 제외 검증
+    recs_final = repo.get_priority_recommendations()
+    assert len(recs_final) == 0
+
+    # 최초 완료량 증가 검증
+    budget_final = repo.get_budget_config()
+    assert budget_final["today_completed_count"] == completed_count_init + 1
