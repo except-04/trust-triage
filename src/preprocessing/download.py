@@ -53,7 +53,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (  # noqa: E402
+from common import (
     ARCH_NAMES,
     ARCH_OTHER,
     ARCH_WIN32,
@@ -92,6 +92,7 @@ ARCH_VALUE_MAP = {
 # 플랫폼 준비
 # --------------------------------------------------------------------------
 
+
 def enable_utf8_console() -> None:
     """
     Windows 콘솔(cp949)에서 ▶ / ■ 같은 기호를 찍다 죽는 것을 막는다.
@@ -128,8 +129,10 @@ def free_bytes(path: Path) -> int:
 
 def same_volume(a: Path, b: Path) -> bool:
     try:
-        return os.path.splitdrive(str(a.resolve()))[0].lower() == \
-               os.path.splitdrive(str(b.resolve()))[0].lower()
+        return (
+            os.path.splitdrive(str(a.resolve()))[0].lower()
+            == os.path.splitdrive(str(b.resolve()))[0].lower()
+        )
     except Exception:
         return False
 
@@ -143,7 +146,7 @@ def preflight(log, layout: Layout, min_free_gb: int, strict: bool) -> bool:
     is_win = os.name == "nt"
 
     cache = hf_cache_dir()
-    need = min_free_gb * 1024 ** 3
+    need = min_free_gb * 1024**3
 
     ds_free = free_bytes(layout.dataset)
     cache_free = free_bytes(cache)
@@ -155,31 +158,47 @@ def preflight(log, layout: Layout, min_free_gb: int, strict: bool) -> bool:
     if shared:
         # 같은 드라이브면 원본 + 캐시 사본이 함께 쌓인다.
         if ds_free < need * 2:
-            log.error("데이터셋과 HF 캐시가 같은 드라이브인데 여유 공간이 %s뿐입니다. "
-                      "최소 %dGB 필요합니다.", fmt_bytes(ds_free), min_free_gb * 2)
-            log.error("  HF_HOME 환경변수로 캐시를 다른 드라이브로 옮기는 것을 권합니다.")
+            log.error(
+                "데이터셋과 HF 캐시가 같은 드라이브인데 여유 공간이 %s뿐입니다. "
+                "최소 %dGB 필요합니다.",
+                fmt_bytes(ds_free),
+                min_free_gb * 2,
+            )
+            log.error(
+                "  HF_HOME 환경변수로 캐시를 다른 드라이브로 옮기는 것을 권합니다."
+            )
             ok = False
     else:
         if ds_free < need:
-            log.error("데이터셋 드라이브 여유 공간 부족: %s (최소 %dGB)",
-                      fmt_bytes(ds_free), min_free_gb)
+            log.error(
+                "데이터셋 드라이브 여유 공간 부족: %s (최소 %dGB)",
+                fmt_bytes(ds_free),
+                min_free_gb,
+            )
             ok = False
         if cache_free < need:
-            log.error("HF 캐시 드라이브 여유 공간 부족: %s (최소 %dGB)",
-                      fmt_bytes(cache_free), min_free_gb)
+            log.error(
+                "HF 캐시 드라이브 여유 공간 부족: %s (최소 %dGB)",
+                fmt_bytes(cache_free),
+                min_free_gb,
+            )
             ok = False
 
     if is_win:
         # 1) 심볼릭 링크. 개발자 모드가 꺼져 있으면 캐시가 복사로 동작한다.
         os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-        log.info("Windows: HF 캐시가 심볼릭 링크 대신 복사로 동작하면 "
-                 "데이터셋 용량만큼 추가 공간이 필요합니다.")
+        log.info(
+            "Windows: HF 캐시가 심볼릭 링크 대신 복사로 동작하면 "
+            "데이터셋 용량만큼 추가 공간이 필요합니다."
+        )
 
         # 2) MAX_PATH 260자 제한
         probe = len(str(layout.dataset)) + 80  # 데이터셋 파일명 여유분
         if probe > 240:
-            msg = (f"작업 루트 경로가 깁니다({len(str(layout.dataset))}자). "
-                   f"Windows MAX_PATH(260) 문제가 날 수 있습니다.")
+            msg = (
+                f"작업 루트 경로가 깁니다({len(str(layout.dataset))}자). "
+                f"Windows MAX_PATH(260) 문제가 날 수 있습니다."
+            )
             if strict:
                 log.error(msg + " 짧은 경로(예: D:\\ember)로 --root를 지정하세요.")
                 ok = False
@@ -187,8 +206,10 @@ def preflight(log, layout: Layout, min_free_gb: int, strict: bool) -> bool:
                 log.warning(msg + " 짧은 경로 사용을 권합니다.")
 
         # 3) 실시간 검사
-        log.info("Windows: Defender 실시간 검사가 켜져 있으면 압축 해제가 크게 "
-                 "느려집니다. 작업 폴더를 검사 예외로 등록하는 것을 권합니다.")
+        log.info(
+            "Windows: Defender 실시간 검사가 켜져 있으면 압축 해제가 크게 "
+            "느려집니다. 작업 폴더를 검사 예외로 등록하는 것을 권합니다."
+        )
         log.info('  Add-MpPreference -ExclusionPath "%s"', layout.root)
 
     return ok
@@ -205,8 +226,13 @@ def timed(log, label: str):
     try:
         yield
     except BaseException as exc:
-        log.error("[X] %s 실패 (%s): %s: %s", label, fmt_duration(time.time() - t0),
-                  type(exc).__name__, exc)
+        log.error(
+            "[X] %s 실패 (%s): %s: %s",
+            label,
+            fmt_duration(time.time() - t0),
+            type(exc).__name__,
+            exc,
+        )
         raise
     else:
         log.info("[=] %s 완료 (%s)", label, fmt_duration(time.time() - t0))
@@ -215,6 +241,7 @@ def timed(log, label: str):
 # --------------------------------------------------------------------------
 # 다운로드
 # --------------------------------------------------------------------------
+
 
 def dir_stats(path: Path) -> tuple[int, int]:
     """(파일 수, 총 바이트). 하위 디렉터리까지 포함한다."""
@@ -227,8 +254,15 @@ def dir_stats(path: Path) -> tuple[int, int]:
     return n, total
 
 
-def download_one(log, thrember, layout: Layout, cwd: str, retries: int,
-                 split: str, file_type: str | None) -> bool:
+def download_one(
+    log,
+    thrember,
+    layout: Layout,
+    cwd: str,
+    retries: int,
+    split: str,
+    file_type: str | None,
+) -> bool:
     label = f"{file_type or '-'} / {split}"
     kwargs = {"split": split}
     if file_type is not None:
@@ -259,6 +293,7 @@ def download_one(log, thrember, layout: Layout, cwd: str, retries: int,
 # challenge 파일 타입 인덱싱
 # --------------------------------------------------------------------------
 
+
 def challenge_paths(log, layout: Layout) -> list[Path]:
     """
     벡터화 시 사용될 것과 동일한 순서로 challenge .jsonl 경로를 얻는다.
@@ -267,16 +302,19 @@ def challenge_paths(log, layout: Layout) -> list[Path]:
     """
     try:
         from common import gather_paths
+
         paths = [Path(p) for p in gather_paths(layout.dataset, "challenge")]
         if paths:
             return paths
         log.warning("gather_feature_paths가 challenge 파일을 반환하지 않았습니다.")
     except Exception:
-        log.warning("gather_feature_paths 사용 실패. 파일명 기준으로 대체합니다.",
-                    exc_info=True)
+        log.warning(
+            "gather_feature_paths 사용 실패. 파일명 기준으로 대체합니다.", exc_info=True
+        )
 
-    return sorted(p for p in layout.dataset.rglob("*.jsonl")
-                  if "challenge" in p.name.lower())
+    return sorted(
+        p for p in layout.dataset.rglob("*.jsonl") if "challenge" in p.name.lower()
+    )
 
 
 def detect_arch_key(log, path: Path, override: str | None) -> str | None:
@@ -341,7 +379,9 @@ def build_challenge_arch(log, layout: Layout, arch_key: str | None) -> dict | No
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     n_bad_json += 1
-                    log.warning("JSON 파싱 실패: %s:%d — OTHER로 처리", path.name, lineno)
+                    log.warning(
+                        "JSON 파싱 실패: %s:%d — OTHER로 처리", path.name, lineno
+                    )
                     arch_list.append(ARCH_OTHER)
                     continue
 
@@ -359,19 +399,31 @@ def build_challenge_arch(log, layout: Layout, arch_key: str | None) -> dict | No
         per_file.append({"file": path.name, "n_rows": len(arch_list) - start})
 
     arch = np.asarray(arch_list, dtype=np.int8)
-    win_idx = np.flatnonzero((arch == ARCH_WIN32) | (arch == ARCH_WIN64)).astype(np.int64)
+    win_idx = np.flatnonzero((arch == ARCH_WIN32) | (arch == ARCH_WIN64)).astype(
+        np.int64
+    )
 
     layout.index.mkdir(parents=True, exist_ok=True)
     np.save(layout.arch_path("challenge"), arch)
     np.save(layout.split_idx_path("challenge_win"), win_idx)
 
-    counts = {ARCH_NAMES[a]: int((arch == a).sum())
-              for a in (ARCH_WIN32, ARCH_WIN64, ARCH_OTHER)}
+    counts = {
+        ARCH_NAMES[a]: int((arch == a).sum())
+        for a in (ARCH_WIN32, ARCH_WIN64, ARCH_OTHER)
+    }
 
-    log.info("challenge 총 %d행 — Win32 %d / Win64 %d / OTHER %d",
-             arch.size, counts["Win32"], counts["Win64"], counts["OTHER"])
-    log.info("Win32+Win64 유효 행: %d (%.1f%%)",
-             win_idx.size, 100.0 * win_idx.size / max(arch.size, 1))
+    log.info(
+        "challenge 총 %d행 — Win32 %d / Win64 %d / OTHER %d",
+        arch.size,
+        counts["Win32"],
+        counts["Win64"],
+        counts["OTHER"],
+    )
+    log.info(
+        "Win32+Win64 유효 행: %d (%.1f%%)",
+        win_idx.size,
+        100.0 * win_idx.size / max(arch.size, 1),
+    )
     log.info("원본 파일 타입 분포: %s", dict(sorted(raw_counts.items())))
     if labels:
         log.info("라벨 분포: %s (challenge는 전량 악성이어야 정상)", labels)
@@ -390,9 +442,11 @@ def build_challenge_arch(log, layout: Layout, arch_key: str | None) -> dict | No
         "n_bad_json": n_bad_json,
         "arch_npy": str(layout.arch_path("challenge")),
         "win_index_npy": str(layout.split_idx_path("challenge_win")),
-        "note": ("행 순서는 gather_feature_paths() 반환 순서 x 각 파일의 줄 순서. "
-                 "02_vectorize 이후 X_challenge.dat의 행 수가 n_rows와 같은지 "
-                 "반드시 검증할 것."),
+        "note": (
+            "행 순서는 gather_feature_paths() 반환 순서 x 각 파일의 줄 순서. "
+            "02_vectorize 이후 X_challenge.dat의 행 수가 n_rows와 같은지 "
+            "반드시 검증할 것."
+        ),
     }
     write_json(layout.reports / "challenge_filetype_report.json", report)
 
@@ -409,23 +463,33 @@ def build_challenge_arch(log, layout: Layout, arch_key: str | None) -> dict | No
 # main
 # --------------------------------------------------------------------------
 
+
 def main() -> int:
     enable_utf8_console()
 
     ap = argparse.ArgumentParser(description="EMBER2024 Win32/Win64 다운로드")
     add_root_arg(ap)
-    ap.add_argument("--force", action="store_true", help="완료 마커를 무시하고 재다운로드")
-    ap.add_argument("--skip-challenge", action="store_true",
-                    help="challenge 셋을 받지 않음 (권장하지 않음)")
+    ap.add_argument(
+        "--force", action="store_true", help="완료 마커를 무시하고 재다운로드"
+    )
+    ap.add_argument(
+        "--skip-challenge",
+        action="store_true",
+        help="challenge 셋을 받지 않음 (권장하지 않음)",
+    )
     ap.add_argument("--retries", type=int, default=3, help="다운로드 재시도 횟수")
-    ap.add_argument("--min-free-gb", type=int, default=60,
-                    help="드라이브별 최소 여유 공간(GB)")
-    ap.add_argument("--skip-preflight", action="store_true",
-                    help="환경 점검을 건너뜀")
-    ap.add_argument("--strict-preflight", action="store_true",
-                    help="경고도 실패로 처리")
-    ap.add_argument("--arch-key", default=None,
-                    help="challenge .jsonl의 파일 타입 필드명 (자동 감지 실패 시)")
+    ap.add_argument(
+        "--min-free-gb", type=int, default=60, help="드라이브별 최소 여유 공간(GB)"
+    )
+    ap.add_argument("--skip-preflight", action="store_true", help="환경 점검을 건너뜀")
+    ap.add_argument(
+        "--strict-preflight", action="store_true", help="경고도 실패로 처리"
+    )
+    ap.add_argument(
+        "--arch-key",
+        default=None,
+        help="challenge .jsonl의 파일 타입 필드명 (자동 감지 실패 시)",
+    )
     args = ap.parse_args()
 
     layout = Layout(args.root)
@@ -445,8 +509,10 @@ def main() -> int:
 
     if not args.skip_preflight:
         if not preflight(log, layout, args.min_free_gb, args.strict_preflight):
-            log.error("환경 점검 실패. 문제를 해결한 뒤 다시 실행하세요 "
-                      "(무시하려면 --skip-preflight).")
+            log.error(
+                "환경 점검 실패. 문제를 해결한 뒤 다시 실행하세요 "
+                "(무시하려면 --skip-preflight)."
+            )
             return 1
 
     failures: list[str] = []
@@ -460,8 +526,15 @@ def main() -> int:
                 continue
 
             before_n, before_b = dir_stats(layout.dataset)
-            ok = download_one(log, thrember, layout, cwd, args.retries,
-                              split=split, file_type=file_type)
+            ok = download_one(
+                log,
+                thrember,
+                layout,
+                cwd,
+                args.retries,
+                split=split,
+                file_type=file_type,
+            )
             after_n, after_b = dir_stats(layout.dataset)
 
             if not ok:
@@ -469,18 +542,25 @@ def main() -> int:
                 continue
 
             if after_n == before_n:
-                log.warning("%s / %s: 새로 생긴 파일이 없습니다. 이미 받았거나 "
-                            "다운로드가 비어 있습니다.", file_type, split)
+                log.warning(
+                    "%s / %s: 새로 생긴 파일이 없습니다. 이미 받았거나 "
+                    "다운로드가 비어 있습니다.",
+                    file_type,
+                    split,
+                )
 
             # 마커에 실측치를 남겨 다음 실행에서 무결성을 대조할 수 있게 한다.
-            layout.mark_done(key, {
-                "file_type": file_type,
-                "split": split,
-                "files_added": after_n - before_n,
-                "bytes_added": after_b - before_b,
-                "dataset_files_total": after_n,
-                "dataset_bytes_total": after_b,
-            })
+            layout.mark_done(
+                key,
+                {
+                    "file_type": file_type,
+                    "split": split,
+                    "files_added": after_n - before_n,
+                    "bytes_added": after_b - before_b,
+                    "dataset_files_total": after_n,
+                    "dataset_bytes_total": after_b,
+                },
+            )
 
         if not args.skip_challenge:
             key = "download_challenge"
@@ -488,23 +568,37 @@ def main() -> int:
                 log.info("스킵: challenge (이미 완료)")
             else:
                 before_n, before_b = dir_stats(layout.dataset)
-                ok = download_one(log, thrember, layout, cwd, args.retries,
-                                  split="challenge", file_type=None)
+                ok = download_one(
+                    log,
+                    thrember,
+                    layout,
+                    cwd,
+                    args.retries,
+                    split="challenge",
+                    file_type=None,
+                )
                 after_n, after_b = dir_stats(layout.dataset)
                 if ok:
-                    layout.mark_done(key, {
-                        "split": "challenge",
-                        "files_added": after_n - before_n,
-                        "bytes_added": after_b - before_b,
-                    })
+                    layout.mark_done(
+                        key,
+                        {
+                            "split": "challenge",
+                            "files_added": after_n - before_n,
+                            "bytes_added": after_b - before_b,
+                        },
+                    )
                 else:
                     failures.append("challenge")
         else:
-            log.warning("challenge를 건너뜁니다. create_vectorized_features()가 "
-                        "challenge 파일을 찾지 못해 실패할 수 있습니다.")
+            log.warning(
+                "challenge를 건너뜁니다. create_vectorized_features()가 "
+                "challenge 파일을 찾지 못해 실패할 수 있습니다."
+            )
     except KeyboardInterrupt:
-        log.warning("사용자가 중단했습니다. 완료된 항목은 마커에 남아 있으므로 "
-                    "다시 실행하면 이어서 진행됩니다.")
+        log.warning(
+            "사용자가 중단했습니다. 완료된 항목은 마커에 남아 있으므로 "
+            "다시 실행하면 이어서 진행됩니다."
+        )
         return 130
     finally:
         os.chdir(cwd)
@@ -521,12 +615,15 @@ def main() -> int:
                 if report is None:
                     failures.append("arch_challenge")
                 else:
-                    layout.mark_done(key, {
-                        "n_rows": report["n_rows"],
-                        "n_win": report["n_win"],
-                        "counts": report["counts"],
-                        "arch_key": report["arch_key"],
-                    })
+                    layout.mark_done(
+                        key,
+                        {
+                            "n_rows": report["n_rows"],
+                            "n_win": report["n_win"],
+                            "counts": report["counts"],
+                            "arch_key": report["arch_key"],
+                        },
+                    )
             except Exception:
                 log.exception("challenge arch 인덱싱 실패")
                 failures.append("arch_challenge")
@@ -540,8 +637,12 @@ def main() -> int:
     n_win32 = sum(1 for p in jsonl if "Win32" in p.name)
     n_win64 = sum(1 for p in jsonl if "Win64" in p.name)
     n_other = len(jsonl) - n_win32 - n_win64
-    log.info("  Win32: %d개 / Win64: %d개 / 기타(challenge 등): %d개",
-             n_win32, n_win64, n_other)
+    log.info(
+        "  Win32: %d개 / Win64: %d개 / 기타(challenge 등): %d개",
+        n_win32,
+        n_win64,
+        n_other,
+    )
 
     if n_other == 0 and not args.skip_challenge:
         log.warning("challenge 파일로 보이는 .jsonl이 없습니다. 확인이 필요합니다.")

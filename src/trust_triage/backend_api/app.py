@@ -111,9 +111,13 @@ def _listing_filters(
     verdict: Annotated[
         InitialVerdict | None,
         Query(
-            description="JRR 초기 판정 필터입니다. 최종 시스템 판정·전문가 판정과 별개입니다."
+            description="JRR 초기 판정 필터입니다. 최종 리스크 판정·전문가 판정과 별개입니다."
         ),
     ] = None,
+    overturned_only: Annotated[
+        bool,
+        Query(description="오탐/미탐으로 최종 판정이 뒤집힌 결과만 조회합니다."),
+    ] = False,
 ):
     return {
         "limit": limit,
@@ -121,6 +125,7 @@ def _listing_filters(
         "status": status,
         "sha256": sha256,
         "verdict": verdict,
+        "overturned_only": overturned_only,
     }
 
 
@@ -612,6 +617,44 @@ def create_app(
         analysis_id: Identifier, svc: Annotated[BackendService, Depends(backend)]
     ):
         return svc.reviews(analysis_id)
+
+    from .schemas import (
+        BudgetConfigRequest,
+        BudgetConfigResponse,
+        PriorityRecommendationResponse,
+    )
+
+    @app.get(
+        "/analyst/budget",
+        response_model=BudgetConfigResponse,
+        tags=["Analyst"],
+        summary="일일 예산 조회",
+        description="### 목적\n현재 분석가의 일일 검토 예산과 오늘 완료된 분석(리뷰) 개수, 남은 예산을 조회합니다. 이는 하루 동안 분석가가 수동으로 완료한 리뷰 수를 기반으로 합니다.",
+    )
+    def get_budget(svc: Annotated[BackendService, Depends(backend)]):
+        return svc.get_budget_config()
+
+    @app.put(
+        "/analyst/budget",
+        tags=["Analyst"],
+        summary="일일 예산 설정",
+        description="### 목적\n분석가의 일일 검토 예산을 새로운 값으로 설정합니다. 이 값은 하루 동안 분석가가 수동으로 완료해야 하는 목표 수량을 의미합니다.",
+    )
+    def set_budget(
+        payload: BudgetConfigRequest, svc: Annotated[BackendService, Depends(backend)]
+    ):
+        svc.set_budget(payload.model_dump())
+        return {"status": "success"}
+
+    @app.get(
+        "/analyst/recommendations",
+        response_model=PriorityRecommendationResponse,
+        tags=["Analyst"],
+        summary="우선순위 추천 목록 조회",
+        description="### 목적\n큐별 정책에 따라 긴급 대응은 고위험 증거를, 심층 분석은 불확실성·모델 불일치·분포 이탈·분석 난이도 신호를 기준으로 우선 추천합니다.",
+    )
+    def get_recommendations(svc: Annotated[BackendService, Depends(backend)]):
+        return svc.get_priority_recommendations()
 
     default_openapi = app.openapi
 

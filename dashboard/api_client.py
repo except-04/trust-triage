@@ -89,7 +89,10 @@ def upload(filename, content):
 
 def upload_batch(files_):
     """여러 파일을 한 번에 접수한다. files_: [(filename, content), ...]"""
-    payload = [("files", (name, content, "application/octet-stream")) for name, content in files_]
+    payload = [
+        ("files", (name, content, "application/octet-stream"))
+        for name, content in files_
+    ]
     return _request("POST", "/batches", files=payload)
 
 
@@ -136,7 +139,9 @@ def get_batch(batch_id):
     return _request("GET", f"/batches/{batch_id}")
 
 
-def search_analyses(sha256, limit=20, offset=0, sort="newest"):
+def search_analyses(
+    sha256=None, limit=20, offset=0, sort="newest", overturned_only=False
+):
     """SHA-256으로 분석 이력을 조회한다.
 
     전용 해시 조회 엔드포인트가 아니라 목록 조회(GET /analyses)의 sha256
@@ -150,11 +155,17 @@ def search_analyses(sha256, limit=20, offset=0, sort="newest"):
 
     반환: {"total_count": ..., "limit": ..., "offset": ..., "analyses": [...]}
     """
-    params = {"sha256": sha256, "limit": limit, "offset": offset, "sort": sort}
+    params = {"limit": limit, "offset": offset, "sort": sort}
+    if sha256 is not None:
+        params["sha256"] = sha256
+    if overturned_only:
+        params["overturned_only"] = True
     return _request("GET", "/analyses", params=params)
 
 
-def save_review(analysis_id, analyst_final_verdict, reviewer_id, expected_revision, analyst_notes=""):
+def save_review(
+    analysis_id, analyst_final_verdict, reviewer_id, expected_revision, analyst_notes=""
+):
     """분석가 판정을 저장한다. 시스템 판정(initial/final)은 백엔드가 그대로 둔다.
 
     analyst_final_verdict: "BENIGN" / "MALICIOUS" / None(보류)
@@ -186,3 +197,28 @@ def list_reviews(analysis_id):
 def health():
     """서버가 살아 있는지 확인한다."""
     return _request("GET", "/health")
+
+
+def get_analyst_budget():
+    return _request("GET", "/analyst/budget")
+
+
+def set_analyst_budget(
+    budget: int,
+    emergency_budget: int = 0,
+    deep_budget: int = 0,
+    fp_budget: int = 0,
+    is_unlimited: bool = False,
+):
+    payload = {
+        "daily_budget": budget,
+        "emergency_budget": emergency_budget,
+        "deep_budget": deep_budget,
+        "fp_budget": fp_budget,
+        "is_unlimited": is_unlimited,
+    }
+    return _request("PUT", "/analyst/budget", json=payload)
+
+
+def get_priority_recommendations():
+    return _request("GET", "/analyst/recommendations")

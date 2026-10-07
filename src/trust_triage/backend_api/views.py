@@ -29,8 +29,12 @@ _DETAIL_STATUSES = frozenset(
     {"ARCHIVED", "OMITTED_TOO_LARGE", "ARCHIVE_FAILED", "INLINE_IN_CHECKPOINT"}
 )
 _DYNAMIC_EVENT_CATEGORIES = (
-    "process_events", "api_calls", "file_access", "dropped_files",
-    "registry_access", "network_events",
+    "process_events",
+    "api_calls",
+    "file_access",
+    "dropped_files",
+    "registry_access",
+    "network_events",
 )
 
 
@@ -126,7 +130,11 @@ def _tool_status(value: Any) -> str:
 
 
 def _public_size(value: Any) -> int | None:
-    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 2**63 - 1:
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 2**63 - 1
+    ):
         return value
     return None
 
@@ -139,7 +147,10 @@ def _detail_diagnostic(raw: Any) -> dict[str, Any]:
     if isinstance(status, str) and status in _DETAIL_STATUSES:
         result["details_status"] = status
     error = raw.get("details_error")
-    if result.get("details_status") in {"OMITTED_TOO_LARGE", "ARCHIVE_FAILED"} and isinstance(error, Mapping):
+    if result.get("details_status") in {
+        "OMITTED_TOO_LARGE",
+        "ARCHIVE_FAILED",
+    } and isinstance(error, Mapping):
         diagnostic: dict[str, Any] = {}
         code = error.get("code")
         if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", code):
@@ -304,11 +315,17 @@ def deep_analysis(record: AnalysisRecord) -> DeepAnalysisResponse:
             "details_available": bool(floss_raw.get("details_reference")),
             **_detail_diagnostic(floss_raw),
         }
-        if floss_raw.get("limited_mode") is True or floss_metadata.get("limited_mode") is True:
+        if (
+            floss_raw.get("limited_mode") is True
+            or floss_metadata.get("limited_mode") is True
+        ):
             floss["limited_mode"] = True
-            reason = floss_raw.get("limited_reason", floss_metadata.get("limited_reason"))
+            reason = floss_raw.get(
+                "limited_reason", floss_metadata.get("limited_reason")
+            )
             if isinstance(reason, str) and reason in {
-                "INPUT_EXCEEDS_16_MIB", "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+                "INPUT_EXCEEDS_16_MIB",
+                "FLOSS_DEOBFUSCATION_SIZE_ERROR",
             }:
                 floss["limited_reason"] = reason
     worker = snapshot.get("speakeasy_result")

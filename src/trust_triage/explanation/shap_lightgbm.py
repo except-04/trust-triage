@@ -43,18 +43,17 @@ stack 없이 explainer만 사용하는 구성(예: 저장된 벡터를 읽는 �
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 import joblib
 import lightgbm as lgb
 import numpy as np
 import shap
-
 
 Direction = Literal["BENIGN", "MALICIOUS", "NEUTRAL"]
 _FEATURE_NAME = re.compile(r"^(?P<group>[^\[\]]+)\[(?P<index>\d+)\]$")
@@ -145,7 +144,7 @@ class LightGBMShapExplainer:
         top_indices_path: str | Path,
         *,
         expected_source_schema_version: str | None = None,
-    ) -> "LightGBMShapExplainer":
+    ) -> LightGBMShapExplainer:
         """신뢰할 수 있는 로컬 artifact를 로드해 explainer를 생성한다."""
 
         model = joblib.load(Path(model_path))
@@ -187,7 +186,9 @@ class LightGBMShapExplainer:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ShapExplanationError(f"cannot load selection manifest: {path}") from exc
+            raise ShapExplanationError(
+                f"cannot load selection manifest: {path}"
+            ) from exc
         if not isinstance(value, dict):
             raise ShapExplanationError("selection manifest must be a JSON object")
         return value
@@ -226,22 +227,34 @@ class LightGBMShapExplainer:
         indices_value = manifest.get("source_indices")
         if not isinstance(names_value, list) or len(names_value) != cls.FEATURE_COUNT:
             raise FeatureOrderingError("manifest feature_names must contain 500 items")
-        if not isinstance(indices_value, list) or len(indices_value) != cls.FEATURE_COUNT:
+        if (
+            not isinstance(indices_value, list)
+            or len(indices_value) != cls.FEATURE_COUNT
+        ):
             raise FeatureOrderingError("manifest source_indices must contain 500 items")
         if any(not isinstance(name, str) or not name for name in names_value):
-            raise FeatureOrderingError("manifest feature names must be non-empty strings")
+            raise FeatureOrderingError(
+                "manifest feature names must be non-empty strings"
+            )
         if len(set(names_value)) != cls.FEATURE_COUNT:
             raise FeatureOrderingError("manifest feature names must be unique")
-        if any(isinstance(index, bool) or not isinstance(index, int) for index in indices_value):
+        if any(
+            isinstance(index, bool) or not isinstance(index, int)
+            for index in indices_value
+        ):
             raise FeatureOrderingError("manifest source indices must be integers")
 
         source_indices = np.asarray(indices_value, dtype=np.int64)
-        if np.any(source_indices < 0) or np.any(source_indices >= cls.SOURCE_FEATURE_COUNT):
+        if np.any(source_indices < 0) or np.any(
+            source_indices >= cls.SOURCE_FEATURE_COUNT
+        ):
             raise FeatureOrderingError("manifest source index is outside [0, 2568)")
         if len(np.unique(source_indices)) != cls.FEATURE_COUNT:
             raise FeatureOrderingError("manifest source indices must be unique")
         if not np.all(source_indices[:-1] < source_indices[1:]):
-            raise FeatureOrderingError("manifest source indices must be strictly ascending")
+            raise FeatureOrderingError(
+                "manifest source indices must be strictly ascending"
+            )
 
         groups: list[str] = []
         for name in names_value:
@@ -261,7 +274,9 @@ class LightGBMShapExplainer:
         if top_indices.shape != (cls.FEATURE_COUNT,):
             raise FeatureOrderingError("top-feature index array must have shape (500,)")
         if not np.issubdtype(top_indices.dtype, np.integer):
-            raise FeatureOrderingError("top-feature index array must have an integer dtype")
+            raise FeatureOrderingError(
+                "top-feature index array must have an integer dtype"
+            )
         top_indices = top_indices.astype(np.int64, copy=False)
 
         if not np.array_equal(source_indices, top_indices):
@@ -289,7 +304,9 @@ class LightGBMShapExplainer:
         if not isinstance(model, lgb.LGBMClassifier):
             raise ShapExplanationError("model must be a LightGBM LGBMClassifier")
         if getattr(model, "n_features_in_", None) != cls.FEATURE_COUNT:
-            raise ShapExplanationError("LightGBM model must expect exactly 500 features")
+            raise ShapExplanationError(
+                "LightGBM model must expect exactly 500 features"
+            )
         classes = np.asarray(getattr(model, "classes_", []))
         if classes.shape != (2,) or not np.array_equal(classes, np.array([0, 1])):
             raise ShapExplanationError(
@@ -304,9 +321,7 @@ class LightGBMShapExplainer:
         if values.shape == (cls.FEATURE_COUNT,):
             values = values.reshape(1, cls.FEATURE_COUNT)
         elif values.shape != (1, cls.FEATURE_COUNT):
-            raise ShapExplanationError(
-                "model input must have shape (500,) or (1, 500)"
-            )
+            raise ShapExplanationError("model input must have shape (500,) or (1, 500)")
         try:
             values = values.astype(np.float32, copy=False)
         except (TypeError, ValueError) as exc:

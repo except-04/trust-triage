@@ -447,17 +447,24 @@ class MonoGPTClaudeInterpreter:
         }
 
         required_fields = {
-            "verdict", "confidence", "supporting_evidence_ids",
-            "contradicting_evidence_ids", "attack_techniques", "summary",
+            "verdict",
+            "confidence",
+            "supporting_evidence_ids",
+            "contradicting_evidence_ids",
+            "attack_techniques",
+            "summary",
             "manual_review_required",
         }
         missing = required_fields - payload.keys()
         if missing:
-            raise ValueError("response missing required field(s): " + ", ".join(sorted(missing)))
+            raise ValueError(
+                "response missing required field(s): " + ", ".join(sorted(missing))
+            )
         if not isinstance(payload["verdict"], str):
             raise ValueError("verdict must be a string")
         for field in (
-            "supporting_evidence_ids", "contradicting_evidence_ids",
+            "supporting_evidence_ids",
+            "contradicting_evidence_ids",
             "attack_techniques",
         ):
             if not isinstance(payload[field], list):
@@ -745,8 +752,13 @@ def _llm_context(item: Evidence) -> dict[str, Any]:
         allowed = ("rule_name", "namespace", "match_count", "attack", "mbc")
     elif source == "SPEAKEASY":
         allowed = (
-            "observed_apis", "behaviors", "event_categories", "observations",
-            "event_counts", "events_truncated", "tool_status",
+            "observed_apis",
+            "behaviors",
+            "event_categories",
+            "observations",
+            "event_counts",
+            "events_truncated",
+            "tool_status",
         )
     else:
         allowed = ()

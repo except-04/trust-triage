@@ -48,6 +48,66 @@ def _validate_idempotency_key(key):
 
 
 class BackendService:
+    def get_budget_config(self) -> dict[str, Any]:
+        return self.repository.get_budget_config()
+
+    def set_budget(self, config: dict[str, int]) -> None:
+        self.repository.set_budget_config(config)
+
+    def get_priority_recommendations(self) -> dict[str, Any]:
+        candidates = self.repository.get_priority_recommendations()
+        budget_info = self.repository.get_budget_config()
+
+        is_unlimited = budget_info.get("is_unlimited", False)
+        rem_emergency = 9999999 if is_unlimited else budget_info["remaining_emergency"]
+        rem_deep = 9999999 if is_unlimited else budget_info["remaining_deep"]
+        rem_fp = 9999999 if is_unlimited else budget_info.get("remaining_fp", 0)
+        total_remaining = 9999999 if is_unlimited else budget_info["remaining_budget"]
+        total_assigned = 0
+
+        queues = {
+            "EMERGENCY": {"recs": [], "waiting": [], "rem": rem_emergency},
+            "DEEP": {"recs": [], "waiting": [], "rem": rem_deep},
+            "FP": {"recs": [], "waiting": [], "rem": rem_fp},
+            "AUTO": {"recs": [], "waiting": [], "rem": 9999999},  # Unlimited
+            "ERROR": {"recs": [], "waiting": [], "rem": 9999999},  # Unlimited
+        }
+
+        # Separate into queues and apply budget bounds
+        for c in candidates:
+            c.pop("created_at", None)
+            q_name = c.get("queue_name", "UNKNOWN")
+            if q_name not in queues:
+                continue
+
+            idx = len(queues[q_name]["recs"]) + len(queues[q_name]["waiting"]) + 1
+            c["rank"] = idx
+
+            # Auto and Error don't count towards budget
+            if q_name in ["AUTO", "ERROR"]:
+                queues[q_name]["recs"].append(c)
+            else:
+                if (
+                    len(queues[q_name]["recs"]) < queues[q_name]["rem"]
+                    and total_assigned < total_remaining
+                ):
+                    queues[q_name]["recs"].append(c)
+                    total_assigned += 1
+                else:
+                    queues[q_name]["waiting"].append(c)
+
+        return {
+            "emergency_recommendations": queues["EMERGENCY"]["recs"],
+            "emergency_waiting": queues["EMERGENCY"]["waiting"],
+            "deep_recommendations": queues["DEEP"]["recs"],
+            "deep_waiting": queues["DEEP"]["waiting"],
+            "fp_recommendations": queues["FP"]["recs"],
+            "fp_waiting": queues["FP"]["waiting"],
+            "auto_queue": queues["AUTO"]["recs"],
+            "error_queue": queues["ERROR"]["recs"],
+            "budget_info": budget_info,
+        }
+
     def __init__(
         self,
         repository: AnalysisRepository,
@@ -200,9 +260,17 @@ class BackendService:
         batch_id=None,
         verdict=None,
         sort="high_risk_first",
+        overturned_only=False,
     ) -> AnalysisListResponse:
         rows, total = self.repository.list_analyses(
-            limit, offset, status, sha256, batch_id=batch_id, verdict=verdict, sort=sort
+            limit,
+            offset,
+            status,
+            sha256,
+            batch_id=batch_id,
+            verdict=verdict,
+            sort=sort,
+            overturned_only=overturned_only,
         )
         return AnalysisListResponse(
             total_count=total,

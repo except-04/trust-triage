@@ -561,3 +561,108 @@ class BatchResponse(BatchInputReceipt):
         description="배치 진행 상태입니다. COMPLETED는 처리가 모두 종료됐다는 의미이며 일부 실패 또는 전체 SKIPPED를 포함할 수 있습니다.",
     )
     summary: BatchSummary = Field(default_factory=BatchSummary)
+
+
+class QueueType(str, Enum):
+    """업무 목적에 따른 분류"""
+
+    EMERGENCY = "EMERGENCY"
+    DEEP = "DEEP"
+    FP = "FP"
+    AUTO = "AUTO"
+    ERROR = "ERROR"
+
+
+class BudgetConfigRequest(APIModel):
+    daily_budget: int = Field(ge=0, description="분석가의 전체 일일 검토 한도")
+    emergency_budget: int = Field(ge=0, default=0, description="긴급 대응 큐 할당량")
+    deep_budget: int = Field(ge=0, default=0, description="심층 분석 큐 할당량")
+    fp_budget: int = Field(
+        ge=0, default=0, description="오탐 검증 큐 할당량 (현재 미지원)"
+    )
+    is_unlimited: bool = Field(
+        default=False, description="예산을 무제한으로 설정할지 여부"
+    )
+
+    @model_validator(mode="after")
+    def check_budgets(self) -> BudgetConfigRequest:
+        if (
+            not self.is_unlimited
+            and self.emergency_budget + self.deep_budget + self.fp_budget
+            > self.daily_budget
+        ):
+            raise ValueError(
+                "세부 큐 할당량의 합이 전체 일일 한도를 초과할 수 없습니다."
+            )
+        return self
+
+
+class BudgetConfigResponse(APIModel):
+    daily_budget: int
+    emergency_budget: int = 0
+    deep_budget: int = 0
+    fp_budget: int = 0
+    is_unlimited: bool = False
+    today_completed_count: int = Field(
+        description="오늘(Asia/Seoul 기준) 전체 검토 완료된 파일 수"
+    )
+    remaining_budget: int = Field(description="남은 예산")
+    today_completed_emergency: int = 0
+    remaining_emergency: int = 0
+    today_completed_deep: int = 0
+    remaining_deep: int = 0
+    today_completed_fp: int = 0
+    remaining_fp: int = 0
+    updated_at: AwareDatetime
+
+
+class PriorityCandidate(APIModel):
+    rank: int = Field(description="큐 내 우선순위")
+    analysis_id: AnalysisId
+    filename: str
+    sha256: Sha256
+    queue_name: QueueType = Field(description="배정된 큐 이름")
+    queue_reason: str = Field(description="큐 배정 사유")
+    calibrated_probability: Probability | None = Field(
+        default=None, description="보정된 악성 확률"
+    )
+    priority_score: float = Field(description="우선순위 점수")
+    score_policy: str = Field(description="적용된 점수 정책 (예: probability-v1)")
+    priority_reason: str = Field(description="우선순위 산정 사유")
+    impact_score: float | None = Field(
+        default=None, description="치명도(지연되는 경우)"
+    )
+    impact_reason: str | None = Field(default=None, description="치명도 산출 근거")
+    selection_reason: str = Field(description="상위 선정 근거")
+    initial_verdict: InitialVerdict | None = None
+    triggered_signals: TriggeredSignals | None = None
+    review_status: str | None = Field(default=None, description="검토 상태")
+    created_at: AwareDatetime | None = None
+
+
+class PriorityRecommendationResponse(APIModel):
+    emergency_recommendations: list[PriorityCandidate] = Field(
+        default_factory=list, description="긴급 대응 큐 예산 내 추천"
+    )
+    emergency_waiting: list[PriorityCandidate] = Field(
+        default_factory=list, description="긴급 대응 큐 예산 밖 대기"
+    )
+    deep_recommendations: list[PriorityCandidate] = Field(
+        default_factory=list, description="심층 분석 큐 예산 내 추천"
+    )
+    deep_waiting: list[PriorityCandidate] = Field(
+        default_factory=list, description="심층 분석 큐 예산 밖 대기"
+    )
+    fp_recommendations: list[PriorityCandidate] = Field(
+        default_factory=list, description="오탐 검증 큐 예산 내 추천 (미지원)"
+    )
+    fp_waiting: list[PriorityCandidate] = Field(
+        default_factory=list, description="오탐 검증 큐 예산 밖 대기"
+    )
+    auto_queue: list[PriorityCandidate] = Field(
+        default_factory=list, description="자동 처리 큐 (사람 예산 무관)"
+    )
+    error_queue: list[PriorityCandidate] = Field(
+        default_factory=list, description="오류 항목 큐"
+    )
+    budget_info: BudgetConfigResponse

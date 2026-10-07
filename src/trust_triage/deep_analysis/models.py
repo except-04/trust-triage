@@ -149,7 +149,8 @@ class EvidenceSufficiencyPolicy:
             )
 
         weighted_score = round(
-            1.0 - prod(1.0 - contributions[technique_id] for technique_id in technique_ids),
+            1.0
+            - prod(1.0 - contributions[technique_id] for technique_id in technique_ids),
             6,
         )
         sufficient = (

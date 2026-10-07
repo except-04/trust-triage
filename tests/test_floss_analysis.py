@@ -61,9 +61,13 @@ def _sample(tmp_path: Path) -> Path:
 
 
 def _static_report(sample: Path) -> dict:
-    report = _report(strings={"static_strings": [
-        {"string": "https://example.invalid/static", "offset": 4096}
-    ]})
+    report = _report(
+        strings={
+            "static_strings": [
+                {"string": "https://example.invalid/static", "offset": 4096}
+            ]
+        }
+    )
     report["metadata"]["sha256"] = floss_module.sha256_file(sample)
     report["analysis"].update(
         enable_stack_strings=False,
@@ -89,7 +93,13 @@ def test_static_only_command_drops_conflicting_extra_args(tmp_path: Path) -> Non
     )
 
     assert command == (
-        "floss", "-j", "--only", "static", "--language", "none", "--",
+        "floss",
+        "-j",
+        "--only",
+        "static",
+        "--language",
+        "none",
+        "--",
         str(tmp_path / "sample.exe"),
     )
 
@@ -174,7 +184,9 @@ def test_file_over_16_mib_uses_static_only_without_full_attempt(
 
     def fake_run(command, **_kwargs):
         calls.append(tuple(command))
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(report), stderr=""
+        )
 
     monkeypatch.setattr(floss_module, "_run_bounded_floss", fake_run)
     result = FlossAnalyzer().analyze(sample)
@@ -202,7 +214,9 @@ def test_exactly_16_mib_keeps_full_floss_mode(monkeypatch, tmp_path: Path) -> No
 
     def fake_run(command, **_kwargs):
         calls.append(tuple(command))
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(report), stderr=""
+        )
 
     monkeypatch.setattr(floss_module, "_run_bounded_floss", fake_run)
     result = FlossAnalyzer().analyze(sample)
@@ -224,10 +238,14 @@ def test_deobfuscation_size_rejection_retries_static_only_with_remaining_budget(
         calls.append((tuple(command), kwargs["timeout"]))
         if len(calls) == 1:
             return subprocess.CompletedProcess(
-                command, 1, stdout="",
+                command,
+                1,
+                stdout="",
                 stderr='{"error": "cannot deobfuscate strings from files larger than 0x1000000 bytes"}',
             )
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(report), stderr=""
+        )
 
     monkeypatch.setattr(floss_module, "_run_bounded_floss", fake_run)
     result = FlossAnalyzer().analyze(sample)
@@ -237,7 +255,9 @@ def test_deobfuscation_size_rejection_retries_static_only_with_remaining_budget(
     assert "--only" not in calls[0][0]
     assert calls[1][0][2:6] == ("--only", "static", "--language", "none")
     assert 0 < calls[1][1] <= calls[0][1]
-    assert result.analysis_metadata["limited_reason"] == "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+    assert (
+        result.analysis_metadata["limited_reason"] == "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+    )
     assert result.analysis_metadata["deobfuscation_threshold_bytes"] == 16 * 1024 * 1024
     assert any("static-only limited mode" in item for item in result.warnings)
 
@@ -253,15 +273,21 @@ def test_newer_floss_cli_retries_static_selection_with_supported_option(
         calls.append((tuple(command), kwargs["timeout"]))
         if len(calls) == 1:
             return subprocess.CompletedProcess(
-                command, 1, stdout="",
+                command,
+                1,
+                stdout="",
                 stderr="cannot deobfuscate strings from files larger than 0x1000000 bytes",
             )
         if len(calls) == 2:
             return subprocess.CompletedProcess(
-                command, 1, stdout="floss: error: unrecognized arguments: --only static",
+                command,
+                1,
+                stdout="floss: error: unrecognized arguments: --only static",
                 stderr="",
             )
-        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report), stderr="")
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(report), stderr=""
+        )
 
     monkeypatch.setattr(floss_module, "_run_bounded_floss", fake_run)
     result = FlossAnalyzer().analyze(sample)
@@ -271,7 +297,9 @@ def test_newer_floss_cli_retries_static_selection_with_supported_option(
     assert calls[1][0][2:6] == ("--only", "static", "--language", "none")
     assert calls[2][0][-4:-2] == ("--string-type", "static")
     assert 0 < calls[2][1] <= calls[1][1] <= calls[0][1]
-    assert result.analysis_metadata["limited_reason"] == "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+    assert (
+        result.analysis_metadata["limited_reason"] == "FLOSS_DEOBFUSCATION_SIZE_ERROR"
+    )
 
 
 def test_static_only_empty_stdout_is_not_assumed_success(
@@ -337,7 +365,8 @@ def test_failed_static_only_retry_keeps_limit_diagnostic_without_evidence(
         calls.append(tuple(command))
         error = (
             "cannot deobfuscate strings from files larger than 0x1000000 bytes"
-            if len(calls) == 1 else "static extraction failed"
+            if len(calls) == 1
+            else "static extraction failed"
         )
         return subprocess.CompletedProcess(command, 1, stdout="", stderr=error)
 

@@ -67,12 +67,14 @@ from datetime import datetime
 conn = sqlite3.connect("trust_edr.db")
 conn.execute("PRAGMA foreign_keys = ON")
 
+
 # 해시 조회
 def lookup_by_hash(sha256):
     row = conn.execute(
         "SELECT features_json FROM feature_cache WHERE sha256 = ?", (sha256,)
     ).fetchone()
     return json.loads(row[0]) if row else None
+
 
 # 검토 큐 대기 목록
 def get_pending_queue():

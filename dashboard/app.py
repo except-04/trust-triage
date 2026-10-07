@@ -128,10 +128,7 @@ def verdict_badge_markup(verdict):
     else:
         badge_class = "badge-neutral"
 
-    return (
-        f'<span class="status-badge {badge_class}">'
-        f"{escape(label)}</span>"
-    )
+    return f'<span class="status-badge {badge_class}">{escape(label)}</span>'
 
 
 def route_display_name(route):
@@ -152,10 +149,7 @@ def route_badge_markup(route):
     else:
         badge_class = "badge-neutral"
 
-    return (
-        f'<span class="status-badge {badge_class}">'
-        f"{escape(label)}</span>"
-    )
+    return f'<span class="status-badge {badge_class}">{escape(label)}</span>'
 
 
 def pipeline_state_markup(status):
@@ -178,10 +172,7 @@ def pipeline_state_markup(status):
         label = escape(status)
         status_class = "badge-info"
 
-    return (
-        f'<span class="pipeline-state {status_class}">'
-        f"{label}</span>"
-    )
+    return f'<span class="pipeline-state {status_class}">{label}</span>'
 
 
 def truncate_hash(value, prefix=12, suffix=8):
@@ -249,7 +240,7 @@ def deep_analysis_status_markup(statuses):
     items = "".join(
         (
             '<span class="deep-status-item">'
-            f'<strong>{tool_name}</strong> · {escape(statuses.get(key, "NOT_REQUIRED"))}'
+            f"<strong>{tool_name}</strong> · {escape(statuses.get(key, 'NOT_REQUIRED'))}"
             "</span>"
         )
         for tool_name, key in tools
@@ -282,7 +273,10 @@ def render_shap_chart(target, features):
         for feature in chart_features
     ]
     theme = DARK_THEME if st.session_state.get("dark_mode") else LIGHT_THEME
-    colors = [theme["chart-malicious"] if value >= 0 else theme["chart-benign"] for value in values]
+    colors = [
+        theme["chart-malicious"] if value >= 0 else theme["chart-benign"]
+        for value in values
+    ]
     limit = max((abs(value) for value in values), default=0.1) * 1.22
 
     # 설명 가능성 칸(약 70%)에서 옆 분석 파이프라인 카드와 높이가 비슷해지는 비율.
@@ -514,6 +508,7 @@ def submit_batch(file_descriptors, on_progress=None):
 
     return receipt
 
+
 def refresh_pending(batch_data):
     """끝나지 않은 분석들의 상태를 백엔드에 다시 묻고 갱신한다.
 
@@ -531,7 +526,9 @@ def refresh_pending(batch_data):
         except ApiError as e:
             analysis["status"] = "FAILED"
             analysis["error"] = {
-                "code": e.code, "message": e.message, "stage": e.stage,
+                "code": e.code,
+                "message": e.message,
+                "stage": e.stage,
             }
             continue
 
@@ -551,13 +548,16 @@ def refresh_pending(batch_data):
             analysis = updated
         except ApiError as e:
             analysis["error"] = {
-                "code": e.code, "message": e.message, "stage": e.stage,
+                "code": e.code,
+                "message": e.message,
+                "stage": e.stage,
             }
 
         if analysis.get("status") not in TERMINAL_STATUSES:
             still_running = True
 
     return still_running
+
 
 def to_view(full, previous):
     """API 응답을 대시보드가 읽는 평면 키로 옮긴다."""
@@ -631,9 +631,8 @@ def deep_result_ready(analysis):
 
 def load_deep_result_once(analysis):
     """HIGH_RISK_UNCERTAIN의 완료된 Deep 상세를 한 번만 보강한다."""
-    if (
-        analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN"
-        or analysis.get("deep_detail_loaded")
+    if analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN" or analysis.get(
+        "deep_detail_loaded"
     ):
         return analysis
     try:
@@ -804,6 +803,7 @@ def filter_batch_analyses(analyses, query):
         or needle in (analysis.get("sha256") or "").lower()
     ]
 
+
 BATCH_GROUP_LABELS = {
     "total": "Total",
     "needs_review": "Needs Review",
@@ -858,6 +858,7 @@ def triage_group_label(analysis):
     """Total 표의 Group 열 글자. 판정 전 항목은 PENDING."""
     key = triage_group_key(analysis)
     return BATCH_GROUP_LABELS[key].upper() if key else "PENDING"
+
 
 def group_batch_analyses(analyses):
     """Partition results by analyst workflow priority."""
@@ -935,11 +936,11 @@ def evidence_card_markup(evidence, capa_behaviors):
     """
     mitre_items = "".join(
         '<div class="evidence-item"><span class="technique-id">'
-        f'{escape(technique.get("technique_id", technique.get("id", "")))}'
+        f"{escape(technique.get('technique_id', technique.get('id', '')))}"
         "</span> "
-        f'{escape(technique.get("technique_name", technique.get("name", "")))}'
+        f"{escape(technique.get('technique_name', technique.get('name', '')))}"
         " · "
-        f'{escape(technique.get("tactic", ", ".join(technique.get("sources", []))))}'
+        f"{escape(technique.get('tactic', ', '.join(technique.get('sources', []))))}"
         "</div>"
         for technique in evidence
     )
@@ -957,7 +958,9 @@ def evidence_card_markup(evidence, capa_behaviors):
 
     return (
         '<div class="evidence-grid">'
-        + section("MITRE ATT&amp;CK", mitre_items, "표시할 MITRE ATT&CK 근거가 없습니다.")
+        + section(
+            "MITRE ATT&amp;CK", mitre_items, "표시할 MITRE ATT&CK 근거가 없습니다."
+        )
         + section("CAPA Behavior", capa_items, "표시할 CAPA 행위가 없습니다.")
         + "</div>"
     )
@@ -1015,9 +1018,7 @@ def deep_analysis_state(analysis):
     if "RUNNING" in selected:
         return "RUNNING"
     if "QUEUED" in selected:
-        has_finished_tool = any(
-            value in {"COMPLETED", "FAILED"} for value in selected
-        )
+        has_finished_tool = any(value in {"COMPLETED", "FAILED"} for value in selected)
         return "RUNNING" if has_finished_tool else "QUEUED"
     if selected and all(value in {"COMPLETED", "FAILED"} for value in selected):
         return "FAILED" if "FAILED" in selected else "COMPLETED"
@@ -1034,10 +1035,12 @@ def _metric_text(value, pattern):
     except (TypeError, ValueError):
         return str(value)
 
+
 def tooltip_attr(text):
     """설명 문구를 data-tip 속성값으로 바꾼다. 줄바꿈(\n)은 &#10; 으로 넣어야
     마크다운 처리를 거쳐도 살아남고, CSS white-space: pre-line 이 줄을 바꾼다."""
     return escape(text).replace("\n", "&#10;")
+
 
 def result_detail_state(analysis):
     """Batch 상태가 아닌 현재 파일의 확보된 결과로 표시 여부를 결정한다."""
@@ -1045,8 +1048,9 @@ def result_detail_state(analysis):
         "available": initial_detail_available(analysis),
         "deep": deep_analysis_state(analysis),
         "tools": {
-            tool: "NOT_REQUIRED" if analysis.get("route") == "FINAL" else
-            (analysis.get("deep_analysis_status") or {}).get(tool)
+            tool: "NOT_REQUIRED"
+            if analysis.get("route") == "FINAL"
+            else (analysis.get("deep_analysis_status") or {}).get(tool)
             or ("NOT_REQUIRED" if tool == "cape" else "QUEUED")
             for tool in ("capa", "floss", "speakeasy", "cape")
         },
@@ -1103,7 +1107,7 @@ def render_summary_section(target, analysis):
     title.subheader("분석 요약")
     blocker = review_blocker(analysis)
     if action.button(
-        "판정 수정",
+        "판정 검토",
         key="open_review_dialog",
         width="stretch",
         disabled=blocker is not None,
@@ -1201,7 +1205,9 @@ def review_history_rows(items, analysis):
     previous = initial_group_key(analysis)
     rows = []
     for item in items:
-        group = REVIEW_GROUP_BY_VERDICT.get(item.get("analyst_final_verdict"), "needs_review")
+        group = REVIEW_GROUP_BY_VERDICT.get(
+            item.get("analyst_final_verdict"), "needs_review"
+        )
         before = BATCH_GROUP_LABELS[previous].upper() if previous else "-"
         rows.append(
             {
@@ -1265,7 +1271,7 @@ def handle_review_conflict(analysis_id):
     st.rerun(scope="fragment")
 
 
-@st.dialog("판정 수정", width="large")
+@st.dialog("판정 검토", width="large")
 def review_dialog(analysis_id):
     """분석가 판정 수정 팝업. 저장에 성공하면 앱 전체를 다시 그려 팝업을 닫는다."""
     analysis = review_target(analysis_id)
@@ -1315,13 +1321,10 @@ def review_dialog(analysis_id):
         key=f"review_reviewer_{analysis_id}",
     ).strip()
 
-    # 같은 판정으로는 저장하지 않는다(메모만 남기는 저장도 막는다). 선택을 바꾸면
-    # 팝업이 다시 그려지므로 버튼 상태가 바로 따라 바뀐다.
-    unchanged = choice == current
-    if unchanged:
-        st.caption("현재 판정과 같습니다. 다른 판정을 선택해야 저장할 수 있습니다.")
+    # 현재 판정에 동의하는 검토도 저장할 수 있다. 같은 판정과 메모만 저장하는
+    # 경우에도 현재 revision으로 요청하여 다른 검토자의 변경과 충돌을 검사한다.
     if st.button(
-        "저장", type="primary", key=f"review_save_{analysis_id}", disabled=unchanged
+        "저장", type="primary", key=f"review_save_{analysis_id}"
     ):
         if not REVIEWER_ID_PATTERN.fullmatch(reviewer):
             st.error("검토자명은 영문, 숫자, _ . @ - 로 1~128자여야 합니다.")
@@ -1357,9 +1360,7 @@ def review_dialog(analysis_id):
                         f"(다른 결과 항목은 새로 불러오지 못했습니다: {e.message})"
                     )
                 else:
-                    st.session_state.review_notice = (
-                        f"판정을 {BATCH_GROUP_LABELS[choice].upper()}(으)로 저장했습니다."
-                    )
+                    st.session_state.review_notice = f"판정을 {BATCH_GROUP_LABELS[choice].upper()}(으)로 저장했습니다."
                 # 특정 그룹을 보고 있었다면 옮겨 간 그룹으로 따라간다. 그룹 위젯은
                 # 다음 실행에서 만들어지기 전에 이 값으로 바꾼다.
                 if st.session_state.get("batch_group") not in (None, "total"):
@@ -1390,11 +1391,17 @@ def render_result_detail(analysis, target=st):
     if not state["available"]:
         if analysis.get("status") == "FAILED":
             error = analysis.get("error") or {}
-            target.error("분석 실패: " + (error.get("message") or "원인을 확인할 수 없습니다."))
+            target.error(
+                "분석 실패: " + (error.get("message") or "원인을 확인할 수 없습니다.")
+            )
             if error.get("code"):
-                target.caption(f"코드 {error['code']} · 단계 {error.get('stage') or '-'}")
+                target.caption(
+                    f"코드 {error['code']} · 단계 {error.get('stage') or '-'}"
+                )
         else:
-            target.info(f"Initial Analysis 결과를 기다리고 있습니다. (상태: {analysis.get('status') or 'QUEUED'})")
+            target.info(
+                f"Initial Analysis 결과를 기다리고 있습니다. (상태: {analysis.get('status') or 'QUEUED'})"
+            )
         return
 
     shell = target.container(key="result_detail_shell", gap=DETAIL_COLUMN_GAP)
@@ -1420,45 +1427,85 @@ def render_result_detail(analysis, target=st):
     initial = render_summary_section(shell, analysis)
     final_label, final_badge = final_verdict_cell(analysis)
     verdicts = [
-        ("Initial Verdict", verdict_badge_markup(analysis.get("initial_verdict") or "Pending")),
+        (
+            "Initial Verdict",
+            verdict_badge_markup(analysis.get("initial_verdict") or "Pending"),
+        ),
         (final_label, final_badge),
         ("Route", route_badge_markup(analysis.get("route") or "-")),
     ]
     # (이름, 키, 서식, 이름에 마우스를 올리면 뜨는 설명)
     metrics = [
-        ("Raw Probability", "raw_probability", "{:.1%}",
-         "모델이 처음 예측한 악성일 확률"),
-        ("Calibrated Probability", "calibrated_probability", "{:.1%}",
-         "실제 확률에 가깝도록 보정한 악성 확률\n0.65 초과 0.983645 미만일 때 보류"),
-        ("OOD Score", "ood_score", "{:.3f}",
-         "학습 데이터와 얼마나 다른 샘플인지 나타내는 점수\n0 미만 때 보류"),
-        ("Disagreement", "disagreement", "{:.3f}",
-         "두 모델의 예측이 얼마나 다른지 나타내는 값\n0.3 이상일 때 보류"),
-        ("Difficulty", "difficulty_score", "{:.1f}",
-         "PE 구조 이상 등 분석이 얼마나 어려운지 나타내는 점수\n6 이상일 때 보류"),
+        (
+            "Raw Probability",
+            "raw_probability",
+            "{:.1%}",
+            "모델이 처음 예측한 악성일 확률",
+        ),
+        (
+            "Calibrated Probability",
+            "calibrated_probability",
+            "{:.1%}",
+            "실제 확률에 가깝도록 보정한 악성 확률\n0.65 초과 0.983645 미만일 때 보류",
+        ),
+        (
+            "OOD Score",
+            "ood_score",
+            "{:.3f}",
+            "학습 데이터와 얼마나 다른 샘플인지 나타내는 점수\n0 미만 때 보류",
+        ),
+        (
+            "Disagreement",
+            "disagreement",
+            "{:.3f}",
+            "두 모델의 예측이 얼마나 다른지 나타내는 값\n0.3 이상일 때 보류",
+        ),
+        (
+            "Difficulty",
+            "difficulty_score",
+            "{:.1f}",
+            "PE 구조 이상 등 분석이 얼마나 어려운지 나타내는 점수\n6 이상일 때 보류",
+        ),
     ]
     signals = analysis.get("triggered_signals") or []
     # 예전 '라우팅 결정' 카드의 내용은 Route 오른쪽에 붙인다.
-    route_detail = (
+    route_detail_html = (
         '<div class="detail-route-detail">'
         '<div class="summary-label">Reason</div>'
         f'<div class="route-detail-value">{escape(analysis.get("reason") or "-")}</div>'
         '<div class="summary-label">Triggered Signals</div>'
         f'<div class="route-detail-value">{escape(", ".join(signals) if signals else "None")}</div>'
-        '</div>'
+        "</div>"
     )
+
+    if "queue_name" in analysis:
+        queue_html = (
+            '<div class="detail-route-detail" style="margin-left: 20px; padding-left: 20px; border-left: 1px solid var(--border-light);">'
+            '<div class="summary-label">Queue</div>'
+            f'<div class="route-detail-value">{escape(analysis.get("queue_name") or "-")}</div>'
+            '<div class="summary-label">검토 유형</div>'
+            f'<div class="route-detail-value">{escape(analysis.get("priority_reason") or "-")}</div>'
+            '<div class="summary-label">검토 이유</div>'
+            f'<div class="route-detail-value">{escape(analysis.get("queue_reason") or "-")}</div>'
+            "</div>"
+        )
+        route_detail_html += queue_html
     initial.markdown(
-        '<div class="detail-top"><div class="detail-verdicts">' + "".join(
+        '<div class="detail-top"><div class="detail-verdicts">'
+        + "".join(
             f'<div><div class="summary-label">{label}</div>{badge}</div>'
             for label, badge in verdicts
-        ) + '</div>' + route_detail
+        )
+        + "</div>"
+        + route_detail_html
         + '</div><div class="summary-divider"></div><div class="detail-metrics">'
         + "".join(
             f'<div><div class="summary-label">'
             f'<span class="metric-tip" tabindex="0" data-tip="{tooltip_attr(tip)}">{label}</span></div>'
             f'<div class="summary-value">{escape(_metric_text(analysis.get(key), pattern))}</div></div>'
             for label, key, pattern, tip in metrics
-        ) + '</div>',
+        )
+        + "</div>",
         unsafe_allow_html=True,
     )
 
@@ -1473,14 +1520,25 @@ def render_result_detail(analysis, target=st):
 
     pipeline = detail_section(pipeline_col, "분석 파이프라인", "pipeline")
     steps = [("ML Triage", "COMPLETED")]
-    steps.extend((label, state["tools"][key]) for label, key in (
-        ("CAPA", "capa"), ("FLOSS", "floss"), ("Speakeasy", "speakeasy")
-    ))
+    steps.extend(
+        (label, state["tools"][key])
+        for label, key in (
+            ("CAPA", "capa"),
+            ("FLOSS", "floss"),
+            ("Speakeasy", "speakeasy"),
+        )
+    )
     steps.append(("Final", analysis.get("status") or "QUEUED"))
-    pipeline.markdown('<div class="detail-pipeline">' + "".join(
-        f'<div class="pipeline-node"><div class="pipeline-name">{label}</div>'
-        f'{pipeline_state_markup(status)}</div>' for label, status in steps
-    ) + '</div>', unsafe_allow_html=True)
+    pipeline.markdown(
+        '<div class="detail-pipeline">'
+        + "".join(
+            f'<div class="pipeline-node"><div class="pipeline-name">{label}</div>'
+            f"{pipeline_state_markup(status)}</div>"
+            for label, status in steps
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
     deep = detail_section(shell, "심층 분석", "deep")
     render_deep_analysis(analysis, deep, state)
@@ -1508,7 +1566,8 @@ def deep_search_rows(rows, needle):
     if not needle:
         return rows
     return [
-        row for row in rows
+        row
+        for row in rows
         if any(needle in _cell_text(value) for value in row.values())
     ]
 
@@ -1537,7 +1596,9 @@ def speakeasy_tables(speakeasy):
     behavior = speakeasy.get("behavior") or {}
     calls = behavior.get("api_calls") or []
     counts = Counter(str(event["api_name"]) for event in calls if event.get("api_name"))
-    tables = {"api": [{"API": name, "Calls": count} for name, count in counts.most_common()]}
+    tables = {
+        "api": [{"API": name, "Calls": count} for name, count in counts.most_common()]
+    }
     for key in ("files", "network", "registry"):
         tables[key] = [
             {str(field): str(value)[:200] for field, value in event.items()}
@@ -1557,10 +1618,7 @@ def render_speakeasy(target, speakeasy, needle=None):
     total, unique = target.columns(2, gap=DETAIL_COLUMN_GAP)
     total.metric("API Calls", len(calls))
     unique.metric("Unique APIs", len(counts))
-    target.caption(
-        "표시된 이벤트 기준 · "
-        "unique 수는 api_name이 있는 호출 기준입니다."
-    )
+    target.caption("표시된 이벤트 기준 · unique 수는 api_name이 있는 호출 기준입니다.")
     if speakeasy.get("behavior_truncated"):
         original_calls = original_counts.get("api_calls")
         if isinstance(original_calls, int) and original_calls > len(calls):
@@ -1568,27 +1626,40 @@ def render_speakeasy(target, speakeasy, needle=None):
         else:
             target.caption("행동 이벤트는 일부만 미리보기로 표시됩니다.")
     if speakeasy.get("adapter_events_truncated"):
-        target.caption("Speakeasy 결과 수집 시 카테고리별 100개를 넘는 상세 이벤트가 생략됐습니다.")
+        target.caption(
+            "Speakeasy 결과 수집 시 카테고리별 100개를 넘는 상세 이벤트가 생략됐습니다."
+        )
     if speakeasy.get("worker_events_truncated") or speakeasy.get("details_omitted"):
         target.caption("결과 크기 제한으로 일부 상세 이벤트가 저장되지 않았습니다.")
-    elif speakeasy.get("events_truncated") and not speakeasy.get("adapter_events_truncated"):
+    elif speakeasy.get("events_truncated") and not speakeasy.get(
+        "adapter_events_truncated"
+    ):
         target.caption("일부 상세 이벤트가 저장되지 않았습니다.")
     tables = speakeasy_tables(speakeasy)
     if counts and needle:
         # 검색 중에는 미리보기 개수 제한 없이 일치한 API를 모두 보여 준다
         deep_search_table(
-            target, deep_search_rows(tables["api"], needle), needle,
-            hide_index=True, width="stretch",
+            target,
+            deep_search_rows(tables["api"], needle),
+            needle,
+            hide_index=True,
+            width="stretch",
         )
     elif counts:
         target.dataframe(
-            [{"API": name, "Calls": count} for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)],
-            hide_index=True, width="stretch",
+            [
+                {"API": name, "Calls": count}
+                for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)
+            ],
+            hide_index=True,
+            width="stretch",
         )
         if len(counts) > SPEAKEASY_PREVIEW_LIMIT:
             target.caption(f"호출 수 기준 상위 {SPEAKEASY_PREVIEW_LIMIT}개 API 표시")
     else:
-        target.caption("No API calls detected" if not calls else "API names unavailable")
+        target.caption(
+            "No API calls detected" if not calls else "API names unavailable"
+        )
 
     for key, title, empty in (
         ("files", "Files", "No file activity detected"),
@@ -1602,7 +1673,8 @@ def render_speakeasy(target, speakeasy, needle=None):
             "registry": ("registry_access",),
         }[key]
         original_total = sum(
-            count for name in source_names
+            count
+            for name in source_names
             if isinstance((count := original_counts.get(name)), int)
         )
         suffix = (
@@ -1616,8 +1688,11 @@ def render_speakeasy(target, speakeasy, needle=None):
             continue
         if needle:
             deep_search_table(
-                target, deep_search_rows(tables[key], needle), needle,
-                hide_index=True, width="stretch",
+                target,
+                deep_search_rows(tables[key], needle),
+                needle,
+                hide_index=True,
+                width="stretch",
             )
             continue
         # 키를 그대로 유지하고 중첩 값은 길이를 제한한 텍스트로 표시한다.
@@ -1627,7 +1702,9 @@ def render_speakeasy(target, speakeasy, needle=None):
         ]
         target.dataframe(rows, hide_index=True, width="stretch")
         if len(events) > SPEAKEASY_PREVIEW_LIMIT:
-            target.caption(f"처음 {SPEAKEASY_PREVIEW_LIMIT}개 이벤트 표시 · 전체는 Raw details에서 확인")
+            target.caption(
+                f"처음 {SPEAKEASY_PREVIEW_LIMIT}개 이벤트 표시 · 전체는 Raw details에서 확인"
+            )
     if speakeasy.get("error"):
         target.warning(speakeasy["error"].get("message") or "Speakeasy 실행 오류")
     target.expander("Raw details", expanded=False).json(speakeasy)
@@ -1639,8 +1716,14 @@ def render_static_detail_notice(target, tool):
     diagnostic = tool.get("details_error") or {}
     if status == "OMITTED_TOO_LARGE":
         actual, limit = diagnostic.get("actual_bytes"), diagnostic.get("limit_bytes")
-        size = f" ({actual:,} / {limit:,} bytes)" if isinstance(actual, int) and isinstance(limit, int) else ""
-        target.caption(f"분석은 완료됐지만 상세 결과가 저장 상한을 넘어 생략됐습니다{size}.")
+        size = (
+            f" ({actual:,} / {limit:,} bytes)"
+            if isinstance(actual, int) and isinstance(limit, int)
+            else ""
+        )
+        target.caption(
+            f"분석은 완료됐지만 상세 결과가 저장 상한을 넘어 생략됐습니다{size}."
+        )
     elif status == "ARCHIVE_FAILED":
         code = diagnostic.get("code")
         suffix = f" ({code})" if isinstance(code, str) else ""
@@ -1649,7 +1732,9 @@ def render_static_detail_notice(target, tool):
 
 def render_deep_analysis(analysis, deep, state):
     status = state["deep"]
-    deep.markdown(f"**{ {'QUEUED': '대기', 'RUNNING': '진행 중', 'COMPLETED': '완료', 'FAILED': '실패', 'NOT_REQUIRED': '미실행'}.get(status, status) }**")
+    deep.markdown(
+        f"**{ {'QUEUED': '대기', 'RUNNING': '진행 중', 'COMPLETED': '완료', 'FAILED': '실패', 'NOT_REQUIRED': '미실행'}.get(status, status) }**"
+    )
     if status == "QUEUED":
         deep.info("심층 분석 대기 중입니다. 완료되면 결과가 자동으로 갱신됩니다.")
     elif status == "RUNNING":
@@ -1696,7 +1781,8 @@ def render_deep_analysis(analysis, deep, state):
     ]
     speakeasy = analysis.get("speakeasy") or {}
     speakeasy_rows = [
-        row for rows in (speakeasy_tables(speakeasy).values() if speakeasy else ())
+        row
+        for rows in (speakeasy_tables(speakeasy).values() if speakeasy else ())
         for row in rows
     ]
     show_evidence = evidence_visible(analysis)
@@ -1715,7 +1801,11 @@ def render_deep_analysis(analysis, deep, state):
     speakeasy_hits = deep_search_rows(speakeasy_rows, needle)
     evidence_hits = deep_search_rows(evidence, needle)
     if needle:
-        hit_counts = [("CAPA", capa_hits), ("FLOSS", floss_hits), ("Speakeasy", speakeasy_hits)]
+        hit_counts = [
+            ("CAPA", capa_hits),
+            ("FLOSS", floss_hits),
+            ("Speakeasy", speakeasy_hits),
+        ]
         if show_evidence:
             hit_counts.append(("MITRE", evidence_hits))
         deep.caption(" · ".join(f"{name} {len(hits)}" for name, hits in hit_counts))
@@ -1735,12 +1825,20 @@ def render_deep_analysis(analysis, deep, state):
         expanded=bool(floss_hits) if needle else bool(floss),
     )
     if string_rows:
-        deep_search_table(floss_box, floss_hits, needle, hide_index=True, width="stretch")
+        deep_search_table(
+            floss_box, floss_hits, needle, hide_index=True, width="stretch"
+        )
     else:
         floss_box.caption(f"Status: {statuses.get('floss', 'NOT_REQUIRED')}")
     if floss.get("limited_mode"):
-        action = "분석했습니다" if floss.get("status") == "COMPLETED" else "분석을 시도했습니다"
-        floss_box.caption(f"FLOSS 제한 모드: 정적 문자열 중심으로 {action}. stack·tight·decoded·언어별 추가 문자열은 분석하지 않았습니다.")
+        action = (
+            "분석했습니다"
+            if floss.get("status") == "COMPLETED"
+            else "분석을 시도했습니다"
+        )
+        floss_box.caption(
+            f"FLOSS 제한 모드: 정적 문자열 중심으로 {action}. stack·tight·decoded·언어별 추가 문자열은 분석하지 않았습니다."
+        )
     render_static_detail_notice(floss_box, floss)
 
     speakeasy_box = deep.expander(
@@ -1750,9 +1848,7 @@ def render_deep_analysis(analysis, deep, state):
     if speakeasy:
         render_speakeasy(speakeasy_box, speakeasy, needle)
     else:
-        speakeasy_box.caption(
-            f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}"
-        )
+        speakeasy_box.caption(f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}")
 
     # 근거·해석·최종 평가는 심층 분석이 끝난 뒤에만 그린다. 대기·진행 중에는 위의
     # 상태 안내만 남긴다. 실패 시 MITRE는 확보된 부분 근거가 있을 때만 보여 준다.
@@ -1762,7 +1858,9 @@ def render_deep_analysis(analysis, deep, state):
             expanded=bool(evidence_hits) if needle else bool(evidence),
         )
         if evidence:
-            deep_search_table(evidence_box, evidence_hits, needle, hide_index=True, width="stretch")
+            deep_search_table(
+                evidence_box, evidence_hits, needle, hide_index=True, width="stretch"
+            )
         else:
             evidence_box.caption("표시할 MITRE ATT&CK 근거가 없습니다.")
 
@@ -1785,9 +1883,7 @@ def render_deep_analysis(analysis, deep, state):
         assessment_box.write(
             f"**Final Verdict:** {assessment.get('final_verdict') or analysis.get('final_verdict') or '-'}"
         )
-        assessment_box.write(
-            f"**Disposition:** {assessment.get('disposition') or '-'}"
-        )
+        assessment_box.write(f"**Disposition:** {assessment.get('disposition') or '-'}")
         assessment_box.write(assessment.get("reason") or "-")
 
 
@@ -1840,8 +1936,7 @@ def render_intake_notice(target, receipt):
 
     for item in errors:
         target.error(
-            f"접수 실패 · {item['filename']} — {item['message']} "
-            f"(코드 {item['code']})"
+            f"접수 실패 · {item['filename']} — {item['message']} (코드 {item['code']})"
         )
 
     if skipped:
@@ -1911,9 +2006,8 @@ def detail_blocker(analysis):
 
     missing = [key for key in DETAIL_REQUIRED_FIELDS if analysis.get(key) is None]
     if missing:
-        return (
-            "상세 화면에 필요한 모델 결과가 이 이력에 없습니다: "
-            + ", ".join(missing)
+        return "상세 화면에 필요한 모델 결과가 이 이력에 없습니다: " + ", ".join(
+            missing
         )
     return None
 
@@ -2059,7 +2153,9 @@ def render_hash_search_results(target):
         target.info(blocker)
         return
 
-    if target.button("상세 보기", key="hash_search_open", type="primary") and open_search_result(selected["analysis_id"]):
+    if target.button(
+        "상세 보기", key="hash_search_open", type="primary"
+    ) and open_search_result(selected["analysis_id"]):
         st.rerun()
 
 
@@ -2236,9 +2332,7 @@ def batch_group_rows(group_key, analyses):
                 "SHA-256": analysis.get("sha256") or "-",
                 "Status": analysis["status"],
                 REVIEW_COLUMN: review_mark(analysis),
-                "Calibrated Probability": (
-                    f"{analysis['calibrated_probability']:.4f}"
-                ),
+                "Calibrated Probability": (f"{analysis['calibrated_probability']:.4f}"),
                 "Reason": analysis["reason"],
             }
             for analysis in analyses
@@ -2281,9 +2375,7 @@ def render_batch_group_results(group_key, analyses, result_card=st):
     if selected_id not in analysis_by_id:
         current_id = st.session_state.get("selected_analysis_id")
         selected_id = (
-            current_id
-            if current_id in analysis_by_id
-            else next(iter(analysis_by_id))
+            current_id if current_id in analysis_by_id else next(iter(analysis_by_id))
         )
         st.session_state[selector_key] = selected_id
         st.session_state.selected_analysis_id = selected_id
@@ -2307,7 +2399,7 @@ def render_batch_group_results(group_key, analyses, result_card=st):
             f"""
             <div class="deep-status-row">
                 <span class="deep-status-label">Deep Analysis</span>
-                {deep_analysis_status_markup(selected['deep_analysis_status'])}
+                {deep_analysis_status_markup(selected["deep_analysis_status"])}
             </div>
             """,
             unsafe_allow_html=True,
@@ -2574,9 +2666,20 @@ with toggle_col:
 TOGGLE_ICON = "var(--toggle-track)"
 
 SUN_SHADOW = ", ".join(
-    [f"0 0 0 2px {TOGGLE_ICON}"]                          # 가운데 원
-    + [f"{x}px {y}px 0 -1px {TOGGLE_ICON}" for x, y in    # 햇살 8개
-       [(7, 0), (-7, 0), (0, 7), (0, -7), (5, 5), (-5, 5), (5, -5), (-5, -5)]]
+    [f"0 0 0 2px {TOGGLE_ICON}"]  # 가운데 원
+    + [
+        f"{x}px {y}px 0 -1px {TOGGLE_ICON}"
+        for x, y in [  # 햇살 8개
+            (7, 0),
+            (-7, 0),
+            (0, 7),
+            (0, -7),
+            (5, 5),
+            (-5, 5),
+            (5, -5),
+            (-5, -5),
+        ]
+    ]
 )
 
 LIGHT_THEME = {
@@ -2591,17 +2694,24 @@ LIGHT_THEME = {
     "border": "#e2e8f0",
     "border-strong": "#cbd5e1",
     "neutral-bg": "#f1f5f9",
-    "danger-fg": "#991b1b", "danger-bg": "#fee2e2", "danger-border": "#fecaca",
-    "success-fg": "#166534", "success-bg": "#dcfce7", "success-border": "#bbf7d0",
-    "warning-fg": "#9a3412", "warning-bg": "#ffedd5", "warning-border": "#fed7aa",
+    "danger-fg": "#991b1b",
+    "danger-bg": "#fee2e2",
+    "danger-border": "#fecaca",
+    "success-fg": "#166534",
+    "success-bg": "#dcfce7",
+    "success-border": "#bbf7d0",
+    "warning-fg": "#9a3412",
+    "warning-bg": "#ffedd5",
+    "warning-border": "#fed7aa",
     "warning-soft": "#fff7ed",
-    "info-fg": "#1d4ed8", "info-bg": "#dbeafe", "info-border": "#bfdbfe",
-    "info-strong": "#1e40af", "info-strong-border": "#93c5fd",
+    "info-fg": "#1d4ed8",
+    "info-bg": "#dbeafe",
+    "info-border": "#bfdbfe",
+    "info-strong": "#1e40af",
+    "info-strong-border": "#93c5fd",
     "chart-malicious": "#dc2626",
     "chart-benign": "#2563eb",
-
     "df-filter": "none",
-
     # 토글
     "toggle-track": "#0f172a",
     "toggle-knob": "#ffffff",
@@ -2610,7 +2720,7 @@ LIGHT_THEME = {
     "icon-top": "12px",
     "icon-offset": "10px",
     "icon-bg": TOGGLE_ICON,
-    "icon-shadow": SUN_SHADOW  # 해
+    "icon-shadow": SUN_SHADOW,  # 해
 }
 
 DARK_THEME = {
@@ -2625,17 +2735,24 @@ DARK_THEME = {
     "border": "#1e293b",
     "border-strong": "#334155",
     "neutral-bg": "#1e293b",
-    "danger-fg": "#fca5a5", "danger-bg": "#450a0a", "danger-border": "#7f1d1d",
-    "success-fg": "#86efac", "success-bg": "#052e16", "success-border": "#14532d",
-    "warning-fg": "#fdba74", "warning-bg": "#431407", "warning-border": "#7c2d12",
+    "danger-fg": "#fca5a5",
+    "danger-bg": "#450a0a",
+    "danger-border": "#7f1d1d",
+    "success-fg": "#86efac",
+    "success-bg": "#052e16",
+    "success-border": "#14532d",
+    "warning-fg": "#fdba74",
+    "warning-bg": "#431407",
+    "warning-border": "#7c2d12",
     "warning-soft": "#2a1106",
-    "info-fg": "#93c5fd", "info-bg": "#172554", "info-border": "#1e3a8a",
-    "info-strong": "#bfdbfe", "info-strong-border": "#1e40af",
+    "info-fg": "#93c5fd",
+    "info-bg": "#172554",
+    "info-border": "#1e3a8a",
+    "info-strong": "#bfdbfe",
+    "info-strong-border": "#1e40af",
     "chart-malicious": "#f87171",
     "chart-benign": "#60a5fa",
-
     "df-filter": "invert(1) hue-rotate(180deg)",
-
     # 토글
     "toggle-track": "#f1f5f9",
     "toggle-knob": "#0f172a",
@@ -2644,8 +2761,9 @@ DARK_THEME = {
     "icon-top": "7px",
     "icon-offset": "6px",
     "icon-bg": "transparent",
-    "icon-shadow": f"inset -4px -2px 0 0 {TOGGLE_ICON}"  # 달
+    "icon-shadow": f"inset -4px -2px 0 0 {TOGGLE_ICON}",  # 달
 }
+
 
 def streamlit_theme_is_dark():
     """Streamlit이 실제로 쓰는 테마가 다크인지. 표(st.dataframe)는 이 테마로 그려진다.
@@ -3637,10 +3755,359 @@ st.markdown(
                 padding-top: 1rem;
             }
         }
+
+        /* 탭 색상(특히 다크모드) 개선 */
+        [data-baseweb="tab-list"] button[data-baseweb="tab"] p {
+            color: var(--text-2) !important;
+            font-weight: 500;
+        }
+        [data-baseweb="tab-list"] button[data-baseweb="tab"][aria-selected="true"] p {
+            color: var(--text) !important;
+            font-weight: 700;
+        }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
+    if not items:
+        import streamlit as st
+
+        st.info(f"{title}에 해당하는 항목이 없습니다.")
+        return
+
+    import api_client
+    import pandas as pd
+    import streamlit as st
+
+    # Pagination Logic
+    total_count = len(items)
+    page_key = f"{queue_name}_{title}_page"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+
+    total_pages = max(1, (total_count + limit - 1) // limit)
+    if st.session_state[page_key] >= total_pages:
+        st.session_state[page_key] = max(0, total_pages - 1)
+
+    current_page = st.session_state[page_key]
+    offset = current_page * limit
+
+    # If it's the RETRAIN queue, it's already server-side paginated before calling this function,
+    # so we don't slice it. Otherwise we slice the items.
+    if queue_name.lower() == "retrain":
+        page_items = items
+    else:
+        page_items = items[offset : offset + limit]
+
+    df = pd.DataFrame(page_items)
+
+    if "calibrated_probability" in df.columns:
+        df["calibrated_probability_display"] = df["calibrated_probability"].apply(
+            lambda x: f"{x * 100:.2f}%" if pd.notnull(x) else "N/A"
+        )
+
+    display_cols = {
+        "rank": "순위" if queue_name.lower() != "auto" else "순서",
+        "filename": "파일명",
+        "sha256": "SHA-256",
+        "initial_verdict": "모델 판정 결과",
+        "priority_reason": "검토 유형",
+        "calibrated_probability_display": "악성 확률",
+        "queue_reason": "검토 이유",
+        "review_status": "검토 상태",
+    }
+
+    if queue_name.lower() == "auto":
+        # 역순 넘버링: 가장 밑(오래된 파일)이 1번, 가장 위(최신 파일)가 N번
+        df["rank"] = list(range(len(df), 0, -1))
+        display_cols.pop("priority_reason", None)
+
+    if queue_name.lower() == "retrain":
+        display_cols["selection_reason"] = "판정 변경 내역"
+
+    df_display = df[[c for c in display_cols if c in df.columns]].rename(
+        columns=display_cols
+    )
+
+    st.write(f"### {title} ({total_count}건)")
+    if queue_name.lower() == "deep":
+        st.markdown(
+            "**정렬 기준**: 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도. 같은 유형에서는 신호 강도순으로 정렬합니다."
+        )
+
+    event = st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        selection_mode="single-row",
+        on_select="rerun",
+        key=f"df_{queue_name}_{title}",
+    )
+
+    # Client-side pagination controls (only if we have more than one page and it's not RETRAIN)
+    if queue_name.lower() != "retrain" and total_pages > 1:
+        cols = st.columns([1, 2, 1])
+        with cols[0]:
+            if st.button(
+                "이전 페이지",
+                disabled=(current_page == 0),
+                key=f"{queue_name}_{title}_prev",
+            ):
+                st.session_state[page_key] = current_page - 1
+                st.rerun()
+        with cols[1]:
+            st.write(
+                f"<div style='text-align: center;'>페이지 {current_page + 1} / {total_pages}</div>",
+                unsafe_allow_html=True,
+            )
+        with cols[2]:
+            if st.button(
+                "다음 페이지",
+                disabled=(current_page + 1 >= total_pages),
+                key=f"{queue_name}_{title}_next",
+            ):
+                st.session_state[page_key] = current_page + 1
+                st.rerun()
+
+    if (
+        event
+        and getattr(event, "selection", None)
+        and getattr(event.selection, "rows", None)
+    ):
+        row_idx = event.selection.rows[0]
+        selected_item = page_items[row_idx]
+        st.write(f"**선택됨**: {selected_item['filename']}")
+        if st.button(
+            "상세 결과 보기",
+            key=f"btn_view_{selected_item['analysis_id']}",
+            type="primary",
+        ):
+            try:
+                full_result = api_client.get_result(selected_item["analysis_id"])
+                view_data = search_result_view(full_result)
+                view_data["queue_name"] = selected_item.get("queue_name")
+                view_data["queue_reason"] = selected_item.get("queue_reason")
+                view_data["priority_score"] = selected_item.get("priority_score")
+                view_data["score_policy"] = selected_item.get("score_policy")
+                view_data["priority_reason"] = selected_item.get("priority_reason")
+                view_data["triggered_signals"] = selected_item.get("triggered_signals")
+                view_data["is_waiting"] = is_waiting
+                st.session_state.analysis_result = view_data
+                st.session_state.batch_id = None
+                st.session_state.batch_ids = []
+                st.session_state.hash_search = None
+                st.session_state.pop("batch_data", None)
+                st.session_state.pop("batch_results", None)
+                st.session_state.pop("batch_id", None)
+                st.session_state.pop("batch_ids", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"상세 결과 로드 실패: {e}")
+
+
+def render_analyst_priority_queue():
+    import api_client
+    import streamlit as st
+
+    st.markdown("---")
+    st.subheader("분석가 큐 기반 업무 할당 (Analyst Queues)")
+
+    # 1. 예산 조회 및 설정
+    col1, col2 = st.columns([1, 1])
+    try:
+        budget_data = api_client.get_analyst_budget()
+        current_budget = budget_data.get("daily_budget", 0)
+        current_emergency = budget_data.get("emergency_budget", 0)
+        current_deep = budget_data.get("deep_budget", 0)
+        current_fp = 0
+        is_unlimited = budget_data.get("is_unlimited", False)
+
+        today_completed = budget_data.get("today_completed_count", 0)
+        remaining = budget_data.get("remaining_budget", 0)
+    except api_client.ApiError as e:
+        st.error(f"예산 설정 조회 실패: {e.message}")
+        return
+
+    with col1:
+        if is_unlimited:
+            st.metric("오늘 검토 완료", f"{today_completed}")
+            st.write("예산을 고려하지 않습니다.")
+        else:
+            st.metric("오늘 검토 완료", f"{today_completed} / {current_budget}")
+            st.write(f"남은 예산: {remaining}")
+    with col2:
+        with st.expander("예산 설정"):
+            new_unlimited = st.checkbox("예산 무제한 (제한 없음)", value=is_unlimited)
+            new_budget = st.number_input(
+                "전체 일일 검토 한도",
+                min_value=0,
+                value=current_budget,
+                step=1,
+                disabled=new_unlimited,
+            )
+            new_em = st.number_input(
+                "긴급 대응 큐 할당량",
+                min_value=0,
+                value=current_emergency,
+                step=1,
+                disabled=new_unlimited,
+            )
+            new_deep = st.number_input(
+                "심층 분석 큐 할당량",
+                min_value=0,
+                value=current_deep,
+                step=1,
+                disabled=new_unlimited,
+            )
+            new_fp = 0
+
+            if st.button("예산 업데이트"):
+                if not new_unlimited and (new_em + new_deep + new_fp > new_budget):
+                    st.error("각 큐의 할당량 합이 전체 예산을 초과할 수 없습니다.")
+                else:
+                    try:
+                        # Need to add is_unlimited to set_analyst_budget in api_client
+                        api_client.set_analyst_budget(
+                            new_budget,
+                            new_em,
+                            new_deep,
+                            new_fp,
+                            is_unlimited=new_unlimited,
+                        )
+                        st.success("예산이 업데이트되었습니다.")
+                        st.rerun()
+                    except api_client.ApiError as e:
+                        st.error(f"예산 설정 실패: {e.message}")
+
+    # 2. 추천 목록 조회
+    try:
+        recs_data = api_client.get_priority_recommendations()
+    except api_client.ApiError as e:
+        st.error(f"추천 목록 조회 실패: {e.message}")
+        return
+
+    if is_unlimited:
+        em_label = "긴급 대응 (EMERGENCY) - 무제한"
+        deep_label = "심층 분석 (DEEP) - 무제한"
+    else:
+        em_label = (
+            f"긴급 대응 (EMERGENCY) - 잔여 {budget_data.get('remaining_emergency', 0)}"
+        )
+        deep_label = f"심층 분석 (DEEP) - 잔여 {budget_data.get('remaining_deep', 0)}"
+
+    tab_labels = [
+        em_label,
+        deep_label,
+        "자동 처리 (AUTO)",
+        "재학습 데이터 (RETRAIN)",
+        "오류 항목 (ERROR)",
+    ]
+    tabs = st.tabs(tab_labels)
+
+    with tabs[0]:
+        st.markdown(
+            "**대상**: 악성 의심/판정 파일 중 **데이터 파괴, 랜섬웨어 암호화 등 고위험 행위** 관련 정적·동적 증거가 확인된 건"
+        )
+        render_queue_table(
+            "emergency",
+            "할당된 분석 대상",
+            recs_data.get("emergency_recommendations", []),
+        )
+        if recs_data.get("emergency_waiting"):
+            with st.expander("예산 초과 대기열"):
+                render_queue_table(
+                    "emergency",
+                    "대기열",
+                    recs_data.get("emergency_waiting", []),
+                    is_waiting=True,
+                )
+
+    with tabs[1]:
+        st.markdown(
+            "**대상**: 모델 불일치(DISAGREEMENT), 분포 외(OOD) 및 초기 불확실 의심 건"
+        )
+        render_queue_table(
+            "deep", "할당된 분석 대상", recs_data.get("deep_recommendations", [])
+        )
+        if recs_data.get("deep_waiting"):
+            with st.expander("예산 초과 대기열"):
+                render_queue_table(
+                    "deep", "대기열", recs_data.get("deep_waiting", []), is_waiting=True
+                )
+
+    with tabs[2]:
+        st.markdown("**대상**: 자동 판정 조건을 충족하여 추가 검토가 필요 없는 건")
+        render_queue_table("auto", "처리 대상", recs_data.get("auto_queue", []))
+
+    with tabs[3]:
+        st.markdown(
+            "**대상**: 초기 모델 판정과 분석가의 최종 판정이 달라진 건 (오탐/미탐)"
+        )
+        try:
+            if "retrain_page" not in st.session_state:
+                st.session_state.retrain_page = 0
+            limit = 20
+            offset = st.session_state.retrain_page * limit
+            res = api_client.search_analyses(
+                overturned_only=True, limit=limit, offset=offset
+            )
+            overturned_data = res.get("analyses", []) if res else []
+            total_count = res.get("total_count", 0) if res else 0
+
+            if overturned_data:
+                cands = []
+                for d in overturned_data:
+                    cands.append(
+                        {
+                            "analysis_id": d["analysis_id"],
+                            "filename": d.get("filename", ""),
+                            "sha256": d.get("sha256", ""),
+                            "queue_name": "RETRAIN",
+                            "queue_reason": "분석가 판정으로 모델 결과가 뒤집힘",
+                            "priority_score": None,
+                            "selection_reason": f"초기 판정: {d.get('initial_verdict')} -> 최종 판정: {d.get('analyst_final_verdict')}",
+                        }
+                    )
+                render_queue_table("retrain", "오탐/미탐 내역", cands)
+
+                cols = st.columns([1, 2, 1])
+                with cols[0]:
+                    if st.button(
+                        "이전 페이지",
+                        disabled=(st.session_state.retrain_page == 0),
+                        key="retrain_prev",
+                    ):
+                        st.session_state.retrain_page -= 1
+                        st.rerun()
+                with cols[1]:
+                    st.write(
+                        f"<div style='text-align: center;'>페이지 {st.session_state.retrain_page + 1} / {max(1, (total_count + limit - 1) // limit)} (총 {total_count}건)</div>",
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    if st.button(
+                        "다음 페이지",
+                        disabled=(offset + limit >= total_count),
+                        key="retrain_next",
+                    ):
+                        st.session_state.retrain_page += 1
+                        st.rerun()
+            else:
+                st.info("조건에 해당하는 오탐/미탐 데이터가 없습니다.")
+        except api_client.ApiError as e:
+            st.error(f"오탐/미탐 내역 조회 실패: {e.message}")
+
+    with tabs[4]:
+        st.markdown(
+            "**대상**: 확률 값 오류, NaN, 무한대, 누락 등으로 시스템 처리가 불가능한 비정상 건"
+        )
+        render_queue_table(
+            "error", "비정상 오류 대상", recs_data.get("error_queue", [])
+        )
+
 
 if "analysis_result" not in st.session_state:
     st.session_state.analysis_result = None
@@ -3659,6 +4126,7 @@ result = st.session_state.analysis_result
 if result is None:
     render_input_view()
     render_hash_search()
+    render_analyst_priority_queue()
 
 else:
     batch_data = st.session_state.get("batch_data")

@@ -1,6 +1,7 @@
 import os
-import mlflow
+
 import joblib
+import mlflow
 
 print("MLflow에서 최신 4-way 모델의 run_id를 조회합니다...")
 if "MLFLOW_TRACKING_URI" in os.environ:

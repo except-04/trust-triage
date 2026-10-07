@@ -12,11 +12,12 @@ import json
 import math
 import multiprocessing
 import queue
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Final, Protocol, Sequence
+from typing import Any, Final, Protocol
 
 import numpy as np
 import pefile
@@ -25,7 +26,6 @@ from .api_groups import classify_imports
 from .result import ExtractionStatus, FeatureExtractionResult
 from .schema import FeatureGroup, FeatureSchema
 
-
 DEFAULT_MAX_FILE_SIZE_BYTES: Final[int] = 200 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 30.0
 EMBER_V3_SCHEMA_PREFIX: Final[str] = "ember2024-v3-pe"
@@ -33,9 +33,7 @@ EMBER_V3_SOURCE_PACKAGE: Final[str] = "thrember"
 EMBER_V3_SOURCE_REPOSITORY: Final[str] = (
     "https://github.com/FutureComputing4AI/EMBER2024"
 )
-EMBER_V3_SOURCE_COMMIT: Final[str] = (
-    "0ef753e81d98bf209f71b03cd331dfc190b5b54d"
-)
+EMBER_V3_SOURCE_COMMIT: Final[str] = "0ef753e81d98bf209f71b03cd331dfc190b5b54d"
 
 
 class _FeatureGroup(Protocol):
@@ -83,10 +81,7 @@ def _load_thrember_source_metadata(*, verify_source: bool) -> dict[str, object]:
         direct_url_text = package_distribution.read_text("direct_url.json")
     except (OSError, UnicodeError) as exc:
         direct_url_text = None
-        source_error = (
-            "could not read direct_url.json: "
-            f"{type(exc).__name__}: {exc}"
-        )
+        source_error = f"could not read direct_url.json: {type(exc).__name__}: {exc}"
 
     if direct_url_text and not source_error:
         try:
@@ -292,7 +287,9 @@ def _build_schema(thrember_extractor: _ThremberExtractor) -> FeatureSchema:
         group_name = str(feature_group.name)
         dimension = int(feature_group.dim)
         if not group_name or group_name in seen_group_names:
-            raise ValueError(f"invalid or duplicated EMBER Feature group: {group_name!r}")
+            raise ValueError(
+                f"invalid or duplicated EMBER Feature group: {group_name!r}"
+            )
         if dimension <= 0:
             raise ValueError(
                 f"EMBER Feature group {group_name!r} has invalid dimension: {dimension}"
@@ -300,9 +297,7 @@ def _build_schema(thrember_extractor: _ThremberExtractor) -> FeatureSchema:
 
         seen_group_names.add(group_name)
         group_signature.append(f"{group_name}:{dimension}")
-        feature_names.extend(
-            f"{group_name}[{index}]" for index in range(dimension)
-        )
+        feature_names.extend(f"{group_name}[{index}]" for index in range(dimension))
         feature_groups.append(
             FeatureGroup(
                 name=group_name,
@@ -420,8 +415,7 @@ class EmberV3Extractor:
             except Exception as exc:
                 # API 그룹 분석 실패가 EMBER 모델용 Feature 추출 실패를 의미하지는 않는다.
                 warnings.append(
-                    "API group classification failed: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"API group classification failed: {type(exc).__name__}: {exc}"
                 )
             return FeatureExtractionResult.success(
                 schema=self.schema,

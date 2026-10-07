@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 import numpy as np
 
@@ -50,22 +50,30 @@ def validate_four_way_contract(
         y_path = (root / f"y_{split}.npy").resolve()
         for path in (x_path, y_path):
             if not path.is_file():
-                raise FileNotFoundError(f"required {split} artifact does not exist: {path}")
+                raise FileNotFoundError(
+                    f"required {split} artifact does not exist: {path}"
+                )
             paths.append(path)
 
         X = np.load(x_path, mmap_mode="r", allow_pickle=False)
         y = np.load(y_path, mmap_mode="r", allow_pickle=False)
         expected_n = int(expected_rows[split])
         if X.ndim >= 1 and y.ndim >= 1 and X.shape[0] != y.shape[0]:
-            raise DataContractError(f"{split} X/y row mismatch: X={X.shape[0]}, y={y.shape[0]}")
+            raise DataContractError(
+                f"{split} X/y row mismatch: X={X.shape[0]}, y={y.shape[0]}"
+            )
         if X.ndim != 2 or X.shape[1] != expected_feature_dim:
             raise DataContractError(
                 f"X_{split} must have shape ({expected_n}, {expected_feature_dim}); got {X.shape}"
             )
         if X.shape[0] != expected_n:
-            raise DataContractError(f"X_{split} row count must be {expected_n}; got {X.shape[0]}")
+            raise DataContractError(
+                f"X_{split} row count must be {expected_n}; got {X.shape[0]}"
+            )
         if y.ndim != 1 or y.shape[0] != expected_n:
-            raise DataContractError(f"y_{split} must have shape ({expected_n},); got {y.shape}")
+            raise DataContractError(
+                f"y_{split} must have shape ({expected_n},); got {y.shape}"
+            )
         labels = np.unique(y)
         if not np.all(np.isin(labels, np.array([0, 1]))):
             raise DataContractError(
@@ -83,9 +91,13 @@ def load_top_indices(path: str | Path, *, expected_count: int = 500) -> np.ndarr
 
     artifact = Path(path).expanduser().resolve()
     if not artifact.is_file():
-        raise FileNotFoundError(f"top-feature index artifact does not exist: {artifact}")
+        raise FileNotFoundError(
+            f"top-feature index artifact does not exist: {artifact}"
+        )
     indices = np.load(artifact, allow_pickle=False)
-    if indices.shape != (expected_count,) or not np.issubdtype(indices.dtype, np.integer):
+    if indices.shape != (expected_count,) or not np.issubdtype(
+        indices.dtype, np.integer
+    ):
         raise DataContractError(
             f"top-feature indices must be an integer array with shape ({expected_count},)"
         )
@@ -95,14 +107,21 @@ def load_top_indices(path: str | Path, *, expected_count: int = 500) -> np.ndarr
     if indices[0] < 0 or indices[-1] >= EXPECTED_FEATURE_DIM:
         raise DataContractError("top-feature index is outside [0, 2568)")
 
-    manifest_path = PROJECT_ROOT / "docs" / "feature-extraction" / "feature-selection-ember-v3-top500.json"
+    manifest_path = (
+        PROJECT_ROOT
+        / "docs"
+        / "feature-extraction"
+        / "feature-selection-ember-v3-top500.json"
+    )
     if manifest_path.is_file():
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
         if "source_indices" in manifest:
             source_indices = np.array(manifest["source_indices"], dtype=np.int64)
             if not np.array_equal(indices, source_indices):
-                raise DataContractError("Top500 indices do not match the official manifest")
+                raise DataContractError(
+                    "Top500 indices do not match the official manifest"
+                )
 
     return indices
 
@@ -114,5 +133,7 @@ def require_new_output(path: str | Path) -> Path:
     if output.exists():
         raise FileExistsError(f"refusing to overwrite existing artifact: {output}")
     if not output.parent.is_dir():
-        raise FileNotFoundError(f"output parent directory does not exist: {output.parent}")
+        raise FileNotFoundError(
+            f"output parent directory does not exist: {output.parent}"
+        )
     return output

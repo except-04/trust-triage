@@ -10,7 +10,6 @@ st.markdown이 dedent 후 CommonMark로 파싱하므로 빈 줄 하나에 <div> 
 from __future__ import annotations
 
 import pytest
-
 from test_progressive_result import combined_response, deep_response, view
 
 
@@ -95,7 +94,12 @@ def test_not_required_deep_analysis_hides_evidence(app, verdict):
 
 @pytest.mark.parametrize("status", ["QUEUED", "RUNNING"])
 def test_pending_deep_analysis_hides_evidence_even_with_partial_snapshot(app, status):
-    statuses = {"capa": status, "floss": status, "speakeasy": status, "cape": "NOT_REQUIRED"}
+    statuses = {
+        "capa": status,
+        "floss": status,
+        "speakeasy": status,
+        "cape": "NOT_REQUIRED",
+    }
     result = view(app, combined_response(status="RUNNING", deep_statuses=statuses))
     result["evidence"] = list(EVIDENCE)  # 진행 중 스냅샷에 부분 근거가 실린 경우
     assert app.deep_analysis_state(result) == status
@@ -134,11 +138,21 @@ def _render(app, result):
 def test_pending_progressive_view_keeps_initial_and_shap_but_no_deep_results(
     app, status
 ):
-    statuses = {"capa": status, "floss": status, "speakeasy": status, "cape": "NOT_REQUIRED"}
+    statuses = {
+        "capa": status,
+        "floss": status,
+        "speakeasy": status,
+        "cape": "NOT_REQUIRED",
+    }
     result = view(app, combined_response(status="RUNNING", deep_statuses=statuses))
     result["top_features"] = [
-        {"feature_name": "header[9]", "display_name": "Major Linker Version",
-         "feature_value": 14.0, "shap_value": 0.3, "direction": "MALICIOUS"}
+        {
+            "feature_name": "header[9]",
+            "display_name": "Major Linker Version",
+            "feature_value": 14.0,
+            "shap_value": 0.3,
+            "direction": "MALICIOUS",
+        }
     ]
     result["evidence"] = list(EVIDENCE)
     target = _render(app, result)
@@ -165,7 +179,10 @@ def test_completed_progressive_view_shows_evidence_llm_and_assessment(app):
     target = _render(app, result)
 
     expanders = target.expanders()
-    assert all(name in expanders for name in ("MITRE Evidence", "LLM Summary", "Final Assessment"))
+    assert all(
+        name in expanders
+        for name in ("MITRE Evidence", "LLM Summary", "Final Assessment")
+    )
     frames = [args[0] for args in target.named("dataframe")]
     assert result["evidence"] in frames
 
@@ -197,14 +214,18 @@ def test_failed_progressive_view_without_evidence_shows_nothing_extra(app):
 
 
 def _no_markdown_breaks(markup):
-    assert "\n" not in markup, "줄바꿈이 있으면 빈 줄/들여쓰기로 HTML 블록이 쪼개질 수 있다"
+    assert "\n" not in markup, (
+        "줄바꿈이 있으면 빈 줄/들여쓰기로 HTML 블록이 쪼개질 수 있다"
+    )
     assert not markup.startswith(" ")
 
 
 def test_empty_card_is_a_single_line_with_placeholders(app):
     markup = app.evidence_card_markup([], [])
     _no_markdown_breaks(markup)
-    assert markup.startswith('<div class="evidence-grid">') and markup.endswith("</div>")
+    assert markup.startswith('<div class="evidence-grid">') and markup.endswith(
+        "</div>"
+    )
     assert "표시할 MITRE ATT&amp;CK 근거가 없습니다." in markup
     assert "표시할 CAPA 행위가 없습니다." in markup
     assert markup.count("<div") == markup.count("</div>")

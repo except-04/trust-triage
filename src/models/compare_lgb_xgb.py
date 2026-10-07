@@ -8,7 +8,6 @@ LightGBM vs XGBoost 500개 모델 성능 비교 (disagreement 계산 전 검증�
 
 import joblib
 import numpy as np
-import mlflow
 from sklearn.metrics import roc_auc_score, roc_curve
 
 TARGET_FPR = 0.001
@@ -63,6 +62,6 @@ metrics_xgb = evaluate(model_xgb, X_calib_500, y_calib, X_eval_500, y_eval)
 
 print(f"""
 === LightGBM vs XGBoost 비교 (목표 FPR: {TARGET_FPR:.1%}) ===
-LightGBM:  ROC-AUC {metrics_lgb['roc_auc']:.4f} / TPR@FPR {metrics_lgb['tpr_at_fpr']:.4f}
-XGBoost:   ROC-AUC {metrics_xgb['roc_auc']:.4f} / TPR@FPR {metrics_xgb['tpr_at_fpr']:.4f}
+LightGBM:  ROC-AUC {metrics_lgb["roc_auc"]:.4f} / TPR@FPR {metrics_lgb["tpr_at_fpr"]:.4f}
+XGBoost:   ROC-AUC {metrics_xgb["roc_auc"]:.4f} / TPR@FPR {metrics_xgb["tpr_at_fpr"]:.4f}
 """)

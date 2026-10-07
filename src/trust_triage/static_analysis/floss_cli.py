@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from pathlib import Path
 
 from .floss_analyzer import (
     DEFAULT_FLOSS_TIMEOUT_SECONDS,
@@ -58,18 +57,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=DEFAULT_MIN_STRING_LENGTH,
         help=(
-            "minimum recovered string length "
-            f"(default: {DEFAULT_MIN_STRING_LENGTH})"
+            f"minimum recovered string length (default: {DEFAULT_MIN_STRING_LENGTH})"
         ),
     )
     parser.add_argument(
         "--timeout",
         type=_positive_float,
         default=DEFAULT_FLOSS_TIMEOUT_SECONDS,
-        help=(
-            "FLOSS timeout in seconds "
-            f"(default: {DEFAULT_FLOSS_TIMEOUT_SECONDS:g})"
-        ),
+        help=(f"FLOSS timeout in seconds (default: {DEFAULT_FLOSS_TIMEOUT_SECONDS:g})"),
     )
     parser.add_argument(
         "--max-strings",

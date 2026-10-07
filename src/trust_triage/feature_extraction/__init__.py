@@ -3,9 +3,9 @@
 from .api_groups import (
     API_GROUPS_SCHEMA_VERSION,
     DEFAULT_API_GROUPS,
-    ApiImportMatch,
     ApiGroupMatch,
     ApiGroupReport,
+    ApiImportMatch,
     OrdinalImport,
     classify_imports,
 )
@@ -19,20 +19,20 @@ from .selection import (
 )
 
 __all__ = [
-    "EmberV3Extractor",
     "API_GROUPS_SCHEMA_VERSION",
-    "ApiImportMatch",
+    "DEFAULT_API_GROUPS",
+    "FEATURE_SELECTION_SCHEMA_VERSION",
     "ApiGroupMatch",
     "ApiGroupReport",
-    "DEFAULT_API_GROUPS",
-    "OrdinalImport",
+    "ApiImportMatch",
+    "EmberV3Extractor",
     "ExtractionStatus",
+    "FeatureExtractionResult",
     "FeatureGroup",
     "FeatureSchema",
-    "FeatureExtractionResult",
-    "FEATURE_SELECTION_SCHEMA_VERSION",
     "FeatureSelectionError",
     "FeatureSelector",
+    "OrdinalImport",
     "classify_imports",
     "extract_file",
 ]

@@ -179,8 +179,14 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(
         processor_module, "time", SimpleNamespace(monotonic=clock.monotonic)
     )
+    import os
+    from pathlib import Path
+
+    storage_root_path = tmp_path / "samples"
+    if os.name == "nt":
+        storage_root_path = Path(f"\\\\?\\{storage_root_path.absolute()}")
     config = BackendConfig(
-        storage_root=tmp_path / "samples",
+        storage_root=storage_root_path,
         temp_root=tmp_path / "temp",
         poll_seconds=0.1,
         retry_delay_seconds=2,

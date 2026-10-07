@@ -49,9 +49,7 @@ def test_oversized_output_kills_child_and_next_run_succeeds(
     descriptor = 1 if stream_name == "stdout" else 2
     command = _child(
         tmp_path,
-        "import os, time\n"
-        f"os.write({descriptor}, b'x' * 200000)\n"
-        "time.sleep(30)\n",
+        f"import os, time\nos.write({descriptor}, b'x' * 200000)\ntime.sleep(30)\n",
     )
 
     with pytest.raises(FlossOutputLimitExceeded) as error:
@@ -63,15 +61,15 @@ def test_oversized_output_kills_child_and_next_run_succeeds(
     assert not any(thread.name.startswith("floss-") for thread in threading.enumerate())
 
     next_command = _child(tmp_path, "print('{}')\n")
-    next_result = _run_bounded_floss(
-        next_command, cwd=None, env=os.environ, timeout=5
-    )
+    next_result = _run_bounded_floss(next_command, cwd=None, env=os.environ, timeout=5)
     assert next_result.returncode == 0
     assert next_result.stdout.strip() == "{}"
     assert created[1].poll() is not None
 
 
-def test_simultaneous_output_is_drained_without_deadlock(monkeypatch, tmp_path: Path) -> None:
+def test_simultaneous_output_is_drained_without_deadlock(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(floss_module, "MAX_FLOSS_STDOUT_BYTES", 4096)
     monkeypatch.setattr(floss_module, "MAX_FLOSS_STDERR_BYTES", 4096)
     created = _capture_processes(monkeypatch)
@@ -121,9 +119,11 @@ def test_analyzer_records_output_limit_as_failure_without_evidence(
     sample = tmp_path / "harmless_sample.exe"
     sample.write_bytes(b"MZ fixture")
     command = _child(tmp_path, "import os\nos.write(1, b'x' * 200000)\n")
-    analyzer = FlossAnalyzer(FlossConfig(
-        executable=command[0], executable_args=(command[1],), timeout_seconds=5
-    ))
+    analyzer = FlossAnalyzer(
+        FlossConfig(
+            executable=command[0], executable_args=(command[1],), timeout_seconds=5
+        )
+    )
 
     result = analyzer.analyze(sample)
 

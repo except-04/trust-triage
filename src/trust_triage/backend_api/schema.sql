@@ -160,7 +160,54 @@ CREATE TABLE IF NOT EXISTS api_reviews (
     analyst_notes text NOT NULL CHECK (length(analyst_notes) <= 10000),
     reviewer_id text NOT NULL CHECK (length(reviewer_id) BETWEEN 1 AND 128),
     review_status text NOT NULL CHECK (review_status IN ('PENDING', 'COMPLETED')),
+    review_queue text CHECK (review_queue IN ('EMERGENCY', 'DEEP', 'FP', 'AUTO', 'UNKNOWN', 'ERROR')),
+    review_policy text,
     reviewed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE (analysis_id, revision),
     CHECK ((review_status = 'PENDING') = (analyst_final_verdict IS NULL))
 );
+
+-- Additive migration for api_reviews
+ALTER TABLE api_reviews ADD COLUMN IF NOT EXISTS review_queue text CHECK (review_queue IN ('EMERGENCY', 'DEEP', 'FP', 'AUTO', 'UNKNOWN', 'ERROR'));
+ALTER TABLE api_reviews ADD COLUMN IF NOT EXISTS review_policy text;
+
+CREATE TABLE IF NOT EXISTS api_budget_config (
+    id integer PRIMARY KEY CHECK (id = 1),
+    daily_budget integer NOT NULL CHECK (daily_budget >= 0),
+    emergency_budget integer NOT NULL DEFAULT 0 CHECK (emergency_budget >= 0),
+    deep_budget integer NOT NULL DEFAULT 0 CHECK (deep_budget >= 0),
+    fp_budget integer NOT NULL DEFAULT 0 CHECK (fp_budget >= 0),
+    is_unlimited boolean NOT NULL DEFAULT FALSE,
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CHECK (is_unlimited OR emergency_budget + deep_budget + fp_budget <= daily_budget)
+);
+
+-- Additive migration for api_budget_config
+ALTER TABLE api_budget_config ADD COLUMN IF NOT EXISTS emergency_budget integer NOT NULL DEFAULT 0 CHECK (emergency_budget >= 0);
+ALTER TABLE api_budget_config ADD COLUMN IF NOT EXISTS deep_budget integer NOT NULL DEFAULT 0 CHECK (deep_budget >= 0);
+ALTER TABLE api_budget_config ADD COLUMN IF NOT EXISTS fp_budget integer NOT NULL DEFAULT 0 CHECK (fp_budget >= 0);
+ALTER TABLE api_budget_config ADD COLUMN IF NOT EXISTS is_unlimited boolean NOT NULL DEFAULT FALSE;
+
+DO $$ BEGIN
+    ALTER TABLE api_budget_config DROP CONSTRAINT IF EXISTS api_budget_config_check;
+    ALTER TABLE api_budget_config ADD CONSTRAINT api_budget_config_check CHECK (is_unlimited OR emergency_budget + deep_budget + fp_budget <= daily_budget);
+END $$;
+
+-- Migrate existing check constraint to include ERROR queue
+DO $$ BEGIN
+    ALTER TABLE api_reviews DROP CONSTRAINT IF EXISTS api_reviews_review_queue_check;
+    ALTER TABLE api_reviews ADD CONSTRAINT api_reviews_review_queue_check CHECK (review_queue IN ('EMERGENCY', 'DEEP', 'FP', 'AUTO', 'UNKNOWN', 'ERROR'));
+END $$;
+
+-- Migrate old single budget to deep_budget (only once)
+CREATE TABLE IF NOT EXISTS api_migrations (
+    name text PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM api_migrations WHERE name = 'migrate_deep_budget_initial') THEN
+        UPDATE api_budget_config SET deep_budget = daily_budget WHERE deep_budget = 0 AND emergency_budget = 0 AND fp_budget = 0 AND daily_budget > 0;
+        INSERT INTO api_migrations (name) VALUES ('migrate_deep_budget_initial');
+    END IF;
+END $$;

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -57,7 +58,7 @@ class FeatureExtractionResult:
         api_groups: ApiGroupReport | None = None,
         is_dotnet: bool = False,
         metadata: Mapping[str, Any] | None = None,
-    ) -> "FeatureExtractionResult":
+    ) -> FeatureExtractionResult:
         vector = schema.validate_vector(values)
         return cls(
             schema_version=schema.version,
@@ -85,7 +86,7 @@ class FeatureExtractionResult:
         errors: list[str] | None = None,
         warnings: list[str] | None = None,
         metadata: Mapping[str, Any] | None = None,
-    ) -> "FeatureExtractionResult":
+    ) -> FeatureExtractionResult:
         return cls(
             schema_version=schema_version,
             sha256=sha256,

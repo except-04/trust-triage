@@ -55,9 +55,18 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (  # noqa: E402
-    ARCH_NAMES, ARCH_OTHER, ARCH_WIN32, ARCH_WIN64, Layout, Timer,
-    add_root_arg, gather_paths, get_dim, open_dat, setup_logging,
+from common import (
+    ARCH_NAMES,
+    ARCH_OTHER,
+    ARCH_WIN32,
+    ARCH_WIN64,
+    Layout,
+    Timer,
+    add_root_arg,
+    gather_paths,
+    get_dim,
+    open_dat,
+    setup_logging,
     write_json,
 )
 
@@ -120,8 +129,11 @@ def extract_meta_file(path: Path) -> tuple[list, Counter]:
                 week = int(m_wk.group(1))
                 label = int(m_lb.group(1))
                 # family: "..." 이면 group(1), null 이면 None, 아예 없으면 None
-                family = (m_fam.group(1).decode("utf-8", "replace")
-                          if (m_fam and m_fam.group(1) is not None) else None)
+                family = (
+                    m_fam.group(1).decode("utf-8", "replace")
+                    if (m_fam and m_fam.group(1) is not None)
+                    else None
+                )
 
             raw[ft] += 1
             rows.append((sha, week, ft, family, label))
@@ -184,15 +196,22 @@ def build_subset(layout: Layout, subset: str, dim: int, log):
         )
     log.info("  ✅ 정합성 통과: len=%d, label==y 전부 일치", n_dat)
 
-    counts = {ARCH_NAMES.get(int(a), str(a)): int((arch == a).sum())
-              for a in np.unique(arch)}
+    counts = {
+        ARCH_NAMES.get(int(a), str(a)): int((arch == a).sum()) for a in np.unique(arch)
+    }
     week_min = int(meta["week_id"].min())
     week_max = int(meta["week_id"].max())
-    log.info("%s: 총 %d행 / arch %s / week_id 범위 %d–%d",
-             subset, len(meta), counts, week_min, week_max)
+    log.info(
+        "%s: 총 %d행 / arch %s / week_id 범위 %d–%d",
+        subset,
+        len(meta),
+        counts,
+        week_min,
+        week_max,
+    )
 
     info = {
-        "n_rows": int(len(meta)),
+        "n_rows": len(meta),
         "arch_counts": counts,
         "raw_file_type_counts": dict(raw_types),
         "week_id_min": week_min,
@@ -209,8 +228,9 @@ def main() -> int:
     )
     add_root_arg(ap)
     ap.add_argument("--force", action="store_true", help="이미 있어도 다시 생성")
-    ap.add_argument("--subsets", default="train,test,challenge",
-                    help="처리할 subset (쉼표 구분)")
+    ap.add_argument(
+        "--subsets", default="train,test,challenge", help="처리할 subset (쉼표 구분)"
+    )
     args = ap.parse_args()
 
     layout = Layout(args.root)
@@ -254,10 +274,15 @@ def main() -> int:
 
     tr = report["subsets"].get("train")
     if tr:
-        log.info("train week_id 범위: %d–%d (시간 분할 기준)",
-                 tr["week_id_min"], tr["week_id_max"])
+        log.info(
+            "train week_id 범위: %d–%d (시간 분할 기준)",
+            tr["week_id_min"],
+            tr["week_id_max"],
+        )
         if tr["week_id_min"] != 0 or tr["week_id_max"] != 51:
-            log.warning("train week_id 범위가 0–51과 다릅니다 — 분할 경계를 재확인하세요.")
+            log.warning(
+                "train week_id 범위가 0–51과 다릅니다 — 분할 경계를 재확인하세요."
+            )
 
     layout.mark_done("build_index")
     log.info("다음 단계: python split_qc.py --root %s", args.root)
