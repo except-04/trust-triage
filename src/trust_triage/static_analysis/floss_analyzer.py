@@ -760,7 +760,7 @@ def _run_bounded_floss(
     env: Mapping[str, str],
     timeout: float,
 ) -> subprocess.CompletedProcess[str]:
-    """Drain both pipes concurrently and stop before either output grows unbounded."""
+    """Bound stdout and keep draining stderr after its capture limit is reached."""
 
     process = subprocess.Popen(
         command,
@@ -774,6 +774,7 @@ def _run_bounded_floss(
     assert process.stdout is not None and process.stderr is not None
     stdout = bytearray()
     stderr = bytearray()
+    stderr_truncated = threading.Event()
     overflow: list[tuple[str, int]] = []
     read_errors: list[OSError] = []
     wake = threading.Event()
@@ -784,6 +785,9 @@ def _run_bounded_floss(
                 remaining = limit - len(output)
                 if len(chunk) > remaining:
                     output.extend(chunk[:remaining])
+                    if name == "stderr":
+                        stderr_truncated.set()
+                        continue
                     overflow.append((name, limit))
                     wake.set()
                     return
@@ -829,7 +833,10 @@ def _run_bounded_floss(
             command,
             process.returncode,
             stdout=stdout.decode("utf-8", errors="replace"),
-            stderr=stderr.decode("utf-8", errors="replace"),
+            stderr=(
+                f"FLOSS stderr truncated after {MAX_FLOSS_STDERR_BYTES} bytes\n"
+                if stderr_truncated.is_set() else ""
+            ) + stderr.decode("utf-8", errors="replace"),
         )
     finally:
         if process.poll() is None:

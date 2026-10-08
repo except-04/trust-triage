@@ -39,7 +39,7 @@ def _capture_processes(monkeypatch):
     return created
 
 
-@pytest.mark.parametrize("stream_name", ["stdout", "stderr"])
+@pytest.mark.parametrize("stream_name", ["stdout"])
 def test_oversized_output_kills_child_and_next_run_succeeds(
     monkeypatch, tmp_path: Path, stream_name: str
 ) -> None:

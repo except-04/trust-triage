@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -29,6 +30,14 @@ from .models import (
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 _DIAGNOSTIC_LINE_LIMIT = 40
+_MEMORY_LIMIT_EXEC = (
+    "import os, resource, sys\n"
+    "limit = int(sys.argv[1])\n"
+    "hard = resource.getrlimit(resource.RLIMIT_AS)[1]\n"
+    "if hard != resource.RLIM_INFINITY: limit = min(limit, hard)\n"
+    "resource.setrlimit(resource.RLIMIT_AS, (limit, limit))\n"
+    "os.execvpe(sys.argv[2], sys.argv[2:], os.environ)\n"
+)
 
 
 @dataclass(frozen=True)
@@ -50,12 +59,17 @@ class CapaConfig:
     working_directory: Path | None = None
     executable_args: tuple[str, ...] = ()
     extra_args: tuple[str, ...] = ()
+    memory_limit_mb: int | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.backend, str):
             object.__setattr__(self, "backend", CapaBackend(self.backend.lower()))
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
+        if self.memory_limit_mb is not None and (
+            not isinstance(self.memory_limit_mb, int) or self.memory_limit_mb <= 0
+        ):
+            raise ValueError("memory_limit_mb must be a positive integer")
         for field_name in (
             "rules_path",
             "signatures_path",
@@ -146,10 +160,17 @@ class CapaAnalyzer:
         environment = self._build_environment()
         started = time.perf_counter()
         analysis_started_at = datetime.now(timezone.utc).isoformat()
+        execution_command = command
+        if sys.platform == "linux" and self.config.memory_limit_mb is not None:
+            # A fresh process avoids preexec_fn deadlocks with heartbeat threads.
+            execution_command = (
+                sys.executable, "-c", _MEMORY_LIMIT_EXEC,
+                str(self.config.memory_limit_mb * 1024 * 1024), *command,
+            )
 
         try:
             completed = subprocess.run(
-                command,
+                execution_command,
                 capture_output=True,
                 check=False,
                 cwd=(
