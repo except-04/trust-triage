@@ -1,0 +1,28 @@
+# Python 3.11 환경 기반 Speakeasy 에뮬레이션 격리 샌드박스
+FROM python:3.11-slim
+
+# 보안 및 격리 환경 설정
+WORKDIR /worker
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/worker/src
+
+# C 빌드 도구 및 필요 패키지 설치
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Worker 의존성 파일 복사 및 설치
+COPY requirements-worker.txt .
+RUN pip install --no-cache-dir -r requirements-worker.txt
+
+# Worker 실행 코드 및 공통 모듈 복사
+COPY src/ ./src/
+COPY pyproject.toml .
+
+# 격리된 컨테이너 내부에서 워커 실행
+ENTRYPOINT ["python", "-m", "trust_triage.speakeasy_worker"]
+CMD ["run"]
