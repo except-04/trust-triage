@@ -140,7 +140,12 @@ def get_batch(batch_id):
 
 
 def search_analyses(
-    sha256=None, limit=20, offset=0, sort="newest", overturned_only=False
+    sha256=None,
+    limit=20,
+    offset=0,
+    sort="newest",
+    overturned_only=False,
+    reviewed_only=False,
 ):
     """SHA-256으로 분석 이력을 조회한다.
 
@@ -160,6 +165,8 @@ def search_analyses(
         params["sha256"] = sha256
     if overturned_only:
         params["overturned_only"] = True
+    if reviewed_only:
+        params["reviewed_only"] = True
     return _request("GET", "/analyses", params=params)
 
 

@@ -111,8 +111,8 @@ class MemoryAnalysisRepository:
                     today_auto += 1
                 else:
                     today_unknown += 1
-
         today_total_manual = today_em + today_deep + today_fp + today_unknown
+        today_total_completed = today_total_manual + today_auto
 
         return {
             "daily_budget": daily_budget,
@@ -120,7 +120,7 @@ class MemoryAnalysisRepository:
             "deep_budget": deep_budget,
             "fp_budget": fp_budget,
             "is_unlimited": is_unlimited,
-            "today_completed_count": today_total_manual,
+            "today_completed_count": today_total_completed,
             "today_completed_emergency": today_em,
             "today_completed_deep": today_deep,
             "remaining_budget": max(daily_budget - today_total_manual, 0),
@@ -178,7 +178,7 @@ class MemoryAnalysisRepository:
             emergency_reason = em_eval["emergency_reason"]
 
         is_auto = initial_verdict in ["AUTO_BENIGN", "AUTO_MALICIOUS"]
-        auto_reason = "자동 판정 기준 충족 (추가 수집 경로 없음)" if is_auto else ""
+        auto_reason = "자동 판정 기준 충족" if is_auto else ""
 
         is_deep = False
         deep_reasons = []
@@ -587,6 +587,7 @@ class MemoryAnalysisRepository:
         batch_id=None,
         verdict=None,
         overturned_only=False,
+        reviewed_only=False,
         sort="newest",
     ):
         self._fault("list_analyses")
@@ -607,6 +608,7 @@ class MemoryAnalysisRepository:
                         verdict is None
                         or (row.initial_result or {}).get("initial_verdict") == verdict
                     )
+                    and (not reviewed_only or row.analyst_final_verdict is not None)
                     and (
                         not overturned_only
                         or (

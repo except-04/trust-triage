@@ -167,7 +167,7 @@ def test_explicit_technique_label_reaches_emergency_api_and_reclassifies(tmp_pat
     assert len(body["emergency_recommendations"]) == 1
     assert item["score_policy"] == "emergency-v1"
     assert item["priority_reason"] == "랜섬웨어 암호화"
-    assert "결과 미확인" in item["queue_reason"]
+    assert "동적 관측" in item["queue_reason"]
 
 
 def test_failed_worker_does_not_create_emergency_evidence(tmp_path):

@@ -579,3 +579,20 @@ def test_list_reviews_request(monkeypatch):
     )
     api_client.list_reviews("A1")
     assert calls == [("GET", f"{api_client.BASE_URL}/analyses/A1/reviews")]
+
+
+def test_search_analyses_reviewed_only(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        api_client.requests,
+        "request",
+        lambda method, url, **kwargs: (
+            calls.append((method, url, kwargs)) or _Response()
+        ),
+    )
+    api_client.search_analyses(reviewed_only=True)
+    assert len(calls) == 1
+    method, url, kwargs = calls[0]
+    assert method == "GET"
+    assert url.endswith("/analyses")
+    assert kwargs["params"]["reviewed_only"] is True

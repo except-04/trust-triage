@@ -1485,7 +1485,7 @@ def render_result_detail(analysis, target=st):
             f'<div class="route-detail-value">{escape(analysis.get("queue_name") or "-")}</div>'
             '<div class="summary-label">검토 유형</div>'
             f'<div class="route-detail-value">{escape(analysis.get("priority_reason") or "-")}</div>'
-            '<div class="summary-label">검토 이유</div>'
+            '<div class="summary-label">분류 이유</div>'
             f'<div class="route-detail-value">{escape(analysis.get("queue_reason") or "-")}</div>'
             "</div>"
         )
@@ -3795,9 +3795,9 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     current_page = st.session_state[page_key]
     offset = current_page * limit
 
-    # If it's the RETRAIN queue, it's already server-side paginated before calling this function,
+    # If it's the RETRAIN or COMPLETED queue, it's already server-side paginated before calling this function,
     # so we don't slice it. Otherwise we slice the items.
-    if queue_name.lower() == "retrain":
+    if queue_name.lower() in ("retrain", "completed"):
         page_items = items
     else:
         page_items = items[offset : offset + limit]
@@ -3814,19 +3814,19 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         "filename": "파일명",
         "sha256": "SHA-256",
         "initial_verdict": "모델 판정 결과",
-        "priority_reason": "검토 유형",
         "calibrated_probability_display": "악성 확률",
-        "queue_reason": "검토 이유",
+        "queue_reason": "분류 이유",
         "review_status": "검토 상태",
     }
 
     if queue_name.lower() == "auto":
         # 역순 넘버링: 가장 밑(오래된 파일)이 1번, 가장 위(최신 파일)가 N번
         df["rank"] = list(range(len(df), 0, -1))
-        display_cols.pop("priority_reason", None)
 
     if queue_name.lower() == "retrain":
         display_cols["selection_reason"] = "판정 변경 내역"
+    elif queue_name.lower() == "completed":
+        display_cols["selection_reason"] = "판정 결과 내역"
 
     df_display = df[[c for c in display_cols if c in df.columns]].rename(
         columns=display_cols
@@ -3847,8 +3847,8 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         key=f"df_{queue_name}_{title}",
     )
 
-    # Client-side pagination controls (only if we have more than one page and it's not RETRAIN)
-    if queue_name.lower() != "retrain" and total_pages > 1:
+    # Client-side pagination controls (only if we have more than one page and it's not RETRAIN or COMPLETED)
+    if queue_name.lower() not in ("retrain", "completed") and total_pages > 1:
         cols = st.columns([1, 2, 1])
         with cols[0]:
             if st.button(
@@ -3908,79 +3908,51 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
                 st.error(f"상세 결과 로드 실패: {e}")
 
 
+def format_deep_queue_item(item):
+    """심층 분석 탭의 항목은 4가지 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)로 일원화하여 표기한다."""
+    it = dict(item)
+    if it.get("queue_name") == "EMERGENCY":
+        it["queue_name"] = "DEEP"
+        signals = it.get("triggered_signals") or []
+        if "UNCERTAIN_PROBABILITY" in signals:
+            it["priority_reason"] = "확률 불확실성"
+            it["queue_reason"] = "JRR 확률 보류 구간"
+            it["score_policy"] = "uncertainty-v2"
+        elif "DISAGREEMENT" in signals:
+            it["priority_reason"] = "모델 불일치"
+            it["queue_reason"] = "모델 간 확률 차이 발생"
+            it["score_policy"] = "disagreement-v2"
+        elif "OOD" in signals:
+            it["priority_reason"] = "분포 이탈"
+            it["queue_reason"] = "학습 분포에서 벗어남"
+            it["score_policy"] = "ood-v2"
+        elif "DIFFICULTY" in signals:
+            it["priority_reason"] = "분석 난이도"
+            it["queue_reason"] = "PE 구조 경고 발생"
+            it["score_policy"] = "difficulty-v2"
+        else:
+            it["priority_reason"] = "예외 처리"
+            it["queue_reason"] = "위험 신호 없는 불확실 파일"
+            it["score_policy"] = "exception-v2"
+    return it
+
+
 def render_analyst_priority_queue():
     import api_client
     import streamlit as st
 
     st.markdown("---")
-    st.subheader("분석가 큐 기반 업무 할당 (Analyst Queues)")
+    st.subheader("분석 이력")
 
-    # 1. 예산 조회 및 설정
-    col1, col2 = st.columns([1, 1])
+    # 1. 오늘 검토 완료 건수 조회
     try:
         budget_data = api_client.get_analyst_budget()
-        current_budget = budget_data.get("daily_budget", 0)
-        current_emergency = budget_data.get("emergency_budget", 0)
-        current_deep = budget_data.get("deep_budget", 0)
-        current_fp = 0
-        is_unlimited = budget_data.get("is_unlimited", False)
-
         today_completed = budget_data.get("today_completed_count", 0)
-        remaining = budget_data.get("remaining_budget", 0)
     except api_client.ApiError as e:
-        st.error(f"예산 설정 조회 실패: {e.message}")
+        st.error(f"분석 이력 조회 실패: {e.message}")
         return
 
-    with col1:
-        if is_unlimited:
-            st.metric("오늘 검토 완료", f"{today_completed}")
-            st.write("예산을 고려하지 않습니다.")
-        else:
-            st.metric("오늘 검토 완료", f"{today_completed} / {current_budget}")
-            st.write(f"남은 예산: {remaining}")
-    with col2:
-        with st.expander("예산 설정"):
-            new_unlimited = st.checkbox("예산 무제한 (제한 없음)", value=is_unlimited)
-            new_budget = st.number_input(
-                "전체 일일 검토 한도",
-                min_value=0,
-                value=current_budget,
-                step=1,
-                disabled=new_unlimited,
-            )
-            new_em = st.number_input(
-                "긴급 대응 큐 할당량",
-                min_value=0,
-                value=current_emergency,
-                step=1,
-                disabled=new_unlimited,
-            )
-            new_deep = st.number_input(
-                "심층 분석 큐 할당량",
-                min_value=0,
-                value=current_deep,
-                step=1,
-                disabled=new_unlimited,
-            )
-            new_fp = 0
-
-            if st.button("예산 업데이트"):
-                if not new_unlimited and (new_em + new_deep + new_fp > new_budget):
-                    st.error("각 큐의 할당량 합이 전체 예산을 초과할 수 없습니다.")
-                else:
-                    try:
-                        # Need to add is_unlimited to set_analyst_budget in api_client
-                        api_client.set_analyst_budget(
-                            new_budget,
-                            new_em,
-                            new_deep,
-                            new_fp,
-                            is_unlimited=new_unlimited,
-                        )
-                        st.success("예산이 업데이트되었습니다.")
-                        st.rerun()
-                    except api_client.ApiError as e:
-                        st.error(f"예산 설정 실패: {e.message}")
+    st.metric("오늘 검토 완료", f"{today_completed}")
 
     # 2. 추천 목록 조회
     try:
@@ -3989,60 +3961,47 @@ def render_analyst_priority_queue():
         st.error(f"추천 목록 조회 실패: {e.message}")
         return
 
-    if is_unlimited:
-        em_label = "긴급 대응 (EMERGENCY) - 무제한"
-        deep_label = "심층 분석 (DEEP) - 무제한"
-    else:
-        em_label = (
-            f"긴급 대응 (EMERGENCY) - 잔여 {budget_data.get('remaining_emergency', 0)}"
-        )
-        deep_label = f"심층 분석 (DEEP) - 잔여 {budget_data.get('remaining_deep', 0)}"
-
     tab_labels = [
-        em_label,
-        deep_label,
+        "심층 분석 (DEEP)",
         "자동 처리 (AUTO)",
         "재학습 데이터 (RETRAIN)",
+        "검토 완료 (COMPLETED)",
         "오류 항목 (ERROR)",
     ]
     tabs = st.tabs(tab_labels)
 
     with tabs[0]:
         st.markdown(
-            "**대상**: 악성 의심/판정 파일 중 **데이터 파괴, 랜섬웨어 암호화 등 고위험 행위** 관련 정적·동적 증거가 확인된 건"
+            "**대상**: 확률 불확실성, 모델 불일치(DISAGREEMENT), 분포 외(OOD), 분석 난이도 및 초기 불확실 의심 건"
         )
+        raw_deep_items = (
+            recs_data.get("emergency_recommendations", [])
+            + recs_data.get("deep_recommendations", [])
+        )
+        deep_items = [format_deep_queue_item(it) for it in raw_deep_items]
+        for idx, item in enumerate(deep_items, 1):
+            item["rank"] = idx
         render_queue_table(
-            "emergency",
-            "할당된 분석 대상",
-            recs_data.get("emergency_recommendations", []),
+            "deep", "할당된 분석 대상", deep_items
         )
-        if recs_data.get("emergency_waiting"):
-            with st.expander("예산 초과 대기열"):
+        raw_deep_waiting = (
+            recs_data.get("emergency_waiting", [])
+            + recs_data.get("deep_waiting", [])
+        )
+        if raw_deep_waiting:
+            deep_waiting = [format_deep_queue_item(it) for it in raw_deep_waiting]
+            for idx, item in enumerate(deep_waiting, 1):
+                item["rank"] = idx
+            with st.expander("대기열"):
                 render_queue_table(
-                    "emergency",
-                    "대기열",
-                    recs_data.get("emergency_waiting", []),
-                    is_waiting=True,
+                    "deep", "대기열", deep_waiting, is_waiting=True
                 )
 
     with tabs[1]:
-        st.markdown(
-            "**대상**: 모델 불일치(DISAGREEMENT), 분포 외(OOD) 및 초기 불확실 의심 건"
-        )
-        render_queue_table(
-            "deep", "할당된 분석 대상", recs_data.get("deep_recommendations", [])
-        )
-        if recs_data.get("deep_waiting"):
-            with st.expander("예산 초과 대기열"):
-                render_queue_table(
-                    "deep", "대기열", recs_data.get("deep_waiting", []), is_waiting=True
-                )
-
-    with tabs[2]:
         st.markdown("**대상**: 자동 판정 조건을 충족하여 추가 검토가 필요 없는 건")
         render_queue_table("auto", "처리 대상", recs_data.get("auto_queue", []))
 
-    with tabs[3]:
+    with tabs[2]:
         st.markdown(
             "**대상**: 초기 모델 판정과 분석가의 최종 판정이 달라진 건 (오탐/미탐)"
         )
@@ -4099,6 +4058,64 @@ def render_analyst_priority_queue():
                 st.info("조건에 해당하는 오탐/미탐 데이터가 없습니다.")
         except api_client.ApiError as e:
             st.error(f"오탐/미탐 내역 조회 실패: {e.message}")
+
+    with tabs[3]:
+        st.markdown(
+            "**대상**: 분석가가 상세 화면에서 검토 및 최종 판정을 완료(저장)한 건"
+        )
+        try:
+            if "completed_page" not in st.session_state:
+                st.session_state.completed_page = 0
+            limit = 20
+            offset = st.session_state.completed_page * limit
+            res = api_client.search_analyses(
+                reviewed_only=True, limit=limit, offset=offset
+            )
+            completed_data = res.get("analyses", []) if res else []
+            total_count = res.get("total_count", 0) if res else 0
+
+            if completed_data:
+                cands = []
+                for d in completed_data:
+                    cands.append(
+                        {
+                            "analysis_id": d["analysis_id"],
+                            "filename": d.get("filename", ""),
+                            "sha256": d.get("sha256", ""),
+                            "queue_name": "COMPLETED",
+                            "queue_reason": "검토 완료",
+                            "priority_score": None,
+                            "selection_reason": f"초기 판정: {d.get('initial_verdict')} -> 최종 판정: {d.get('analyst_final_verdict')}",
+                        }
+                    )
+                render_queue_table("completed", "검토 완료 내역", cands)
+
+                cols = st.columns([1, 2, 1])
+                with cols[0]:
+                    if st.button(
+                        "이전 페이지",
+                        disabled=(st.session_state.completed_page == 0),
+                        key="completed_prev",
+                    ):
+                        st.session_state.completed_page -= 1
+                        st.rerun()
+                with cols[1]:
+                    st.write(
+                        f"<div style='text-align: center;'>페이지 {st.session_state.completed_page + 1} / {max(1, (total_count + limit - 1) // limit)} (총 {total_count}건)</div>",
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    if st.button(
+                        "다음 페이지",
+                        disabled=(offset + limit >= total_count),
+                        key="completed_next",
+                    ):
+                        st.session_state.completed_page += 1
+                        st.rerun()
+            else:
+                st.info("검토 완료된 데이터가 없습니다.")
+        except api_client.ApiError as e:
+            st.error(f"검토 완료 내역 조회 실패: {e.message}")
 
     with tabs[4]:
         st.markdown(

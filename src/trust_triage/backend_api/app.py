@@ -118,6 +118,10 @@ def _listing_filters(
         bool,
         Query(description="오탐/미탐으로 최종 판정이 뒤집힌 결과만 조회합니다."),
     ] = False,
+    reviewed_only: Annotated[
+        bool,
+        Query(description="검토가 완료된 결과만 조회합니다."),
+    ] = False,
 ):
     return {
         "limit": limit,
@@ -126,6 +130,7 @@ def _listing_filters(
         "sha256": sha256,
         "verdict": verdict,
         "overturned_only": overturned_only,
+        "reviewed_only": reviewed_only,
     }
 
 

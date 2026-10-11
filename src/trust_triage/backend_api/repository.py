@@ -58,7 +58,7 @@ def evaluate_emergency_evidence(
 
         if source == "speakeasy":
             obs_level = 1
-            act_str = "동적 관측—결과 미확인"
+            act_str = "동적 관측"
         elif source == "capa":
             obs_level = 2
             act_str = "정적 규칙 일치"
@@ -212,6 +212,7 @@ class AnalysisRepository(Protocol):
         batch_id: str | None = None,
         verdict: str | None = None,
         overturned_only: bool = False,
+        reviewed_only: bool = False,
         sort: str = "newest",
     ) -> tuple[list[AnalysisRecord], int]: ...
     def get_batch(self, batch_id: str) -> list[AnalysisRecord] | None: ...
@@ -335,11 +336,8 @@ class PostgresAnalysisRepository:
                 else:
                     today_unknown += c["cnt"]
 
-            today_total = today_em + today_deep + today_fp + today_unknown + today_auto
-            # Note: AUTO doesn't cost budget, so maybe we only subtract manual reviews.
-            # But "과거 리뷰의 큐 정보가 없는 경우도 전체 완료량에서 조용히 빠지지 않도록"
-            # So today_total_manual = today_em + today_deep + today_fp + today_unknown
             today_total_manual = today_em + today_deep + today_fp + today_unknown
+            today_total_completed = today_total_manual + today_auto
 
             return {
                 "daily_budget": daily_budget,
@@ -347,7 +345,7 @@ class PostgresAnalysisRepository:
                 "deep_budget": deep_budget,
                 "fp_budget": fp_budget,
                 "is_unlimited": is_unlimited,
-                "today_completed_count": today_total_manual,
+                "today_completed_count": today_total_completed,
                 "today_completed_emergency": today_em,
                 "today_completed_deep": today_deep,
                 "today_completed_fp": today_fp,
@@ -412,7 +410,7 @@ class PostgresAnalysisRepository:
             emergency_reason = em_eval["emergency_reason"]
 
         is_auto = initial_verdict in ["AUTO_BENIGN", "AUTO_MALICIOUS"]
-        auto_reason = "자동 판정 기준 충족 (추가 수집 경로 없음)" if is_auto else ""
+        auto_reason = "자동 판정 기준 충족" if is_auto else ""
 
         is_deep = False
         deep_reasons = []
@@ -889,6 +887,7 @@ class PostgresAnalysisRepository:
         batch_id: str | None = None,
         verdict: str | None = None,
         overturned_only: bool = False,
+        reviewed_only: bool = False,
         sort: str = "newest",
     ) -> tuple[list[AnalysisRecord], int]:
         _limit(limit)
@@ -920,6 +919,8 @@ class PostgresAnalysisRepository:
                 "  )"
                 ")"
             )
+        elif reviewed_only:
+            conditions.append("analyst_final_verdict IS NOT NULL")
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         with self._connection() as connection:
             # One MVCC snapshot keeps count and page consistent under concurrent writes.

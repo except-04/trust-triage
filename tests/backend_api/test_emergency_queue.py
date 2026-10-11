@@ -246,7 +246,7 @@ def test_emergency_queue_logic():
     assert emergency[3]["priority_reason"] == "랜섬웨어 암호화"
     assert (
         emergency[3]["queue_reason"]
-        == "SPEAKEASY: 랜섬웨어 암호화 (동적 관측—결과 미확인)"
+        == "SPEAKEASY: 랜섬웨어 암호화 (동적 관측)"
     )
 
     assert emergency[3]["score_policy"] == "emergency-v1"
@@ -313,5 +313,5 @@ def test_real_normalized_result_format():
     assert emergency[0]["priority_reason"] == "랜섬웨어 암호화"
     assert (
         emergency[0]["queue_reason"]
-        == "SPEAKEASY: 랜섬웨어 암호화 (동적 관측—결과 미확인)"
+        == "SPEAKEASY: 랜섬웨어 암호화 (동적 관측)"
     )
