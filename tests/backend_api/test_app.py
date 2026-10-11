@@ -283,7 +283,7 @@ def test_review_preserves_system_verdict_and_detects_conflict(api):
     result = client.get(f"/analyses/{identity}").json()
     assert result["status"] == "FAILED"
     assert (
-        result["final_verdict"] == "UNCERTAIN"
+        result["final_verdict"] == "INCONCLUSIVE"
         and result["analyst_final_verdict"] == "BENIGN"
     )
     assert result["approval_status"] == "MODIFIED"

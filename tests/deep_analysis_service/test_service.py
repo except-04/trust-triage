@@ -30,16 +30,22 @@ def harness(tmp_path, monkeypatch):
     return ServiceHarness(tmp_path)
 
 
-def test_sufficient_static_completes_and_llm_runs_only_once(tmp_path):
+def test_sufficient_static_waits_for_dynamic_evidence_and_llm_runs_only_once(tmp_path):
     h = ServiceHarness(tmp_path, sufficient=True)
     result = h.service.start(h.request)
+    assert result.phase is DeepAnalysisPhase.WAITING_SPEAKEASY
+    assert result.checkpoint["static"]["assessment"]["sufficient"] is True
+    assert result.checkpoint["static"]["needs_speakeasy"] is True
+    assert h.llm.calls == 0
+    assert len(h.queue.sent) == 1
+    complete_worker(h.worker_repository, h.request)
+    result = h.service.resume(h.request.analysis_id)
     assert result.phase is DeepAnalysisPhase.COMPLETED
     assert result.result["final_verdict"] == "MALICIOUS"
-    assert result.result["executed_tiers"] == ["CAPA", "FLOSS"]
-    assert {item.source for item in h.llm.inputs[0]} == {"CAPA", "FLOSS"}
+    assert result.result["executed_tiers"] == ["CAPA", "FLOSS", "SPEAKEASY"]
+    assert {item.source for item in h.llm.inputs[0]} == {"CAPA", "FLOSS", "SPEAKEASY"}
     assert h.calls == (1, 1, 1, 1)
-    assert h.queue.sent == []
-    assert h.worker_repository.get(h.request.analysis_id) is None
+    assert h.worker_repository.get(h.request.analysis_id).status is JobStatus.COMPLETED
     stable = h.service.get(h.request.analysis_id)
     h.restart()
     assert h.service.start(h.request).result == result.result
@@ -51,6 +57,8 @@ def test_sufficient_static_completes_and_llm_runs_only_once(tmp_path):
 def test_large_legacy_checkpoint_get_deduplicates_terminal_evidence(tmp_path):
     h = ServiceHarness(tmp_path, sufficient=True)
     h.service.start(h.request)
+    complete_worker(h.worker_repository, h.request)
+    h.service.resume(h.request.analysis_id)
     row = h.repository.rows[h.request.analysis_id]
     checkpoint = detached(row.checkpoint)
     result = detached(row.result)
@@ -178,6 +186,8 @@ def test_static_archive_failure_preserves_tool_status_and_diagnostic(
 def test_large_legacy_static_result_is_compacted_without_mutating_checkpoint(tmp_path):
     h = ServiceHarness(tmp_path, sufficient=True)
     h.service.start(h.request)
+    complete_worker(h.worker_repository, h.request)
+    h.service.resume(h.request.analysis_id)
     row = h.repository.rows[h.request.analysis_id]
     checkpoint = detached(row.checkpoint)
     checkpoint["static"]["tool_results"]["CAPA"]["match_details"] = [
@@ -285,8 +295,11 @@ def test_transient_db_write_retries_reuse_computed_tools_and_llm(harness, operat
     h.capa.result = type(h.capa.result)("CAPA", sufficient=True)
     h.repository.failures[operation] = 2
     result = h.service.start(h.request)
+    assert result.phase is DeepAnalysisPhase.WAITING_SPEAKEASY
+    complete_worker(h.worker_repository, h.request)
+    result = h.service.resume(h.request.analysis_id)
     assert result.phase is DeepAnalysisPhase.COMPLETED
-    assert h.repository.calls[operation] == 3
+    assert h.repository.calls[operation] == (4 if operation == "save_checkpoint" else 3)
     assert h.calls == (1, 1, 1, 1)
 
 

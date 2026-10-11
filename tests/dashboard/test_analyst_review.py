@@ -59,17 +59,17 @@ def analysis(
 @pytest.mark.parametrize(
     "verdict,analyst,revision,expected",
     [
-        # 수정 전에는 시스템 초기 판정을 따른다
-        ("HIGH_RISK_UNCERTAIN", None, 0, "needs_review"),
+        # 완료된 최종 판정이 없는 이전 결과는 초기 경로로 보완한다
+        ("HIGH_RISK_UNCERTAIN", None, 0, "inconclusive"),
         ("AUTO_MALICIOUS", None, 0, "auto_malicious"),
         ("AUTO_BENIGN", None, 0, "auto_benign"),
         # 수정 후에는 분석가 판정을 따른다
         ("HIGH_RISK_UNCERTAIN", "MALICIOUS", 1, "auto_malicious"),
         ("AUTO_MALICIOUS", "BENIGN", 1, "auto_benign"),
         ("AUTO_BENIGN", "MALICIOUS", 2, "auto_malicious"),
-        # 보류(null) 저장은 Needs Review 로 간다
-        ("AUTO_BENIGN", None, 1, "needs_review"),
-        ("AUTO_MALICIOUS", None, 3, "needs_review"),
+        # 보류(null) 저장은 시스템 판정을 유지한다
+        ("AUTO_BENIGN", None, 1, "auto_benign"),
+        ("AUTO_MALICIOUS", None, 3, "auto_malicious"),
     ],
 )
 def test_group_follows_analyst_verdict_once_reviewed(
@@ -91,14 +91,14 @@ def test_group_counts_and_summary_move_with_the_review(app):
         analysis("A3", "AUTO_BENIGN", analyst=None, revision=1),
     ]
     groups = app.group_batch_analyses(analyses)
-    assert [a["analysis_id"] for a in groups["needs_review"]] == ["A3"]
+    assert groups["needs_review"] == []
     assert [a["analysis_id"] for a in groups["auto_malicious"]] == ["A1", "A2"]
-    assert groups["auto_benign"] == []
+    assert [a["analysis_id"] for a in groups["auto_benign"]] == ["A3"]
 
     summary = app.derive_batch_summary(analyses)
-    assert summary["high_risk_uncertain"] == 1
+    assert summary["high_risk_uncertain"] == 0
     assert summary["auto_malicious"] == 2
-    assert summary["auto_benign"] == 0
+    assert summary["auto_benign"] == 1
 
 
 # ---- 표: 수정 여부 열과 NOT RUN -----------------------------------------------
@@ -108,10 +108,10 @@ def test_group_counts_and_summary_move_with_the_review(app):
     "item,expected",
     [
         (analysis(), "-"),
-        (analysis(analyst="MALICIOUS", revision=1), "수정됨 · 원래 AUTO BENIGN"),
+        (analysis(analyst="MALICIOUS", revision=1), "수정됨 · 원래 BENIGN"),
         (
             analysis("A1", "HIGH_RISK_UNCERTAIN", analyst="BENIGN", revision=1),
-            "수정됨 · 원래 NEEDS REVIEW",
+            "수정됨 · 원래 INCONCLUSIVE",
         ),
         # 저장은 했지만 원래 그룹으로 돌아온 경우
         (analysis(analyst="BENIGN", revision=2), "확인됨"),
@@ -121,14 +121,16 @@ def test_review_mark(app, item, expected):
     assert app.review_mark(item) == expected
 
 
-@pytest.mark.parametrize("group_key", ["needs_review", "auto_malicious", "auto_benign"])
+@pytest.mark.parametrize(
+    "group_key", ["needs_review", "inconclusive", "auto_malicious", "auto_benign"]
+)
 def test_every_review_group_table_has_the_review_column(app, group_key):
     rows = app.batch_group_rows(group_key, [analysis(analyst="MALICIOUS", revision=1)])
     assert app.REVIEW_COLUMN in rows[0]
-    assert rows[0][app.REVIEW_COLUMN] == "수정됨 · 원래 AUTO BENIGN"
+    assert rows[0][app.REVIEW_COLUMN] == "수정됨 · 원래 BENIGN"
 
 
-def test_auto_verdict_moved_to_needs_review_shows_not_run(app):
+def test_held_auto_verdict_keeps_deep_analysis_not_run(app):
     moved = analysis(verdict="AUTO_BENIGN", analyst=None, revision=1)
     assert app.deep_analysis_status_text(moved) == "NOT RUN"
     # 원래 검토 대상은 기존처럼 도구 상태를 요약한다
@@ -144,21 +146,21 @@ def test_auto_verdict_moved_to_needs_review_shows_not_run(app):
 @pytest.mark.parametrize(
     "item,label,badge_text",
     [
-        (analysis(), "Final Verdict", "정상 (Benign)"),
+        (analysis(), "Final Verdict", "BENIGN"),
         (
             analysis(analyst="MALICIOUS", revision=1, approval="MODIFIED"),
             "Final Verdict · 수정됨",
-            "악성 (Malicious)",
+            "MALICIOUS",
         ),
         (
             analysis(analyst="BENIGN", revision=1, approval="APPROVED"),
             "Final Verdict · 분석가 승인",
-            "정상 (Benign)",
+            "BENIGN",
         ),
         (
             analysis(analyst=None, revision=1, approval="PENDING"),
-            "Final Verdict · 분석가 보류",
-            "판정 보류 (Uncertain)",
+            "Final Verdict · REVIEW PENDING",
+            "BENIGN",
         ),
     ],
 )
@@ -251,11 +253,18 @@ def test_history_rows_chain_previous_group_and_show_newest_first(app):
             "analyst_notes": "n",
             "reviewed_at": None,
         },
+        {
+            "analyst_final_verdict": "BENIGN",
+            "reviewer_id": "c",
+            "analyst_notes": "",
+            "reviewed_at": None,
+        },
     ]
     rows = app.review_history_rows(items, analysis(verdict="AUTO_BENIGN"))
     assert [row["Change"] for row in rows] == [
-        "AUTO MALICIOUS → NEEDS REVIEW",
-        "AUTO BENIGN → AUTO MALICIOUS",
+        "BENIGN → BENIGN",
+        "MALICIOUS → REVIEW PENDING",
+        "BENIGN → MALICIOUS",
     ]
 
 

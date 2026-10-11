@@ -279,7 +279,7 @@ def test_fresh_initial_result_must_record_triggered_signals(harness):
     record = harness.processor.resume(accepted.analysis_id)
     assert record.status == "FAILED" and record.initial_result is None
     assert record.error["code"] == "INITIAL_RESULT_INVALID"
-    assert record.final_assessment["final_verdict"] == "UNCERTAIN"
+    assert record.final_assessment["final_verdict"] == "INCONCLUSIVE"
 
 
 def test_legacy_initial_checkpoint_can_resume_without_inventing_signals(harness):
@@ -327,7 +327,7 @@ def test_high_risk_waits_for_deep_then_finalizes_for_review(harness):
     finished = next_step(harness, accepted.analysis_id)
     assert finished.deep_result["status"] == "COMPLETED"
     assert finished.status == "COMPLETED" and finished.phase == "DONE"
-    assert finished.final_assessment["final_verdict"] == "UNCERTAIN"
+    assert finished.final_assessment["final_verdict"] == "INCONCLUSIVE"
     assert finished.final_assessment["disposition"] == "MANUAL_REVIEW"
     assert finished.final_assessment["requires_human_review"] is True
     assert len(harness.initial.calls) == 1 and len(harness.deep.calls) == 2
@@ -353,7 +353,7 @@ def test_deep_failure_is_not_malicious_evidence(harness):
     finished = complete(harness, accepted.analysis_id)
     assert finished.status == "FAILED"
     assert finished.error["code"] == "DEEP_ANALYSIS_FAILED"
-    assert finished.final_assessment["final_verdict"] == "UNCERTAIN"
+    assert finished.final_assessment["final_verdict"] == "INCONCLUSIVE"
     assert finished.final_assessment["disposition"] == "ANALYSIS_FAILED"
     assert finished.final_assessment["requires_human_review"] is True
 
@@ -567,7 +567,7 @@ def test_retry_budget_terminates_repeated_component_failure(harness):
             assert row.error["retry_count"] == attempt + 1
     assert row.status == "FAILED" and row.attempt_count == harness.config.max_attempts
     assert row.error["code"] == "TEMPORARY_MODEL_FAILURE"
-    assert row.final_assessment["final_verdict"] == "UNCERTAIN"
+    assert row.final_assessment["final_verdict"] == "INCONCLUSIVE"
     assert harness.repository.pending_ids() == []
 
 
@@ -946,7 +946,7 @@ def test_missing_stored_sample_yields_failure_for_review(harness):
     harness.storage.delete(stored_sample(harness.service.get(accepted.analysis_id)))
     finished = harness.processor.resume(accepted.analysis_id)
     assert finished.status == "FAILED" and finished.error["code"] == "FILE_NOT_FOUND"
-    assert finished.final_assessment["final_verdict"] == "UNCERTAIN"
+    assert finished.final_assessment["final_verdict"] == "INCONCLUSIVE"
     assert harness.initial.calls == []
 
 
@@ -1209,7 +1209,7 @@ def test_artifact_storage_failure_is_recorded_without_a_malicious_verdict(
             seconds=harness.config.retry_delay_seconds + 1,
         )
     assert row.status == "FAILED" and row.error["code"] == code
-    assert row.final_assessment["final_verdict"] == "UNCERTAIN"
+    assert row.final_assessment["final_verdict"] == "INCONCLUSIVE"
     assert harness.repository.list_artifacts(accepted.analysis_id) == []
 
 
