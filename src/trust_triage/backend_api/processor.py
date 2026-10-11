@@ -79,12 +79,12 @@ class _Lease:
 
 
 def assess(record: AnalysisRecord, *, failure: bool = False) -> dict[str, Any]:
-    """최종 자동판정 규칙은 팀 확정 전이므로 심층분석 대상은 전문가에게 보낸다."""
+    """초기 자동 판정 또는 근거에 기반한 심층 판정을 검토 상태와 함께 저장한다."""
     initial = record.initial_result or {}
     verdict = initial.get("initial_verdict")
     if failure:
         value = FinalAssessment(
-            final_verdict="UNCERTAIN",
+            final_verdict="INCONCLUSIVE",
             disposition="ANALYSIS_FAILED",
             requires_human_review=True,
             reason="분석을 완료하지 못했습니다. 실패를 악성 증거로 사용하지 않고 전문가 검토로 넘깁니다.",
@@ -104,11 +104,39 @@ def assess(record: AnalysisRecord, *, failure: bool = False) -> dict[str, Any]:
             reason="초기 JRR이 악성 경보를 제안했습니다. 전문가가 증거를 확인해야 합니다.",
         )
     else:
+        deep = record.deep_result or {}
+        result = deep.get("result") or {}
+        llm = result.get("llm_interpretation") or {}
+        deep_verdict = (
+            result.get("final_verdict")
+            if deep.get("status") == "COMPLETED" and llm.get("status") == "SUCCESS"
+            else None
+        )
+        reasons = {
+            "MALICIOUS": "심층 분석의 관찰 근거와 LLM 해석이 악성 판정을 제안합니다. 전문가 검토가 필요합니다.",
+            "SUSPICIOUS": "악성 정황이 있으나 실행 근거가 부족하거나 증거가 상충하여 추가 검토가 필요합니다.",
+            "BENIGN": "심층 분석 근거와 LLM 해석이 정상 판정을 제안합니다. 전문가 검토가 필요합니다.",
+        }
+        reason = reasons.get(deep_verdict)
+        if reason is None:
+            deep_verdict = "INCONCLUSIVE"
+            if verdict == "AUTO_BENIGN" and initial.get("xai_status") == "FAILED":
+                reason = "초기 모델은 정상으로 분류했으나 XAI 설명을 확보하지 못하여 전문가 검토가 필요합니다."
+            elif llm.get("status") and llm["status"] != "SUCCESS":
+                reason = f"LLM 해석을 확보하지 못했습니다 ({llm['status']}). 확보된 근거를 전문가가 검토해야 합니다."
+            elif "BENIGN_EVIDENCE_INCOMPLETE_OR_CONFLICTING" in result.get(
+                "reason_codes", []
+            ):
+                reason = "정상 판정을 제안하는 해석이 있으나 분석 오류 또는 상충하는 근거가 남아 있어 판정을 보류합니다."
+            else:
+                reason = "확보된 근거로 악성 여부를 판단하기 어렵습니다. 추가 증거 또는 전문가 검토가 필요합니다."
         value = FinalAssessment(
-            final_verdict="UNCERTAIN",
-            disposition="MANUAL_REVIEW",
+            final_verdict=deep_verdict,
+            disposition=(
+                "ALERT_RECOMMENDED" if deep_verdict == "MALICIOUS" else "MANUAL_REVIEW"
+            ),
             requires_human_review=True,
-            reason="누적 증거와 LLM 해석을 전문가에게 제공합니다. 최종 자동 재판정 정책은 팀 합의 후 교체합니다.",
+            reason=reason,
         )
     return value.model_dump(mode="json")
 

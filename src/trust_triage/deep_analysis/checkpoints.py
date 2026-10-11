@@ -149,7 +149,12 @@ class StaticAnalysisCheckpoint:
             raise ValueError(
                 "Static checkpoint last tier or execution history is invalid"
             )
-        if self.needs_speakeasy == self.assessment.sufficient:
+        requires_dynamic_corroboration = (
+            "DYNAMIC_CORROBORATION_REQUIRED" in self.reason_codes
+        )
+        if self.needs_speakeasy != (
+            not self.assessment.sufficient or requires_dynamic_corroboration
+        ):
             raise ValueError("Checkpoint contradicts its evidence assessment")
         seen: set[str] = set()
         for item in self.evidence:
