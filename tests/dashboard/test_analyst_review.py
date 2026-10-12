@@ -596,3 +596,65 @@ def test_search_analyses_reviewed_only(monkeypatch):
     assert method == "GET"
     assert url.endswith("/analyses")
     assert kwargs["params"]["reviewed_only"] is True
+
+
+def test_format_deep_queue_item_preserves_evidence(app):
+    item = {
+        "analysis_id": "A1",
+        "filename": "malware.exe",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (정적 규칙 일치)",
+        "triggered_signals": ["UNCERTAIN_PROBABILITY"],
+        "calibrated_probability": 0.52,
+    }
+    formatted = app.format_deep_queue_item(item)
+    assert formatted["queue_name"] == "DEEP"
+    assert formatted["queue_reason"] == "CAPA: 데이터 파괴 (정적 규칙 일치)"
+    assert formatted["priority_reason"] == "확률 불확실성"
+    assert formatted["score_policy"] == "uncertainty-v2"
+    assert abs(formatted["priority_score"] - (1.0 - 2.0 * abs(0.52 - 0.5))) < 1e-6
+
+
+def test_sort_deep_queue_items_by_four_signals(app):
+    items = [
+        {
+            "analysis_id": "D1",
+            "score_policy": "difficulty-v2",
+            "priority_score": 10.0,
+            "created_at": "2026-10-12T10:00:00",
+        },
+        {
+            "analysis_id": "U1",
+            "score_policy": "uncertainty-v2",
+            "priority_score": 0.8,
+            "created_at": "2026-10-12T10:00:00",
+        },
+        {
+            "analysis_id": "U2",
+            "score_policy": "uncertainty-v2",
+            "priority_score": 0.95,
+            "created_at": "2026-10-12T10:00:00",
+        },
+        {
+            "analysis_id": "DIS1",
+            "score_policy": "disagreement-v2",
+            "priority_score": 0.4,
+            "created_at": "2026-10-12T10:00:00",
+        },
+        {
+            "analysis_id": "OOD1",
+            "score_policy": "ood-v2",
+            "priority_score": 0.3,
+            "created_at": "2026-10-12T10:00:00",
+        },
+        {
+            "analysis_id": "EX1",
+            "score_policy": "exception-v2",
+            "priority_score": 0.0,
+            "created_at": "2026-10-12T10:00:00",
+        },
+    ]
+    sorted_items = app.sort_deep_queue_items(items)
+    expected_order = ["U2", "U1", "DIS1", "OOD1", "D1", "EX1"]
+    assert [x["analysis_id"] for x in sorted_items] == expected_order
+    assert [x["rank"] for x in sorted_items] == [1, 2, 3, 4, 5, 6]

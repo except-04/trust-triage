@@ -286,6 +286,7 @@ def test_review_preserves_system_verdict_and_detects_conflict(api):
         result["final_verdict"] == "UNCERTAIN"
         and result["analyst_final_verdict"] == "BENIGN"
     )
+    assert result["approval_status"] == "MODIFIED"
     assert len(client.get(f"/analyses/{identity}/reviews").json()["items"]) == 1
     reviewed = client.get("/analyses", params={"reviewed_only": True}).json()
     assert reviewed["total_count"] == 1

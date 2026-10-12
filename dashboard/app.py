@@ -3908,33 +3908,86 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
                 st.error(f"상세 결과 로드 실패: {e}")
 
 
+DEEP_POLICY_RANK = {
+    "uncertainty-v2": 0,
+    "disagreement-v2": 1,
+    "ood-v2": 2,
+    "difficulty-v2": 3,
+    "exception-v2": 4,
+    "probability-v1": 5,
+}
+
+
 def format_deep_queue_item(item):
-    """심층 분석 탭의 항목은 4가지 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)로 일원화하여 표기한다."""
+    """심층 분석 탭의 항목은 4가지 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)로 일원화하여 표기하되,
+    기존 고위험 Evidence(CAPA, Speakeasy 등) 분류 이유는 그대로 유지한다."""
     it = dict(item)
     if it.get("queue_name") == "EMERGENCY":
         it["queue_name"] = "DEEP"
         signals = it.get("triggered_signals") or []
         if "UNCERTAIN_PROBABILITY" in signals:
             it["priority_reason"] = "확률 불확실성"
-            it["queue_reason"] = "JRR 확률 보류 구간"
             it["score_policy"] = "uncertainty-v2"
+            prob = it.get("calibrated_probability")
+            if prob is not None:
+                try:
+                    it["priority_score"] = 1.0 - 2.0 * abs(float(prob) - 0.5)
+                except (ValueError, TypeError):
+                    pass
         elif "DISAGREEMENT" in signals:
             it["priority_reason"] = "모델 불일치"
-            it["queue_reason"] = "모델 간 확률 차이 발생"
             it["score_policy"] = "disagreement-v2"
         elif "OOD" in signals:
             it["priority_reason"] = "분포 이탈"
-            it["queue_reason"] = "학습 분포에서 벗어남"
             it["score_policy"] = "ood-v2"
         elif "DIFFICULTY" in signals:
             it["priority_reason"] = "분석 난이도"
-            it["queue_reason"] = "PE 구조 경고 발생"
             it["score_policy"] = "difficulty-v2"
         else:
             it["priority_reason"] = "예외 처리"
-            it["queue_reason"] = "위험 신호 없는 불확실 파일"
             it["score_policy"] = "exception-v2"
+            it["priority_score"] = 0.0
+
+        # 분류 이유(queue_reason): 기존 고위험 Evidence(CAPA, Speakeasy 등)가 있으면 보존
+        if not it.get("queue_reason"):
+            if "UNCERTAIN_PROBABILITY" in signals:
+                it["queue_reason"] = "JRR 확률 보류 구간"
+            elif "DISAGREEMENT" in signals:
+                it["queue_reason"] = "모델 간 확률 차이 발생"
+            elif "OOD" in signals:
+                it["queue_reason"] = "학습 분포에서 벗어남"
+            elif "DIFFICULTY" in signals:
+                it["queue_reason"] = "PE 구조 경고 발생"
+            else:
+                it["queue_reason"] = "위험 신호 없는 불확실 파일"
     return it
+
+
+def sort_deep_queue_items(items):
+    """통합된 DEEP 목록을 실제 4대 신호 우선순위 및 신호 강도 기준으로 재정렬한다."""
+    def sort_key(it):
+        policy = it.get("score_policy", "")
+        p_rank = DEEP_POLICY_RANK.get(policy, 99)
+        try:
+            score = float(it.get("priority_score") or 0.0)
+        except (ValueError, TypeError):
+            score = 0.0
+        created_at = it.get("created_at")
+        created_ts = 0.0
+        if created_at is not None:
+            try:
+                if hasattr(created_at, "timestamp"):
+                    created_ts = created_at.timestamp()
+                elif isinstance(created_at, str):
+                    created_ts = datetime.fromisoformat(created_at).timestamp()
+            except Exception:
+                created_ts = 0.0
+        return (p_rank, -score, created_ts, str(it.get("analysis_id", "")))
+
+    sorted_items = sorted(items, key=sort_key)
+    for idx, item in enumerate(sorted_items, 1):
+        item["rank"] = idx
+    return sorted_items
 
 
 def render_analyst_priority_queue():
@@ -3978,9 +4031,9 @@ def render_analyst_priority_queue():
             recs_data.get("emergency_recommendations", [])
             + recs_data.get("deep_recommendations", [])
         )
-        deep_items = [format_deep_queue_item(it) for it in raw_deep_items]
-        for idx, item in enumerate(deep_items, 1):
-            item["rank"] = idx
+        deep_items = sort_deep_queue_items(
+            [format_deep_queue_item(it) for it in raw_deep_items]
+        )
         render_queue_table(
             "deep", "할당된 분석 대상", deep_items
         )
@@ -3989,9 +4042,9 @@ def render_analyst_priority_queue():
             + recs_data.get("deep_waiting", [])
         )
         if raw_deep_waiting:
-            deep_waiting = [format_deep_queue_item(it) for it in raw_deep_waiting]
-            for idx, item in enumerate(deep_waiting, 1):
-                item["rank"] = idx
+            deep_waiting = sort_deep_queue_items(
+                [format_deep_queue_item(it) for it in raw_deep_waiting]
+            )
             with st.expander("대기열"):
                 render_queue_table(
                     "deep", "대기열", deep_waiting, is_waiting=True
