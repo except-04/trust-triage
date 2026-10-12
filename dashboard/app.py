@@ -3928,12 +3928,6 @@ def format_deep_queue_item(item):
         if "UNCERTAIN_PROBABILITY" in signals:
             it["priority_reason"] = "확률 불확실성"
             it["score_policy"] = "uncertainty-v2"
-            prob = it.get("calibrated_probability")
-            if prob is not None:
-                try:
-                    it["priority_score"] = 1.0 - 2.0 * abs(float(prob) - 0.5)
-                except (ValueError, TypeError):
-                    pass
         elif "DISAGREEMENT" in signals:
             it["priority_reason"] = "모델 불일치"
             it["score_policy"] = "disagreement-v2"
@@ -3946,7 +3940,22 @@ def format_deep_queue_item(item):
         else:
             it["priority_reason"] = "예외 처리"
             it["score_policy"] = "exception-v2"
+
+        # 예외 정책(exception-v2)은 4대 위험 신호가 없으므로 deep_priority_score 여부와 무관하게 항상 점수 0.0 고정 (FIFO 보장)
+        if it["score_policy"] == "exception-v2":
             it["priority_score"] = 0.0
+        elif it.get("deep_priority_score") is not None:
+            try:
+                it["priority_score"] = float(it["deep_priority_score"])
+            except (ValueError, TypeError):
+                pass
+        elif it["score_policy"] == "uncertainty-v2":
+            prob = it.get("calibrated_probability")
+            if prob is not None:
+                try:
+                    it["priority_score"] = 1.0 - 2.0 * abs(float(prob) - 0.5)
+                except (ValueError, TypeError):
+                    pass
 
         # 분류 이유(queue_reason): 기존 고위험 Evidence(CAPA, Speakeasy 등)가 있으면 보존
         if not it.get("queue_reason"):
@@ -3979,7 +3988,7 @@ def sort_deep_queue_items(items):
                 if hasattr(created_at, "timestamp"):
                     created_ts = created_at.timestamp()
                 elif isinstance(created_at, str):
-                    created_ts = datetime.fromisoformat(created_at).timestamp()
+                    created_ts = datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp()
             except Exception:
                 created_ts = 0.0
         return (p_rank, -score, created_ts, str(it.get("analysis_id", "")))

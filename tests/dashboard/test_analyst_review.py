@@ -658,3 +658,140 @@ def test_sort_deep_queue_items_by_four_signals(app):
     expected_order = ["U2", "U1", "DIS1", "OOD1", "D1", "EX1"]
     assert [x["analysis_id"] for x in sorted_items] == expected_order
     assert [x["rank"] for x in sorted_items] == [1, 2, 3, 4, 5, 6]
+
+
+def test_format_deep_queue_item_uses_actual_risk_signal_score(app):
+    # EMERGENCY에서 DEEP으로 통합 시, 단순 악성 확률(0.85)이 아니라 실제 위험 신호 점수(0.35)가 반영되는지 검증
+    dis_item = {
+        "analysis_id": "DIS_EM",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (정적 규칙 일치)",
+        "triggered_signals": ["DISAGREEMENT"],
+        "calibrated_probability": 0.85,
+        "priority_score": 0.85,  # 백엔드가 EMERGENCY에 부여했던 악성 확률
+        "deep_priority_score": 0.35,  # 모델 불일치 실제 신호 강도
+    }
+    formatted = app.format_deep_queue_item(dis_item)
+    assert formatted["score_policy"] == "disagreement-v2"
+    assert formatted["priority_score"] == 0.35  # 악성 확률이 아닌 실제 불일치 점수
+
+    ood_item = {
+        "analysis_id": "OOD_EM",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "SPEAKEASY: 랜섬웨어 암호화 (동적 관측)",
+        "triggered_signals": ["OOD"],
+        "calibrated_probability": 0.90,
+        "priority_score": 0.90,
+        "deep_priority_score": 0.65,
+    }
+    formatted_ood = app.format_deep_queue_item(ood_item)
+    assert formatted_ood["score_policy"] == "ood-v2"
+    assert formatted_ood["priority_score"] == 0.65
+
+
+def test_sort_deep_queue_items_fifo_on_tie(app):
+    # 점수가 같을 때 파일 생성 시각 기준 오래된 파일 순(FIFO)으로 정렬되는지 검증
+    items = [
+        {
+            "analysis_id": "NEW",
+            "score_policy": "disagreement-v2",
+            "priority_score": 0.5,
+            "created_at": "2026-10-12T11:00:00Z",
+        },
+        {
+            "analysis_id": "OLD",
+            "score_policy": "disagreement-v2",
+            "priority_score": 0.5,
+            "created_at": "2026-10-12T09:00:00Z",
+        },
+    ]
+    sorted_items = app.sort_deep_queue_items(items)
+    assert [x["analysis_id"] for x in sorted_items] == ["OLD", "NEW"]
+    assert [x["rank"] for x in sorted_items] == [1, 2]
+
+
+def test_backend_output_to_frontend_conversion_regression(app):
+    """백엔드 산출값(AUTO_MALICIOUS, prob=0.99, triggered_signals=[], CAPA OBSERVED T1485)이
+    프론트엔드 format_deep_queue_item 변환 시 exception-v2 및 priority_score=0.0으로
+    올바르게 처리되는지 검증하는 회귀 테스트."""
+    from tests.backend_api.fake_repository import MemoryAnalysisRepository
+    from trust_triage.backend_api.repository import AnalysisRecord
+
+    repo = MemoryAnalysisRepository()
+    record = AnalysisRecord(
+        analysis_id="cand-auto-em",
+        sha256="4" * 64,
+        file_location="loc-em",
+        filename="wiper.exe",
+        size_bytes=2048,
+        initial_result={
+            "initial_verdict": "AUTO_MALICIOUS",
+            "prediction": {"calibrated_probability": 0.99},
+            "triggered_signals": [],
+            "risk_signals": {},
+        },
+        deep_result={
+            "evidence": [
+                {
+                    "source": "CAPA",
+                    "status": "OBSERVED",
+                    "attack_techniques": [
+                        {"technique_id": "T1485", "technique_name": "Data Destruction"}
+                    ],
+                }
+            ]
+        },
+        created_at="2026-10-12T10:00:00Z",
+    )
+    repo.rows["cand-auto-em"] = record
+    recs = repo.get_priority_recommendations()
+    em_cand = next(c for c in recs if c["analysis_id"] == "cand-auto-em")
+
+    # 1. 백엔드 산출값 검증
+    assert em_cand["queue_name"] == "EMERGENCY"
+    assert em_cand["score_policy"] == "emergency-v1"
+    assert em_cand["priority_score"] == 0.99
+    assert em_cand["deep_priority_score"] == 0.0  # 4대 위험 신호가 없으므로 0.0
+    assert "CAPA: 데이터 파괴" in em_cand["queue_reason"]
+
+    # 2. 프론트엔드 변환 검증 (EMERGENCY -> DEEP)
+    formatted = app.format_deep_queue_item(em_cand)
+    assert formatted["queue_name"] == "DEEP"
+    assert formatted["score_policy"] == "exception-v2"
+    assert formatted["priority_reason"] == "예외 처리"
+    assert formatted["priority_score"] == 0.0  # 0.99가 아닌 0.0이어야 함
+    assert formatted["queue_reason"] == em_cand["queue_reason"]  # 고위험 Evidence 보존
+
+
+def test_exception_items_fifo_ordering(app):
+    """예외 정책(exception-v2) 항목 간에는 악성 확률이나 이전 점수와 무관하게
+    생성 시각 기준 FIFO 정렬이 유지되는지 검증."""
+    # EX_OLD: 09:00 생성, 초기 확률 0.70
+    item_old = {
+        "analysis_id": "EX_OLD",
+        "queue_name": "DEEP",
+        "score_policy": "exception-v2",
+        "priority_reason": "예외 처리",
+        "priority_score": 0.0,
+        "calibrated_probability": 0.70,
+        "created_at": "2026-10-12T09:00:00Z",
+    }
+    # EX_NEW: 11:00 생성, EMERGENCY에서 변환된 항목 (초기 확률 0.99, deep_priority_score=0.99가 전달되더라도)
+    item_new_raw = {
+        "analysis_id": "EX_NEW",
+        "queue_name": "EMERGENCY",
+        "triggered_signals": [],
+        "calibrated_probability": 0.99,
+        "priority_score": 0.99,
+        "deep_priority_score": 0.99,
+        "queue_reason": "CAPA: 데이터 파괴 (정적 규칙 일치)",
+        "created_at": "2026-10-12T11:00:00Z",
+    }
+    item_new = app.format_deep_queue_item(item_new_raw)
+    assert item_new["score_policy"] == "exception-v2"
+    assert item_new["priority_score"] == 0.0
+
+    # 정렬 시 생성 시각이 빠른 EX_OLD가 1위, EX_NEW가 2위여야 함 (FIFO 보장)
+    sorted_items = app.sort_deep_queue_items([item_new, item_old])
+    assert [x["analysis_id"] for x in sorted_items] == ["EX_OLD", "EX_NEW"]
+    assert [x["rank"] for x in sorted_items] == [1, 2]

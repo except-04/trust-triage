@@ -629,6 +629,9 @@ class PriorityCandidate(APIModel):
     priority_score: float = Field(description="우선순위 점수")
     score_policy: str = Field(description="적용된 점수 정책 (예: probability-v1)")
     priority_reason: str = Field(description="우선순위 산정 사유")
+    deep_priority_score: float | None = Field(
+        default=None, description="심층 분석 4대 위험 신호 점수"
+    )
     impact_score: float | None = Field(
         default=None, description="치명도(지연되는 경우)"
     )

@@ -271,3 +271,8 @@ def test_auto_review_does_not_deduct_budget_and_no_waiting_restriction():
     assert len(res["deep_recommendations"]) == 1
     assert len(res["emergency_waiting"]) == 0
     assert len(res["deep_waiting"]) == 0
+    # 파일 생성 시각(created_at)이 제거되지 않고 유지되는지 확인
+    assert res["emergency_recommendations"][0]["created_at"] is not None
+    assert res["deep_recommendations"][0]["created_at"] is not None
+    # 심층 분석 위험 신호 점수(deep_priority_score)가 산출되어 전달되는지 확인 (위험 신호 부재 시 0.0)
+    assert res["emergency_recommendations"][0]["deep_priority_score"] == 0.0

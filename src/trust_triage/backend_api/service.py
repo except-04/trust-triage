@@ -68,7 +68,6 @@ class BackendService:
 
         # Separate into queues without budget restrictions
         for c in candidates:
-            c.pop("created_at", None)
             q_name = c.get("queue_name", "UNKNOWN")
             if q_name not in queues:
                 continue

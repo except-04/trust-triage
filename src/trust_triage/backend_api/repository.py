@@ -414,9 +414,9 @@ class PostgresAnalysisRepository:
 
         is_deep = False
         deep_reasons = []
-        deep_priority_score = prob_float
-        deep_score_policy = "probability-v1"
-        deep_priority_reason = "단순 악성 확률순"
+        deep_priority_score = 0.0
+        deep_score_policy = "exception-v2"
+        deep_priority_reason = "예외 처리"
         deep_queue_reason = ""
 
         raw_ood = float(risk_signals.get("ood_score", 0))
@@ -502,6 +502,7 @@ class PostgresAnalysisRepository:
             "score_policy": score_policy,
             "priority_reason": priority_reason,
             "selection_reason": selection_reason,
+            "deep_priority_score": deep_priority_score,
             "_emergency_level": emergency_level if emergency_level is not None else 99,
             "_emergency_obs_level": emergency_obs_level
             if emergency_level is not None
@@ -594,6 +595,7 @@ class PostgresAnalysisRepository:
                         "priority_score": q["priority_score"],
                         "score_policy": q["score_policy"],
                         "priority_reason": q["priority_reason"],
+                        "deep_priority_score": q.get("deep_priority_score"),
                         "selection_reason": q["selection_reason"],
                         "_emergency_level": q.get("_emergency_level", 99),
                         "_emergency_obs_level": q.get("_emergency_obs_level", 99),
