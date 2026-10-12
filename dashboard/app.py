@@ -3972,7 +3972,7 @@ def render_analyst_priority_queue():
 
     with tabs[0]:
         st.markdown(
-            "**대상**: 확률 불확실성, 모델 불일치(DISAGREEMENT), 분포 외(OOD), 분석 난이도 및 초기 불확실 의심 건"
+            "**대상**: 4대 위험 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)가 감지된 심층 분석 대상 건"
         )
         raw_deep_items = (
             recs_data.get("emergency_recommendations", [])
