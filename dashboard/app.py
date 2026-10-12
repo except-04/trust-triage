@@ -1,4 +1,5 @@
 import inspect
+import math
 import re
 import time
 from collections import Counter
@@ -3835,7 +3836,11 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     st.write(f"### {title} ({total_count}건)")
     if queue_name.lower() == "deep":
         st.markdown(
-            "**정렬 기준**: 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도. 같은 유형에서는 신호 강도순으로 정렬합니다."
+            "**정렬 기준**: 긴급 대응(위험도 → 관측 수준 → 악성 확률) → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 신호 미감지. 같은 유형 내에서는 신호 점수(긴급 대응은 악성 확률, 동점 시 등록순)로 정렬합니다."
+        )
+        st.caption(
+            "💡 **긴급 대응 순서**: 데이터 파괴·랜섬웨어(1등급) → 복구 방해·서비스 중단(2등급) → 관측 수준(동적 관측 우선) → 악성 확률 내림차순(동점 시 FIFO)\n\n"
+            "💡 **신호 미감지**: 4대 위험 신호는 없으나 시스템 오류 시 안전 격상(Fail-Closed), 분석가의 수동 보류, 레거시 건 등 자동 처리를 피하고 사람의 확인이 필요한 건입니다."
         )
 
     event = st.dataframe(
@@ -3909,21 +3914,23 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
 
 
 DEEP_POLICY_RANK = {
-    "uncertainty-v2": 0,
-    "disagreement-v2": 1,
-    "ood-v2": 2,
-    "difficulty-v2": 3,
-    "exception-v2": 4,
-    "probability-v1": 5,
+    "emergency-v1": 0,
+    "uncertainty-v2": 1,
+    "disagreement-v2": 2,
+    "ood-v2": 3,
+    "difficulty-v2": 4,
+    "exception-v2": 5,
+    "probability-v1": 6,
 }
 
 
 def format_deep_queue_item(item):
-    """심층 분석 탭의 항목은 4가지 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)로 일원화하여 표기하되,
+    """심층 분석 탭의 항목은 긴급 대응(EMERGENCY) 및 4대 위험 신호 체계로 표기하되,
     기존 고위험 Evidence(CAPA, Speakeasy 등) 분류 이유는 그대로 유지한다."""
     it = dict(item)
-    if it.get("queue_name") == "EMERGENCY":
+    if it.get("queue_name") == "EMERGENCY" or it.get("score_policy") == "emergency-v1":
         it["queue_name"] = "DEEP"
+        it["_is_emergency"] = True
         signals = it.get("triggered_signals") or []
         if "UNCERTAIN_PROBABILITY" in signals:
             it["priority_reason"] = "확률 불확실성"
@@ -3938,12 +3945,23 @@ def format_deep_queue_item(item):
             it["priority_reason"] = "분석 난이도"
             it["score_policy"] = "difficulty-v2"
         else:
-            it["priority_reason"] = "예외 처리"
-            it["score_policy"] = "exception-v2"
+            it["priority_reason"] = it.get("priority_reason") or "긴급 대응"
+            it["score_policy"] = "emergency-v1"
 
-        # 예외 정책(exception-v2)은 4대 위험 신호가 없으므로 deep_priority_score 여부와 무관하게 항상 점수 0.0 고정 (FIFO 보장)
+        # 점수 반영: 예외 정책(exception-v2)은 항상 0.0, 긴급 대응(emergency-v1)은 악성 확률 유지, 위험 신호는 deep_priority_score 우선
         if it["score_policy"] == "exception-v2":
             it["priority_score"] = 0.0
+        elif it["score_policy"] == "emergency-v1":
+            if it.get("priority_score") is not None:
+                try:
+                    it["priority_score"] = float(it["priority_score"])
+                except (ValueError, TypeError):
+                    it["priority_score"] = 1.0
+            elif it.get("calibrated_probability") is not None:
+                try:
+                    it["priority_score"] = float(it["calibrated_probability"])
+                except (ValueError, TypeError):
+                    it["priority_score"] = 1.0
         elif it.get("deep_priority_score") is not None:
             try:
                 it["priority_score"] = float(it["deep_priority_score"])
@@ -3968,13 +3986,34 @@ def format_deep_queue_item(item):
             elif "DIFFICULTY" in signals:
                 it["queue_reason"] = "PE 구조 경고 발생"
             else:
-                it["queue_reason"] = "위험 신호 없는 불확실 파일"
+                it["queue_reason"] = "고위험 행위 탐지 건"
+
+        # 긴급 대응 레벨 및 관측 레벨 (백엔드 제공값 우선, 누락 시 사유 기반 폴백 추론)
+        if it.get("emergency_level") is None:
+            reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+            if any(k in reason for k in ["데이터 파괴", "랜섬웨어", "T1485", "T1561", "T1486"]):
+                it["emergency_level"] = 1
+            elif any(k in reason for k in ["복구 방해", "서비스 중단", "T1490", "T1489"]):
+                it["emergency_level"] = 2
+
+        if it.get("emergency_obs_level") is None:
+            reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+            if "SPEAKEASY" in reason.upper() or "동적" in reason:
+                it["emergency_obs_level"] = 1
+            elif "CAPA" in reason.upper() or "정적" in reason:
+                it["emergency_obs_level"] = 2
     return it
 
 
 def sort_deep_queue_items(items):
-    """통합된 DEEP 목록을 실제 4대 신호 우선순위 및 신호 강도 기준으로 재정렬한다."""
+    """통합된 DEEP 목록을 긴급 대응(0순위 최상단, 위험도·관측수준·점수 순) 및 4대 신호 우선순위, 신호 강도 기준으로 재정렬한다."""
     def sort_key(it):
+        is_em = bool(
+            it.get("_is_emergency")
+            or it.get("score_policy") == "emergency-v1"
+            or it.get("queue_name") == "EMERGENCY"
+        )
+        em_tier = 0 if is_em else 1
         policy = it.get("score_policy", "")
         p_rank = DEEP_POLICY_RANK.get(policy, 99)
         try:
@@ -3991,7 +4030,56 @@ def sort_deep_queue_items(items):
                     created_ts = datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp()
             except Exception:
                 created_ts = 0.0
-        return (p_rank, -score, created_ts, str(it.get("analysis_id", "")))
+
+        if is_em:
+            em_level = it.get("emergency_level")
+            if em_level is None:
+                reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+                if any(k in reason for k in ["데이터 파괴", "랜섬웨어", "T1485", "T1561", "T1486"]):
+                    em_level = 1
+                elif any(k in reason for k in ["복구 방해", "서비스 중단", "T1490", "T1489"]):
+                    em_level = 2
+                else:
+                    em_level = 99
+            try:
+                em_level = int(em_level)
+            except (ValueError, TypeError):
+                em_level = 99
+
+            em_obs = it.get("emergency_obs_level")
+            if em_obs is None:
+                reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+                if "SPEAKEASY" in reason.upper() or "동적" in reason:
+                    em_obs = 1
+                elif "CAPA" in reason.upper() or "정적" in reason:
+                    em_obs = 2
+                else:
+                    em_obs = 99
+            try:
+                em_obs = int(em_obs)
+            except (ValueError, TypeError):
+                em_obs = 99
+
+            # 긴급 항목 악성 확률: format_deep_queue_item()이 priority_score를 위험 신호 점수로
+            # 변경할 수 있으므로, calibrated_probability를 직접 사용하여 정렬.
+            # 유효한 0.0~1.0 범위는 -prob로 내림차순 정렬하고, 누락되거나 유효하지 않은 항목은 뒤로 보냄(float('inf')).
+            prob_raw = it.get("calibrated_probability")
+            prob_val = None
+            if prob_raw is not None and prob_raw != "":
+                try:
+                    p = float(prob_raw)
+                    if not (math.isnan(p) or math.isinf(p) or p < 0.0 or p > 1.0):
+                        prob_val = p
+                except (ValueError, TypeError):
+                    prob_val = None
+
+            prob_key = -prob_val if prob_val is not None else float("inf")
+
+            # 긴급 항목 내 정렬: tier(0) -> 긴급위험도(1: 파괴/랜섬웨어, 2: 복구방해/서비스중단) -> 관측수준(1: 동적, 2: 정적) -> 악성확률(prob_key) -> FIFO(created_ts) -> analysis_id
+            return (em_tier, em_level, em_obs, prob_key, created_ts, str(it.get("analysis_id", "")))
+        else:
+            # 일반 심층 분석 정렬: tier(1) -> 4대 신호 순위(p_rank) -> 관측수준(0) -> 신호강도(-score) -> FIFO(created_ts) -> analysis_id
+            return (em_tier, p_rank, 0, -score, created_ts, str(it.get("analysis_id", "")))
 
     sorted_items = sorted(items, key=sort_key)
     for idx, item in enumerate(sorted_items, 1):
@@ -4034,7 +4122,7 @@ def render_analyst_priority_queue():
 
     with tabs[0]:
         st.markdown(
-            "**대상**: 4대 위험 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)가 감지된 심층 분석 대상 건"
+            "**대상**: 고위험 행위 증거(데이터 파괴/랜섬웨어 등) 및 4대 위험 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)가 감지되었거나, 안전 격상(Fail-Closed) 및 수동 보류된 심층 분석 대상 건"
         )
         raw_deep_items = (
             recs_data.get("emergency_recommendations", [])

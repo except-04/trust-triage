@@ -754,44 +754,373 @@ def test_backend_output_to_frontend_conversion_regression(app):
     assert em_cand["deep_priority_score"] == 0.0  # 4대 위험 신호가 없으므로 0.0
     assert "CAPA: 데이터 파괴" in em_cand["queue_reason"]
 
-    # 2. 프론트엔드 변환 검증 (EMERGENCY -> DEEP)
+    # 2. 프론트엔드 변환 검증 (EMERGENCY -> DEEP, 긴급 대응 최우선 정책 유지)
     formatted = app.format_deep_queue_item(em_cand)
     assert formatted["queue_name"] == "DEEP"
-    assert formatted["score_policy"] == "exception-v2"
-    assert formatted["priority_reason"] == "예외 처리"
-    assert formatted["priority_score"] == 0.0  # 0.99가 아닌 0.0이어야 함
+    assert formatted["score_policy"] == "emergency-v1"
+    assert formatted["priority_reason"] == em_cand["priority_reason"]
+    assert formatted["priority_score"] == 0.99
     assert formatted["queue_reason"] == em_cand["queue_reason"]  # 고위험 Evidence 보존
+
+    # 3. 정렬 시 일반 위험 신호(확률 불확실성 등)보다 긴급 대응이 최우선(0순위) 배치 검증
+    u_item = {
+        "analysis_id": "U_NON_EM",
+        "score_policy": "uncertainty-v2",
+        "priority_score": 0.95,
+        "created_at": "2026-10-12T08:00:00Z",
+    }
+    sorted_items = app.sort_deep_queue_items([u_item, formatted])
+    assert sorted_items[0]["analysis_id"] == "cand-auto-em"
+    assert sorted_items[1]["analysis_id"] == "U_NON_EM"
 
 
 def test_exception_items_fifo_ordering(app):
-    """예외 정책(exception-v2) 항목 간에는 악성 확률이나 이전 점수와 무관하게
-    생성 시각 기준 FIFO 정렬이 유지되는지 검증."""
-    # EX_OLD: 09:00 생성, 초기 확률 0.70
+    """예외 정책(exception-v2) 항목 간에는 생성 시각 기준 FIFO 정렬이 유지되는지 검증."""
+    # EX_OLD: 09:00 생성
     item_old = {
         "analysis_id": "EX_OLD",
         "queue_name": "DEEP",
         "score_policy": "exception-v2",
-        "priority_reason": "예외 처리",
+        "priority_reason": "신호 미감지",
         "priority_score": 0.0,
         "calibrated_probability": 0.70,
         "created_at": "2026-10-12T09:00:00Z",
     }
-    # EX_NEW: 11:00 생성, EMERGENCY에서 변환된 항목 (초기 확률 0.99, deep_priority_score=0.99가 전달되더라도)
-    item_new_raw = {
+    # EX_NEW: 11:00 생성
+    item_new = {
         "analysis_id": "EX_NEW",
-        "queue_name": "EMERGENCY",
-        "triggered_signals": [],
-        "calibrated_probability": 0.99,
-        "priority_score": 0.99,
-        "deep_priority_score": 0.99,
-        "queue_reason": "CAPA: 데이터 파괴 (정적 규칙 일치)",
+        "queue_name": "DEEP",
+        "score_policy": "exception-v2",
+        "priority_reason": "신호 미감지",
+        "priority_score": 0.0,
+        "calibrated_probability": 0.90,
         "created_at": "2026-10-12T11:00:00Z",
     }
-    item_new = app.format_deep_queue_item(item_new_raw)
-    assert item_new["score_policy"] == "exception-v2"
-    assert item_new["priority_score"] == 0.0
-
     # 정렬 시 생성 시각이 빠른 EX_OLD가 1위, EX_NEW가 2위여야 함 (FIFO 보장)
     sorted_items = app.sort_deep_queue_items([item_new, item_old])
     assert [x["analysis_id"] for x in sorted_items] == ["EX_OLD", "EX_NEW"]
     assert [x["rank"] for x in sorted_items] == [1, 2]
+
+
+def test_emergency_items_top_priority_over_all_risk_signals(app):
+    """긴급 대응 건(EMERGENCY)이 4대 일반 위험 신호 항목들보다 최우선(0순위)으로 정렬되는지 검증."""
+    em_item = {
+        "analysis_id": "EM1",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (정적 규칙 일치)",
+        "triggered_signals": [],
+        "calibrated_probability": 0.99,
+        "priority_score": 0.99,
+        "created_at": "2026-10-12T12:00:00Z",
+    }
+    em_formatted = app.format_deep_queue_item(em_item)
+
+    u_item = {
+        "analysis_id": "U1",
+        "score_policy": "uncertainty-v2",
+        "priority_score": 0.99,
+        "created_at": "2026-10-12T08:00:00Z",
+    }
+    dis_item = {
+        "analysis_id": "DIS1",
+        "score_policy": "disagreement-v2",
+        "priority_score": 0.50,
+        "created_at": "2026-10-12T08:00:00Z",
+    }
+    ex_item = {
+        "analysis_id": "EX1",
+        "score_policy": "exception-v2",
+        "priority_score": 0.0,
+        "created_at": "2026-10-12T08:00:00Z",
+    }
+
+    # U1, DIS1, EX1이 더 먼저 생성되었더라도 긴급 건(EM1)이 최상단(1위)에 위치해야 함
+    sorted_items = app.sort_deep_queue_items([ex_item, dis_item, u_item, em_formatted])
+    assert [x["analysis_id"] for x in sorted_items] == ["EM1", "U1", "DIS1", "EX1"]
+    assert [x["rank"] for x in sorted_items] == [1, 2, 3, 4]
+
+
+def test_emergency_items_severity_level_ordering(app):
+    """긴급 항목 간 위험도(emergency_level) 정렬 검증:
+    데이터 파괴(T1485, 레벨 1, 확률 0.70)가 서비스 중단(T1489, 레벨 2, 확률 0.99)보다
+    악성 확률이 낮더라도 우선순위가 높아야 한다."""
+    t1485_item = {
+        "analysis_id": "EM_DESTRUCT_T1485",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": 0.70,
+        "priority_score": 0.70,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+    t1489_item = {
+        "analysis_id": "EM_STOP_T1489",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 서비스 중단 (T1489)",
+        "emergency_level": 2,
+        "emergency_obs_level": 2,
+        "calibrated_probability": 0.99,
+        "priority_score": 0.99,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+
+    # 1. format_deep_queue_item 후 정렬 검증
+    formatted_1485 = app.format_deep_queue_item(t1485_item)
+    formatted_1489 = app.format_deep_queue_item(t1489_item)
+    sorted_items = app.sort_deep_queue_items([formatted_1489, formatted_1485])
+
+    assert sorted_items[0]["analysis_id"] == "EM_DESTRUCT_T1485"
+    assert sorted_items[1]["analysis_id"] == "EM_STOP_T1489"
+    assert [x["rank"] for x in sorted_items] == [1, 2]
+
+    # 2. emergency_level이 누락된 raw item이라도 queue_reason 기반 폴백 추론으로 순서 유지
+    raw_1485 = {
+        "analysis_id": "RAW_T1485",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "priority_score": 0.70,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+    raw_1489 = {
+        "analysis_id": "RAW_T1489",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 서비스 중단 (T1489)",
+        "priority_score": 0.99,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+    sorted_raw = app.sort_deep_queue_items([raw_1489, raw_1485])
+    assert sorted_raw[0]["analysis_id"] == "RAW_T1485"
+    assert sorted_raw[1]["analysis_id"] == "RAW_T1489"
+
+
+def test_emergency_items_observation_level_ordering(app):
+    """긴급 항목 간 동일 위험도일 때 관측 수준(emergency_obs_level) 정렬 검증:
+    Speakeasy 동적 관측(obs_level 1, 확률 0.70)이 CAPA 정적 규칙(obs_level 2, 확률 0.99)보다
+    악성 확률이 낮더라도 우선순위가 높아야 한다."""
+    dynamic_item = {
+        "analysis_id": "EM_SPEAKEASY_DYN",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "SPEAKEASY: 랜섬웨어 암호화 (T1486)",
+        "emergency_level": 1,
+        "emergency_obs_level": 1,
+        "calibrated_probability": 0.70,
+        "priority_score": 0.70,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+    static_item = {
+        "analysis_id": "EM_CAPA_STATIC",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 랜섬웨어 암호화 (T1486)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": 0.99,
+        "priority_score": 0.99,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+
+    sorted_items = app.sort_deep_queue_items([static_item, dynamic_item])
+    assert sorted_items[0]["analysis_id"] == "EM_SPEAKEASY_DYN"
+    assert sorted_items[1]["analysis_id"] == "EM_CAPA_STATIC"
+
+
+def test_emergency_end_to_end_severity_ordering(app):
+    """백엔드 레포지토리부터 프론트엔드 포맷 및 정렬까지 End-to-End 검증:
+    T1485(레벨 1, prob=0.70) vs T1489(레벨 2, prob=0.99) 조합에서
+    백엔드 추천과 프론트엔드 심층 분석 큐 정렬 모두 T1485가 1위를 유지해야 함."""
+    from tests.backend_api.fake_repository import MemoryAnalysisRepository
+    from trust_triage.backend_api.repository import AnalysisRecord
+
+    repo = MemoryAnalysisRepository()
+    # T1489 (서비스 중단, 위험도 2, 높은 악성 확률 0.99)
+    repo.rows["cand-t1489"] = AnalysisRecord(
+        analysis_id="cand-t1489",
+        sha256="8" * 64,
+        file_location="loc-8",
+        filename="service_stop.exe",
+        size_bytes=1024,
+        initial_result={
+            "initial_verdict": "AUTO_MALICIOUS",
+            "prediction": {"calibrated_probability": 0.99},
+            "triggered_signals": [],
+            "risk_signals": {},
+        },
+        deep_result={
+            "evidence": [
+                {
+                    "source": "CAPA",
+                    "status": "OBSERVED",
+                    "attack_techniques": [
+                        {"technique_id": "T1489", "technique_name": "Service Stop"}
+                    ],
+                }
+            ]
+        },
+        created_at="2026-10-12T10:00:00Z",
+    )
+    # T1485 (데이터 파괴, 위험도 1, 상대적으로 낮은 악성 확률 0.70)
+    repo.rows["cand-t1485"] = AnalysisRecord(
+        analysis_id="cand-t1485",
+        sha256="5" * 64,
+        file_location="loc-5",
+        filename="data_destruct.exe",
+        size_bytes=1024,
+        initial_result={
+            "initial_verdict": "AUTO_MALICIOUS",
+            "prediction": {"calibrated_probability": 0.70},
+            "triggered_signals": [],
+            "risk_signals": {},
+        },
+        deep_result={
+            "evidence": [
+                {
+                    "source": "CAPA",
+                    "status": "OBSERVED",
+                    "attack_techniques": [
+                        {"technique_id": "T1485", "technique_name": "Data Destruction"}
+                    ],
+                }
+            ]
+        },
+        created_at="2026-10-12T10:00:00Z",
+    )
+
+    # 1. 백엔드 추천 목록 정렬 검증
+    recs = repo.get_priority_recommendations()
+    em_recs = [c for c in recs if c["queue_name"] == "EMERGENCY"]
+    assert em_recs[0]["analysis_id"] == "cand-t1485"
+    assert em_recs[0]["emergency_level"] == 1
+    assert em_recs[1]["analysis_id"] == "cand-t1489"
+    assert em_recs[1]["emergency_level"] == 2
+
+    # 2. 프론트엔드 포맷 및 DEEP 큐 정렬 검증
+    formatted_items = [app.format_deep_queue_item(c) for c in em_recs]
+    sorted_frontend = app.sort_deep_queue_items(formatted_items)
+    assert sorted_frontend[0]["analysis_id"] == "cand-t1485"
+    assert sorted_frontend[1]["analysis_id"] == "cand-t1489"
+    assert sorted_frontend[0]["rank"] == 1
+    assert sorted_frontend[1]["rank"] == 2
+
+
+def test_emergency_items_with_different_risk_signals_sorted_by_calibrated_probability(app):
+    """같은 위험도·관측 수준에서 서로 다른 위험 신호가 있더라도,
+    format_deep_queue_item에 의해 priority_score가 신호 점수로 바뀌었을 때
+    sort_deep_queue_items는 악성 확률(calibrated_probability) 내림차순으로 정렬하는지 검증."""
+    # Item A: 불일치 신호(deep_priority_score=0.90), 악성 확률 0.70
+    item_a = {
+        "analysis_id": "EM_DISAGREE_LOW_PROB",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "SPEAKEASY: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 1,
+        "triggered_signals": ["DISAGREEMENT"],
+        "calibrated_probability": 0.70,
+        "priority_score": 0.70,
+        "deep_priority_score": 0.90,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+    # Item B: 불확실성 신호(deep_priority_score=0.10), 악성 확률 0.95
+    item_b = {
+        "analysis_id": "EM_UNCERTAIN_HIGH_PROB",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "SPEAKEASY: 랜섬웨어 암호화 (T1486)",
+        "emergency_level": 1,
+        "emergency_obs_level": 1,
+        "triggered_signals": ["UNCERTAIN_PROBABILITY"],
+        "calibrated_probability": 0.95,
+        "priority_score": 0.95,
+        "deep_priority_score": 0.10,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+
+    formatted_a = app.format_deep_queue_item(item_a)
+    formatted_b = app.format_deep_queue_item(item_b)
+
+    # format 후 priority_score는 각각 0.90과 0.10으로 위험 신호 점수가 반영됨
+    assert formatted_a["priority_score"] == 0.90
+    assert formatted_b["priority_score"] == 0.10
+
+    # 하지만 긴급 항목 정렬 시에는 신호 점수가 아니라 calibrated_probability(0.95 > 0.70)를 기준으로 Item B가 1위여야 함
+    sorted_items = app.sort_deep_queue_items([formatted_a, formatted_b])
+    assert sorted_items[0]["analysis_id"] == "EM_UNCERTAIN_HIGH_PROB"
+    assert sorted_items[1]["analysis_id"] == "EM_DISAGREE_LOW_PROB"
+    assert sorted_items[0]["rank"] == 1
+    assert sorted_items[1]["rank"] == 2
+
+
+def test_emergency_items_fifo_on_calibrated_probability_tie(app):
+    """같은 위험도·관측 수준·악성 확률일 때 created_at 오름차순(FIFO) 및 analysis_id 순서 고정 검증."""
+    item_old = {
+        "analysis_id": "EM_TIE_OLD",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": 0.85,
+        "created_at": "2026-10-12T08:00:00Z",
+    }
+    item_new = {
+        "analysis_id": "EM_TIE_NEW",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": 0.85,
+        "created_at": "2026-10-12T12:00:00Z",
+    }
+    # 같은 시각 동점 시 analysis_id 알파벳 순 (A1 vs B1)
+    item_id_a = {
+        "analysis_id": "EM_TIE_A1",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": 0.85,
+        "created_at": "2026-10-12T12:00:00Z",
+    }
+
+    sorted_items = app.sort_deep_queue_items([item_new, item_id_a, item_old])
+    # 08:00(OLD)이 1위, 12:00 동점 중에는 ID 순으로 EM_TIE_A1이 2위, EM_TIE_NEW가 3위
+    assert [x["analysis_id"] for x in sorted_items] == ["EM_TIE_OLD", "EM_TIE_A1", "EM_TIE_NEW"]
+    assert [x["rank"] for x in sorted_items] == [1, 2, 3]
+
+
+def test_emergency_items_missing_or_invalid_probability_sorted_to_back(app):
+    """악성 확률이 누락되거나 유효하지 않은 항목은 같은 위험도·관측 수준에서 뒤로 가는지 검증."""
+    item_valid = {
+        "analysis_id": "EM_VALID_PROB",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": 0.50,
+        "created_at": "2026-10-12T10:00:00Z",
+    }
+    item_missing = {
+        "analysis_id": "EM_MISSING_PROB",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": None,
+        "created_at": "2026-10-12T09:00:00Z",
+    }
+    item_invalid = {
+        "analysis_id": "EM_INVALID_PROB",
+        "queue_name": "EMERGENCY",
+        "queue_reason": "CAPA: 데이터 파괴 (T1485)",
+        "emergency_level": 1,
+        "emergency_obs_level": 2,
+        "calibrated_probability": "not_a_number",
+        "created_at": "2026-10-12T09:00:00Z",
+    }
+
+    sorted_items = app.sort_deep_queue_items([item_missing, item_invalid, item_valid])
+    assert sorted_items[0]["analysis_id"] == "EM_VALID_PROB"
+    # 확률 누락/유효하지 않은 항목들은 뒤로 밀려남
+    assert {sorted_items[1]["analysis_id"], sorted_items[2]["analysis_id"]} == {
+        "EM_MISSING_PROB",
+        "EM_INVALID_PROB",
+    }
+
+

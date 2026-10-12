@@ -637,6 +637,12 @@ class PriorityCandidate(APIModel):
     )
     impact_reason: str | None = Field(default=None, description="치명도 산출 근거")
     selection_reason: str = Field(description="상위 선정 근거")
+    emergency_level: int | None = Field(
+        default=None, description="긴급 대응 기법 치명도 레벨 (1: 파괴/랜섬웨어, 2: 복구방해/서비스중단)"
+    )
+    emergency_obs_level: int | None = Field(
+        default=None, description="긴급 대응 관측 확실성 레벨 (1: Speakeasy 동적, 2: CAPA 정적)"
+    )
     initial_verdict: InitialVerdict | None = None
     triggered_signals: TriggeredSignals | None = None
     review_status: str | None = Field(default=None, description="검토 상태")

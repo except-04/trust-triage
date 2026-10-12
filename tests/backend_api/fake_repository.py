@@ -184,7 +184,7 @@ class MemoryAnalysisRepository:
         deep_reasons = []
         deep_priority_score = 0.0
         deep_score_policy = "exception-v2"
-        deep_priority_reason = "예외 처리"
+        deep_priority_reason = "신호 미감지"
         deep_queue_reason = ""
 
         raw_ood = float(risk_signals.get("ood_score", 0))
@@ -231,7 +231,7 @@ class MemoryAnalysisRepository:
             is_deep = True
             deep_priority_score = 0.0
             deep_score_policy = "exception-v2"
-            deep_priority_reason = "예외 처리"
+            deep_priority_reason = "신호 미감지"
             deep_queue_reason = "위험 신호 없는 불확실 파일"
 
         queue_name = "UNKNOWN"
@@ -271,6 +271,10 @@ class MemoryAnalysisRepository:
             "priority_reason": priority_reason,
             "selection_reason": selection_reason,
             "deep_priority_score": deep_priority_score,
+            "emergency_level": emergency_level,
+            "emergency_obs_level": emergency_obs_level
+            if emergency_level is not None
+            else None,
             "_emergency_level": emergency_level if emergency_level is not None else 99,
             "_emergency_obs_level": emergency_obs_level
             if emergency_level is not None
@@ -375,6 +379,8 @@ class MemoryAnalysisRepository:
                     "priority_reason": q["priority_reason"],
                     "deep_priority_score": q.get("deep_priority_score"),
                     "selection_reason": q["selection_reason"],
+                    "emergency_level": q.get("emergency_level"),
+                    "emergency_obs_level": q.get("emergency_obs_level"),
                     "_emergency_level": q.get("_emergency_level", 99),
                     "_emergency_obs_level": q.get("_emergency_obs_level", 99),
                     "initial_verdict": record.initial_result.get("initial_verdict"),
