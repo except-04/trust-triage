@@ -588,6 +588,7 @@ Return BENIGN only with positive benign evidence and adequate analysis coverage,
 not merely absent detections.
 Do not invent observations, evidence IDs, or ATT&CK technique IDs. Use only
 the evidence supplied in the request.
+Write the "summary" field in Korean, preserving technical identifiers.
 Return ONLY one JSON object with exactly these fields:
 {
   "verdict": "BENIGN" | "MALICIOUS" | "SUSPICIOUS" | "UNKNOWN",

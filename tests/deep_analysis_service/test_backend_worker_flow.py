@@ -16,16 +16,16 @@ from uuid import uuid4
 import boto3
 import psycopg
 import pytest
-from backend_api.fake_repository import MemoryAnalysisRepository
-from backend_api.test_service_processor import (
+from fastapi.testclient import TestClient
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
+from tests.backend_api.fake_repository import MemoryAnalysisRepository
+from tests.backend_api.test_service_processor import (
     FakeInitial,
     harmless_pe_header,
     initial_result,
 )
-from backend_api.test_storage import FakeS3
-from fastapi.testclient import TestClient
-from psycopg import sql
-from psycopg.conninfo import make_conninfo
+from tests.backend_api.test_storage import FakeS3
 from tests.speakeasy_worker.fakes import MemoryRepository
 
 from trust_triage.backend_api import runtime as backend_runtime
@@ -334,7 +334,9 @@ def test_http_request_dispatches_worker_and_resumes_after_restart(
     final = h.client.get(f"/analyses/{identity}").json()
     deep = h.client.get(f"/analyses/{identity}/deep-analysis").json()
     assert final["status"] == "COMPLETED"
-    assert final["final_assessment"]["disposition"] == "MANUAL_REVIEW"
+    assert final["final_assessment"]["final_verdict"] == "MALICIOUS"
+    assert final["final_assessment"]["disposition"] == "ALERT_RECOMMENDED"
+    assert final["final_assessment"]["requires_human_review"] is True
     assert deep["deep_analysis_status"]["speakeasy"] == "COMPLETED"
     assert deep["speakeasy"]["behavior"]["api_calls"] == [
         {"api_name": "CreateRemoteThread"}
@@ -424,7 +426,7 @@ def test_worker_failure_reaches_backend_without_becoming_malicious(connected):
     final = h.client.get(f"/analyses/{identity}").json()
     deep = h.client.get(f"/analyses/{identity}/deep-analysis").json()
     assert final["status"] == "FAILED"
-    assert final["final_assessment"]["final_verdict"] == "UNCERTAIN"
+    assert final["final_assessment"]["final_verdict"] == "INCONCLUSIVE"
     assert final["final_assessment"]["disposition"] == "ANALYSIS_FAILED"
     assert deep["speakeasy"]["tool_status"] == "TIMEOUT"
     assert deep["speakeasy"]["behavior"]["api_calls"]
