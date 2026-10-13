@@ -273,30 +273,19 @@ class DeepAnalysisOrchestrator:
             AnalysisTier.FLOSS if floss_status == "SUCCESS" else AnalysisTier.CAPA
         )
         assessment = self.config.evidence_policy.assess(evidence)
-        llm_config = getattr(self.llm_interpreter, "config", None)
-        requires_dynamic_corroboration = (
-            self.llm_interpreter is not None
-            and getattr(llm_config, "is_configured", True)
-        )
-        needs_speakeasy = not assessment.sufficient or requires_dynamic_corroboration
         if assessment.sufficient:
             reason_codes.extend(assessment.reason_codes)
         else:
             if capa_status != "SUCCESS":
                 reason_codes.append(f"CAPA_{capa_status}")
             reason_codes.extend(assessment.reason_codes)
-        if requires_dynamic_corroboration:
-            # Static sufficiency cannot supply the dynamic evidence required
-            # by the final MALICIOUS verdict policy.
-            reason_codes.append("DYNAMIC_CORROBORATION_REQUIRED")
-        if needs_speakeasy:
             reason_codes.append("ADVANCE_TO_SPEAKEASY")
         return StaticAnalysisCheckpoint(
             sha256=sample_sha256 or _result_sha256(capa_result),
             initial_route=route,
             initial_verdict=verdict,
             config_fingerprint=self.config.fingerprint(),
-            needs_speakeasy=needs_speakeasy,
+            needs_speakeasy=not assessment.sufficient,
             last_tier=static_last_tier,
             assessment=assessment,
             executed_tiers=tuple(executed_tiers),

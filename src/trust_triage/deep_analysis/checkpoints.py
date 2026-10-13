@@ -149,6 +149,7 @@ class StaticAnalysisCheckpoint:
             raise ValueError(
                 "Static checkpoint last tier or execution history is invalid"
             )
+        # Preserve in-flight checkpoints created by the earlier dynamic requirement.
         requires_dynamic_corroboration = (
             "DYNAMIC_CORROBORATION_REQUIRED" in self.reason_codes
         )
