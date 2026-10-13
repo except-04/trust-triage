@@ -192,3 +192,87 @@ def test_pending_review_lifecycle():
     # 최초 완료량 증가 검증
     budget_final = repo.get_budget_config()
     assert budget_final["today_completed_count"] == completed_count_init + 1
+
+
+def test_auto_review_does_not_deduct_budget_and_no_waiting_restriction():
+    repo = MemoryAnalysisRepository()
+    repo.set_daily_budget(2)
+
+    now_seoul = repo.now.astimezone(ZoneInfo("Asia/Seoul"))
+    # DEEP 검토 1건 완료 -> completed 1, remaining 1
+    repo.reviews["rev_deep"] = {
+        "analysis_id": "test-deep-done",
+        "review_status": "COMPLETED",
+        "review_queue": "DEEP",
+        "reviewed_at": now_seoul.isoformat(),
+    }
+    b1 = repo.get_budget_config()
+    assert b1["today_completed_count"] == 1
+    assert b1["remaining_budget"] == 1
+
+    # AUTO 검토 1건 완료 -> completed 2, remaining 1 (AUTO는 예산을 차감하지 않음)
+    repo.reviews["rev_auto"] = {
+        "analysis_id": "test-auto-done",
+        "review_status": "COMPLETED",
+        "review_queue": "AUTO",
+        "reviewed_at": now_seoul.isoformat(),
+    }
+    b2 = repo.get_budget_config()
+    assert b2["today_completed_count"] == 2
+    assert b2["remaining_budget"] == 1
+
+    # 후보 2건 추가
+    repo.rows["cand-em"] = AnalysisRecord(
+        analysis_id="cand-em",
+        sha256="2" * 64,
+        file_location="loc-em",
+        filename="em.exe",
+        size_bytes=100,
+        initial_result={
+            "prediction": {"calibrated_probability": 0.99},
+            "initial_verdict": "HIGH_RISK_UNCERTAIN",
+        },
+        deep_result={
+            "evidence": [
+                {
+                    "source": "capa",
+                    "status": "OBSERVED",
+                    "attack_techniques": [
+                        {"technique_id": "T1485", "technique_name": "Data Destruction"}
+                    ],
+                }
+            ]
+        },
+        created_at="2026-10-04T00:00:00+00:00",
+    )
+    repo.rows["cand-deep"] = AnalysisRecord(
+        analysis_id="cand-deep",
+        sha256="3" * 64,
+        file_location="loc-deep",
+        filename="deep.exe",
+        size_bytes=100,
+        initial_result={
+            "prediction": {"calibrated_probability": 0.75},
+            "initial_verdict": "HIGH_RISK_UNCERTAIN",
+        },
+        created_at="2026-10-04T00:00:00+00:00",
+    )
+
+    from pathlib import Path
+    from trust_triage.backend_api.config import BackendConfig
+    from trust_triage.backend_api.service import BackendService
+    from trust_triage.backend_api.storage import LocalSampleStorage
+
+    svc = BackendService(repo, LocalSampleStorage(Path(".")), BackendConfig())
+    res = svc.get_priority_recommendations()
+
+    # 예산 제한이 없으므로 대기열(waiting)로 밀리지 않고 모두 recommendations에 할당
+    assert len(res["emergency_recommendations"]) == 1
+    assert len(res["deep_recommendations"]) == 1
+    assert len(res["emergency_waiting"]) == 0
+    assert len(res["deep_waiting"]) == 0
+    # 파일 생성 시각(created_at)이 제거되지 않고 유지되는지 확인
+    assert res["emergency_recommendations"][0]["created_at"] is not None
+    assert res["deep_recommendations"][0]["created_at"] is not None
+    # 심층 분석 위험 신호 점수(deep_priority_score)가 산출되어 전달되는지 확인 (위험 신호 부재 시 0.0)
+    assert res["emergency_recommendations"][0]["deep_priority_score"] == 0.0

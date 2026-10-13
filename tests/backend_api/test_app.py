@@ -288,6 +288,9 @@ def test_review_preserves_system_verdict_and_detects_conflict(api):
     )
     assert result["approval_status"] == "MODIFIED"
     assert len(client.get(f"/analyses/{identity}/reviews").json()["items"]) == 1
+    reviewed = client.get("/analyses", params={"reviewed_only": True}).json()
+    assert reviewed["total_count"] == 1
+    assert reviewed["analyses"][0]["analysis_id"] == identity
 
 
 def test_openapi_has_uploads_contract_and_error_models(api):
