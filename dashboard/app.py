@@ -3909,7 +3909,7 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     st.write(f"### {title} ({total_count}건)")
     if queue_name.lower() == "deep":
         st.markdown(
-            "**정렬 기준**: 긴급 대응(위험도 → 관측 수준 → 악성 확률) → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 신호 미감지. 같은 유형 내에서는 신호 점수(긴급 대응은 악성 확률, 동점 시 등록순)로 정렬합니다."
+            "**정렬 기준**: 긴급 대응(위험도 → 관측 수준 → 악성 확률) → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 신호 미감지. 확률 불확실성 그룹은 악성 확률 내림차순, 나머지 일반 그룹은 신호 점수 내림차순으로 정렬하며, 동점이면 등록순입니다."
         )
         st.caption(
             "💡 **긴급 대응 순서**: 데이터 파괴·랜섬웨어(1등급) → 복구 방해·서비스 중단(2등급) → 관측 수준(동적 관측 우선) → 악성 확률 내림차순(동점 시 FIFO)\n\n"
@@ -4151,8 +4151,17 @@ def sort_deep_queue_items(items):
             # 긴급 항목 내 정렬: tier(0) -> 긴급위험도(1: 파괴/랜섬웨어, 2: 복구방해/서비스중단) -> 관측수준(1: 동적, 2: 정적) -> 악성확률(prob_key) -> FIFO(created_ts) -> analysis_id
             return (em_tier, em_level, em_obs, prob_key, created_ts, str(it.get("analysis_id", "")))
         else:
-            # 일반 심층 분석 정렬: tier(1) -> 4대 신호 순위(p_rank) -> 관측수준(0) -> 신호강도(-score) -> FIFO(created_ts) -> analysis_id
-            return (em_tier, p_rank, 0, -score, created_ts, str(it.get("analysis_id", "")))
+            # 확률 불확실성은 악성 확률, 나머지 일반 그룹은 신호 강도로 정렬한다.
+            score_key = -score
+            if policy == "uncertainty-v2":
+                score_key = float("inf")
+                try:
+                    probability = float(it.get("calibrated_probability"))
+                    if math.isfinite(probability) and 0.0 <= probability <= 1.0:
+                        score_key = -probability
+                except (ValueError, TypeError):
+                    pass
+            return (em_tier, p_rank, 0, score_key, created_ts, str(it.get("analysis_id", "")))
 
     sorted_items = sorted(items, key=sort_key)
     for idx, item in enumerate(sorted_items, 1):

@@ -668,12 +668,14 @@ def test_sort_deep_queue_items_by_four_signals(app):
             "analysis_id": "U1",
             "score_policy": "uncertainty-v2",
             "priority_score": 0.8,
+            "calibrated_probability": 0.6,
             "created_at": "2026-10-12T10:00:00",
         },
         {
             "analysis_id": "U2",
             "score_policy": "uncertainty-v2",
             "priority_score": 0.95,
+            "calibrated_probability": 0.525,
             "created_at": "2026-10-12T10:00:00",
         },
         {
@@ -696,7 +698,7 @@ def test_sort_deep_queue_items_by_four_signals(app):
         },
     ]
     sorted_items = app.sort_deep_queue_items(items)
-    expected_order = ["U2", "U1", "DIS1", "OOD1", "D1", "EX1"]
+    expected_order = ["U1", "U2", "DIS1", "OOD1", "D1", "EX1"]
     assert [x["analysis_id"] for x in sorted_items] == expected_order
     assert [x["rank"] for x in sorted_items] == [1, 2, 3, 4, 5, 6]
 
@@ -728,6 +730,33 @@ def test_format_deep_queue_item_uses_actual_risk_signal_score(app):
     formatted_ood = app.format_deep_queue_item(ood_item)
     assert formatted_ood["score_policy"] == "ood-v2"
     assert formatted_ood["priority_score"] == 0.65
+
+
+def test_uncertainty_sort_probability_then_fifo_with_invalid_values_last(app):
+    items = [
+        {
+            "analysis_id": name,
+            "score_policy": "uncertainty-v2",
+            "priority_score": 1.0 - 2.0 * abs(probability - 0.5)
+            if isinstance(probability, float) and 0 <= probability <= 1 else 0.0,
+            "calibrated_probability": probability,
+            "created_at": f"2026-10-13T{hour:02d}:00:00+00:00",
+        }
+        for name, probability, hour in [
+            ("low", 0.7784, 0),
+            ("middle", 0.8416, 0),
+            ("high-new", 0.8525, 2),
+            ("high-old", 0.8525, 1),
+            ("missing", None, 3),
+            ("nan", float("nan"), 4),
+            ("invalid", 1.1, 5),
+        ]
+    ]
+    result = app.sort_deep_queue_items(items)
+    assert [item["analysis_id"] for item in result] == [
+        "high-old", "high-new", "middle", "low", "missing", "nan", "invalid",
+    ]
+    assert [item["rank"] for item in result] == list(range(1, 8))
 
 
 def test_sort_deep_queue_items_fifo_on_tie(app):
