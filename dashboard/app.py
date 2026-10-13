@@ -1,4 +1,5 @@
 import inspect
+import math
 import re
 import time
 from collections import Counter
@@ -1485,7 +1486,7 @@ def render_result_detail(analysis, target=st):
             f'<div class="route-detail-value">{escape(analysis.get("queue_name") or "-")}</div>'
             '<div class="summary-label">검토 유형</div>'
             f'<div class="route-detail-value">{escape(analysis.get("priority_reason") or "-")}</div>'
-            '<div class="summary-label">검토 이유</div>'
+            '<div class="summary-label">분류 이유</div>'
             f'<div class="route-detail-value">{escape(analysis.get("queue_reason") or "-")}</div>'
             "</div>"
         )
@@ -3795,9 +3796,9 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     current_page = st.session_state[page_key]
     offset = current_page * limit
 
-    # If it's the RETRAIN queue, it's already server-side paginated before calling this function,
+    # If it's the RETRAIN or COMPLETED queue, it's already server-side paginated before calling this function,
     # so we don't slice it. Otherwise we slice the items.
-    if queue_name.lower() == "retrain":
+    if queue_name.lower() in ("retrain", "completed"):
         page_items = items
     else:
         page_items = items[offset : offset + limit]
@@ -3814,19 +3815,19 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         "filename": "파일명",
         "sha256": "SHA-256",
         "initial_verdict": "모델 판정 결과",
-        "priority_reason": "검토 유형",
         "calibrated_probability_display": "악성 확률",
-        "queue_reason": "검토 이유",
+        "queue_reason": "분류 이유",
         "review_status": "검토 상태",
     }
 
     if queue_name.lower() == "auto":
         # 역순 넘버링: 가장 밑(오래된 파일)이 1번, 가장 위(최신 파일)가 N번
         df["rank"] = list(range(len(df), 0, -1))
-        display_cols.pop("priority_reason", None)
 
     if queue_name.lower() == "retrain":
         display_cols["selection_reason"] = "판정 변경 내역"
+    elif queue_name.lower() == "completed":
+        display_cols["selection_reason"] = "판정 결과 내역"
 
     df_display = df[[c for c in display_cols if c in df.columns]].rename(
         columns=display_cols
@@ -3835,7 +3836,11 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     st.write(f"### {title} ({total_count}건)")
     if queue_name.lower() == "deep":
         st.markdown(
-            "**정렬 기준**: 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도. 같은 유형에서는 신호 강도순으로 정렬합니다."
+            "**정렬 기준**: 긴급 대응(위험도 → 관측 수준 → 악성 확률) → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 신호 미감지. 같은 유형 내에서는 신호 점수(긴급 대응은 악성 확률, 동점 시 등록순)로 정렬합니다."
+        )
+        st.caption(
+            "💡 **긴급 대응 순서**: 데이터 파괴·랜섬웨어(1등급) → 복구 방해·서비스 중단(2등급) → 관측 수준(동적 관측 우선) → 악성 확률 내림차순(동점 시 FIFO)\n\n"
+            "💡 **신호 미감지**: 4대 위험 신호는 없으나 시스템 오류 시 안전 격상(Fail-Closed), 분석가의 수동 보류, 레거시 건 등 자동 처리를 피하고 사람의 확인이 필요한 건입니다."
         )
 
     event = st.dataframe(
@@ -3847,8 +3852,8 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         key=f"df_{queue_name}_{title}",
     )
 
-    # Client-side pagination controls (only if we have more than one page and it's not RETRAIN)
-    if queue_name.lower() != "retrain" and total_pages > 1:
+    # Client-side pagination controls (only if we have more than one page and it's not RETRAIN or COMPLETED)
+    if queue_name.lower() not in ("retrain", "completed") and total_pages > 1:
         cols = st.columns([1, 2, 1])
         with cols[0]:
             if st.button(
@@ -3908,79 +3913,196 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
                 st.error(f"상세 결과 로드 실패: {e}")
 
 
+DEEP_POLICY_RANK = {
+    "emergency-v1": 0,
+    "uncertainty-v2": 1,
+    "disagreement-v2": 2,
+    "ood-v2": 3,
+    "difficulty-v2": 4,
+    "exception-v2": 5,
+    "probability-v1": 6,
+}
+
+
+def format_deep_queue_item(item):
+    """심층 분석 탭의 항목은 긴급 대응(EMERGENCY) 및 4대 위험 신호 체계로 표기하되,
+    기존 고위험 Evidence(CAPA, Speakeasy 등) 분류 이유는 그대로 유지한다."""
+    it = dict(item)
+    if it.get("queue_name") == "EMERGENCY" or it.get("score_policy") == "emergency-v1":
+        it["queue_name"] = "DEEP"
+        it["_is_emergency"] = True
+        signals = it.get("triggered_signals") or []
+        if "UNCERTAIN_PROBABILITY" in signals:
+            it["priority_reason"] = "확률 불확실성"
+            it["score_policy"] = "uncertainty-v2"
+        elif "DISAGREEMENT" in signals:
+            it["priority_reason"] = "모델 불일치"
+            it["score_policy"] = "disagreement-v2"
+        elif "OOD" in signals:
+            it["priority_reason"] = "분포 이탈"
+            it["score_policy"] = "ood-v2"
+        elif "DIFFICULTY" in signals:
+            it["priority_reason"] = "분석 난이도"
+            it["score_policy"] = "difficulty-v2"
+        else:
+            it["priority_reason"] = it.get("priority_reason") or "긴급 대응"
+            it["score_policy"] = "emergency-v1"
+
+        # 점수 반영: 예외 정책(exception-v2)은 항상 0.0, 긴급 대응(emergency-v1)은 악성 확률 유지, 위험 신호는 deep_priority_score 우선
+        if it["score_policy"] == "exception-v2":
+            it["priority_score"] = 0.0
+        elif it["score_policy"] == "emergency-v1":
+            if it.get("priority_score") is not None:
+                try:
+                    it["priority_score"] = float(it["priority_score"])
+                except (ValueError, TypeError):
+                    it["priority_score"] = 1.0
+            elif it.get("calibrated_probability") is not None:
+                try:
+                    it["priority_score"] = float(it["calibrated_probability"])
+                except (ValueError, TypeError):
+                    it["priority_score"] = 1.0
+        elif it.get("deep_priority_score") is not None:
+            try:
+                it["priority_score"] = float(it["deep_priority_score"])
+            except (ValueError, TypeError):
+                pass
+        elif it["score_policy"] == "uncertainty-v2":
+            prob = it.get("calibrated_probability")
+            if prob is not None:
+                try:
+                    it["priority_score"] = 1.0 - 2.0 * abs(float(prob) - 0.5)
+                except (ValueError, TypeError):
+                    pass
+
+        # 분류 이유(queue_reason): 기존 고위험 Evidence(CAPA, Speakeasy 등)가 있으면 보존
+        if not it.get("queue_reason"):
+            if "UNCERTAIN_PROBABILITY" in signals:
+                it["queue_reason"] = "JRR 확률 보류 구간"
+            elif "DISAGREEMENT" in signals:
+                it["queue_reason"] = "모델 간 확률 차이 발생"
+            elif "OOD" in signals:
+                it["queue_reason"] = "학습 분포에서 벗어남"
+            elif "DIFFICULTY" in signals:
+                it["queue_reason"] = "PE 구조 경고 발생"
+            else:
+                it["queue_reason"] = "고위험 행위 탐지 건"
+
+        # 긴급 대응 레벨 및 관측 레벨 (백엔드 제공값 우선, 누락 시 사유 기반 폴백 추론)
+        if it.get("emergency_level") is None:
+            reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+            if any(k in reason for k in ["데이터 파괴", "랜섬웨어", "T1485", "T1561", "T1486"]):
+                it["emergency_level"] = 1
+            elif any(k in reason for k in ["복구 방해", "서비스 중단", "T1490", "T1489"]):
+                it["emergency_level"] = 2
+
+        if it.get("emergency_obs_level") is None:
+            reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+            if "SPEAKEASY" in reason.upper() or "동적" in reason:
+                it["emergency_obs_level"] = 1
+            elif "CAPA" in reason.upper() or "정적" in reason:
+                it["emergency_obs_level"] = 2
+    return it
+
+
+def sort_deep_queue_items(items):
+    """통합된 DEEP 목록을 긴급 대응(0순위 최상단, 위험도·관측수준·점수 순) 및 4대 신호 우선순위, 신호 강도 기준으로 재정렬한다."""
+    def sort_key(it):
+        is_em = bool(
+            it.get("_is_emergency")
+            or it.get("score_policy") == "emergency-v1"
+            or it.get("queue_name") == "EMERGENCY"
+        )
+        em_tier = 0 if is_em else 1
+        policy = it.get("score_policy", "")
+        p_rank = DEEP_POLICY_RANK.get(policy, 99)
+        try:
+            score = float(it.get("priority_score") or 0.0)
+        except (ValueError, TypeError):
+            score = 0.0
+        created_at = it.get("created_at")
+        created_ts = 0.0
+        if created_at is not None:
+            try:
+                if hasattr(created_at, "timestamp"):
+                    created_ts = created_at.timestamp()
+                elif isinstance(created_at, str):
+                    created_ts = datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                created_ts = 0.0
+
+        if is_em:
+            em_level = it.get("emergency_level")
+            if em_level is None:
+                reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+                if any(k in reason for k in ["데이터 파괴", "랜섬웨어", "T1485", "T1561", "T1486"]):
+                    em_level = 1
+                elif any(k in reason for k in ["복구 방해", "서비스 중단", "T1490", "T1489"]):
+                    em_level = 2
+                else:
+                    em_level = 99
+            try:
+                em_level = int(em_level)
+            except (ValueError, TypeError):
+                em_level = 99
+
+            em_obs = it.get("emergency_obs_level")
+            if em_obs is None:
+                reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+                if "SPEAKEASY" in reason.upper() or "동적" in reason:
+                    em_obs = 1
+                elif "CAPA" in reason.upper() or "정적" in reason:
+                    em_obs = 2
+                else:
+                    em_obs = 99
+            try:
+                em_obs = int(em_obs)
+            except (ValueError, TypeError):
+                em_obs = 99
+
+            # 긴급 항목 악성 확률: format_deep_queue_item()이 priority_score를 위험 신호 점수로
+            # 변경할 수 있으므로, calibrated_probability를 직접 사용하여 정렬.
+            # 유효한 0.0~1.0 범위는 -prob로 내림차순 정렬하고, 누락되거나 유효하지 않은 항목은 뒤로 보냄(float('inf')).
+            prob_raw = it.get("calibrated_probability")
+            prob_val = None
+            if prob_raw is not None and prob_raw != "":
+                try:
+                    p = float(prob_raw)
+                    if not (math.isnan(p) or math.isinf(p) or p < 0.0 or p > 1.0):
+                        prob_val = p
+                except (ValueError, TypeError):
+                    prob_val = None
+
+            prob_key = -prob_val if prob_val is not None else float("inf")
+
+            # 긴급 항목 내 정렬: tier(0) -> 긴급위험도(1: 파괴/랜섬웨어, 2: 복구방해/서비스중단) -> 관측수준(1: 동적, 2: 정적) -> 악성확률(prob_key) -> FIFO(created_ts) -> analysis_id
+            return (em_tier, em_level, em_obs, prob_key, created_ts, str(it.get("analysis_id", "")))
+        else:
+            # 일반 심층 분석 정렬: tier(1) -> 4대 신호 순위(p_rank) -> 관측수준(0) -> 신호강도(-score) -> FIFO(created_ts) -> analysis_id
+            return (em_tier, p_rank, 0, -score, created_ts, str(it.get("analysis_id", "")))
+
+    sorted_items = sorted(items, key=sort_key)
+    for idx, item in enumerate(sorted_items, 1):
+        item["rank"] = idx
+    return sorted_items
+
+
 def render_analyst_priority_queue():
     import api_client
     import streamlit as st
 
     st.markdown("---")
-    st.subheader("분석가 큐 기반 업무 할당 (Analyst Queues)")
+    st.subheader("분석 이력")
 
-    # 1. 예산 조회 및 설정
-    col1, col2 = st.columns([1, 1])
+    # 1. 오늘 검토 완료 건수 조회
     try:
         budget_data = api_client.get_analyst_budget()
-        current_budget = budget_data.get("daily_budget", 0)
-        current_emergency = budget_data.get("emergency_budget", 0)
-        current_deep = budget_data.get("deep_budget", 0)
-        current_fp = 0
-        is_unlimited = budget_data.get("is_unlimited", False)
-
         today_completed = budget_data.get("today_completed_count", 0)
-        remaining = budget_data.get("remaining_budget", 0)
     except api_client.ApiError as e:
-        st.error(f"예산 설정 조회 실패: {e.message}")
+        st.error(f"분석 이력 조회 실패: {e.message}")
         return
 
-    with col1:
-        if is_unlimited:
-            st.metric("오늘 검토 완료", f"{today_completed}")
-            st.write("예산을 고려하지 않습니다.")
-        else:
-            st.metric("오늘 검토 완료", f"{today_completed} / {current_budget}")
-            st.write(f"남은 예산: {remaining}")
-    with col2:
-        with st.expander("예산 설정"):
-            new_unlimited = st.checkbox("예산 무제한 (제한 없음)", value=is_unlimited)
-            new_budget = st.number_input(
-                "전체 일일 검토 한도",
-                min_value=0,
-                value=current_budget,
-                step=1,
-                disabled=new_unlimited,
-            )
-            new_em = st.number_input(
-                "긴급 대응 큐 할당량",
-                min_value=0,
-                value=current_emergency,
-                step=1,
-                disabled=new_unlimited,
-            )
-            new_deep = st.number_input(
-                "심층 분석 큐 할당량",
-                min_value=0,
-                value=current_deep,
-                step=1,
-                disabled=new_unlimited,
-            )
-            new_fp = 0
-
-            if st.button("예산 업데이트"):
-                if not new_unlimited and (new_em + new_deep + new_fp > new_budget):
-                    st.error("각 큐의 할당량 합이 전체 예산을 초과할 수 없습니다.")
-                else:
-                    try:
-                        # Need to add is_unlimited to set_analyst_budget in api_client
-                        api_client.set_analyst_budget(
-                            new_budget,
-                            new_em,
-                            new_deep,
-                            new_fp,
-                            is_unlimited=new_unlimited,
-                        )
-                        st.success("예산이 업데이트되었습니다.")
-                        st.rerun()
-                    except api_client.ApiError as e:
-                        st.error(f"예산 설정 실패: {e.message}")
+    st.metric("오늘 검토 완료", f"{today_completed}")
 
     # 2. 추천 목록 조회
     try:
@@ -3989,60 +4111,47 @@ def render_analyst_priority_queue():
         st.error(f"추천 목록 조회 실패: {e.message}")
         return
 
-    if is_unlimited:
-        em_label = "긴급 대응 (EMERGENCY) - 무제한"
-        deep_label = "심층 분석 (DEEP) - 무제한"
-    else:
-        em_label = (
-            f"긴급 대응 (EMERGENCY) - 잔여 {budget_data.get('remaining_emergency', 0)}"
-        )
-        deep_label = f"심층 분석 (DEEP) - 잔여 {budget_data.get('remaining_deep', 0)}"
-
     tab_labels = [
-        em_label,
-        deep_label,
+        "심층 분석 (DEEP)",
         "자동 처리 (AUTO)",
         "재학습 데이터 (RETRAIN)",
+        "검토 완료 (COMPLETED)",
         "오류 항목 (ERROR)",
     ]
     tabs = st.tabs(tab_labels)
 
     with tabs[0]:
         st.markdown(
-            "**대상**: 악성 의심/판정 파일 중 **데이터 파괴, 랜섬웨어 암호화 등 고위험 행위** 관련 정적·동적 증거가 확인된 건"
+            "**대상**: 고위험 행위 증거(데이터 파괴/랜섬웨어 등) 및 4대 위험 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)가 감지되었거나, 안전 격상(Fail-Closed) 및 수동 보류된 심층 분석 대상 건"
+        )
+        raw_deep_items = (
+            recs_data.get("emergency_recommendations", [])
+            + recs_data.get("deep_recommendations", [])
+        )
+        deep_items = sort_deep_queue_items(
+            [format_deep_queue_item(it) for it in raw_deep_items]
         )
         render_queue_table(
-            "emergency",
-            "할당된 분석 대상",
-            recs_data.get("emergency_recommendations", []),
+            "deep", "할당된 분석 대상", deep_items
         )
-        if recs_data.get("emergency_waiting"):
-            with st.expander("예산 초과 대기열"):
+        raw_deep_waiting = (
+            recs_data.get("emergency_waiting", [])
+            + recs_data.get("deep_waiting", [])
+        )
+        if raw_deep_waiting:
+            deep_waiting = sort_deep_queue_items(
+                [format_deep_queue_item(it) for it in raw_deep_waiting]
+            )
+            with st.expander("대기열"):
                 render_queue_table(
-                    "emergency",
-                    "대기열",
-                    recs_data.get("emergency_waiting", []),
-                    is_waiting=True,
+                    "deep", "대기열", deep_waiting, is_waiting=True
                 )
 
     with tabs[1]:
-        st.markdown(
-            "**대상**: 모델 불일치(DISAGREEMENT), 분포 외(OOD) 및 초기 불확실 의심 건"
-        )
-        render_queue_table(
-            "deep", "할당된 분석 대상", recs_data.get("deep_recommendations", [])
-        )
-        if recs_data.get("deep_waiting"):
-            with st.expander("예산 초과 대기열"):
-                render_queue_table(
-                    "deep", "대기열", recs_data.get("deep_waiting", []), is_waiting=True
-                )
-
-    with tabs[2]:
         st.markdown("**대상**: 자동 판정 조건을 충족하여 추가 검토가 필요 없는 건")
         render_queue_table("auto", "처리 대상", recs_data.get("auto_queue", []))
 
-    with tabs[3]:
+    with tabs[2]:
         st.markdown(
             "**대상**: 초기 모델 판정과 분석가의 최종 판정이 달라진 건 (오탐/미탐)"
         )
@@ -4099,6 +4208,64 @@ def render_analyst_priority_queue():
                 st.info("조건에 해당하는 오탐/미탐 데이터가 없습니다.")
         except api_client.ApiError as e:
             st.error(f"오탐/미탐 내역 조회 실패: {e.message}")
+
+    with tabs[3]:
+        st.markdown(
+            "**대상**: 분석가가 상세 화면에서 검토 및 최종 판정을 완료(저장)한 건"
+        )
+        try:
+            if "completed_page" not in st.session_state:
+                st.session_state.completed_page = 0
+            limit = 20
+            offset = st.session_state.completed_page * limit
+            res = api_client.search_analyses(
+                reviewed_only=True, limit=limit, offset=offset
+            )
+            completed_data = res.get("analyses", []) if res else []
+            total_count = res.get("total_count", 0) if res else 0
+
+            if completed_data:
+                cands = []
+                for d in completed_data:
+                    cands.append(
+                        {
+                            "analysis_id": d["analysis_id"],
+                            "filename": d.get("filename", ""),
+                            "sha256": d.get("sha256", ""),
+                            "queue_name": "COMPLETED",
+                            "queue_reason": "검토 완료",
+                            "priority_score": None,
+                            "selection_reason": f"초기 판정: {d.get('initial_verdict')} -> 최종 판정: {d.get('analyst_final_verdict')}",
+                        }
+                    )
+                render_queue_table("completed", "검토 완료 내역", cands)
+
+                cols = st.columns([1, 2, 1])
+                with cols[0]:
+                    if st.button(
+                        "이전 페이지",
+                        disabled=(st.session_state.completed_page == 0),
+                        key="completed_prev",
+                    ):
+                        st.session_state.completed_page -= 1
+                        st.rerun()
+                with cols[1]:
+                    st.write(
+                        f"<div style='text-align: center;'>페이지 {st.session_state.completed_page + 1} / {max(1, (total_count + limit - 1) // limit)} (총 {total_count}건)</div>",
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    if st.button(
+                        "다음 페이지",
+                        disabled=(offset + limit >= total_count),
+                        key="completed_next",
+                    ):
+                        st.session_state.completed_page += 1
+                        st.rerun()
+            else:
+                st.info("검토 완료된 데이터가 없습니다.")
+        except api_client.ApiError as e:
+            st.error(f"검토 완료 내역 조회 실패: {e.message}")
 
     with tabs[4]:
         st.markdown(

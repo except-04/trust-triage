@@ -111,8 +111,8 @@ class MemoryAnalysisRepository:
                     today_auto += 1
                 else:
                     today_unknown += 1
-
         today_total_manual = today_em + today_deep + today_fp + today_unknown
+        today_total_completed = today_total_manual + today_auto
 
         return {
             "daily_budget": daily_budget,
@@ -120,7 +120,7 @@ class MemoryAnalysisRepository:
             "deep_budget": deep_budget,
             "fp_budget": fp_budget,
             "is_unlimited": is_unlimited,
-            "today_completed_count": today_total_manual,
+            "today_completed_count": today_total_completed,
             "today_completed_emergency": today_em,
             "today_completed_deep": today_deep,
             "remaining_budget": max(daily_budget - today_total_manual, 0),
@@ -178,13 +178,13 @@ class MemoryAnalysisRepository:
             emergency_reason = em_eval["emergency_reason"]
 
         is_auto = initial_verdict in ["AUTO_BENIGN", "AUTO_MALICIOUS"]
-        auto_reason = "자동 판정 기준 충족 (추가 수집 경로 없음)" if is_auto else ""
+        auto_reason = "자동 판정 기준 충족" if is_auto else ""
 
         is_deep = False
         deep_reasons = []
-        deep_priority_score = prob_float
-        deep_score_policy = "probability-v1"
-        deep_priority_reason = "단순 악성 확률순"
+        deep_priority_score = 0.0
+        deep_score_policy = "exception-v2"
+        deep_priority_reason = "신호 미감지"
         deep_queue_reason = ""
 
         raw_ood = float(risk_signals.get("ood_score", 0))
@@ -231,7 +231,7 @@ class MemoryAnalysisRepository:
             is_deep = True
             deep_priority_score = 0.0
             deep_score_policy = "exception-v2"
-            deep_priority_reason = "예외 처리"
+            deep_priority_reason = "신호 미감지"
             deep_queue_reason = "위험 신호 없는 불확실 파일"
 
         queue_name = "UNKNOWN"
@@ -270,6 +270,11 @@ class MemoryAnalysisRepository:
             "score_policy": score_policy,
             "priority_reason": priority_reason,
             "selection_reason": selection_reason,
+            "deep_priority_score": deep_priority_score,
+            "emergency_level": emergency_level,
+            "emergency_obs_level": emergency_obs_level
+            if emergency_level is not None
+            else None,
             "_emergency_level": emergency_level if emergency_level is not None else 99,
             "_emergency_obs_level": emergency_obs_level
             if emergency_level is not None
@@ -372,7 +377,10 @@ class MemoryAnalysisRepository:
                     "queue_name": q["queue_name"],
                     "queue_reason": q["queue_reason"],
                     "priority_reason": q["priority_reason"],
+                    "deep_priority_score": q.get("deep_priority_score"),
                     "selection_reason": q["selection_reason"],
+                    "emergency_level": q.get("emergency_level"),
+                    "emergency_obs_level": q.get("emergency_obs_level"),
                     "_emergency_level": q.get("_emergency_level", 99),
                     "_emergency_obs_level": q.get("_emergency_obs_level", 99),
                     "initial_verdict": record.initial_result.get("initial_verdict"),
@@ -587,6 +595,7 @@ class MemoryAnalysisRepository:
         batch_id=None,
         verdict=None,
         overturned_only=False,
+        reviewed_only=False,
         sort="newest",
     ):
         self._fault("list_analyses")
@@ -607,6 +616,7 @@ class MemoryAnalysisRepository:
                         verdict is None
                         or (row.initial_result or {}).get("initial_verdict") == verdict
                     )
+                    and (not reviewed_only or row.analyst_final_verdict is not None)
                     and (
                         not overturned_only
                         or (
