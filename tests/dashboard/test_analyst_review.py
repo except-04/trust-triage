@@ -388,6 +388,38 @@ def test_dialog_saves_the_current_verdict(app, dialog, notes, monkeypatch, rerun
     assert app.st.session_state.analysis_result["review_revision"] == 1
 
 
+@pytest.mark.parametrize("system_verdict", ["BENIGN", "MALICIOUS"])
+def test_reopening_held_review_and_saving_notes_keeps_pending(
+    app, dialog, monkeypatch, rerun_signal, system_verdict
+):
+    state, seen = dialog
+    item = analysis(verdict=f"AUTO_{system_verdict}", revision=1, approval="PENDING")
+    app.st.session_state.batch_data = {"analyses": [item]}
+    app.st.session_state.analysis_result = item
+    state["notes"] = "추가 확인 필요"
+    monkeypatch.setattr(
+        app.st, "radio", lambda *args, **kwargs: kwargs["options"][kwargs["index"]]
+    )
+    monkeypatch.setattr(
+        api_client,
+        "get_result",
+        lambda analysis_id: {
+            **item,
+            "review_revision": 2 if seen["saves"] else 1,
+        },
+    )
+
+    with pytest.raises(rerun_signal):
+        app.open_review_dialog("A1")
+
+    assert seen["saves"] == [("A1", None, "HongGildong", 1, "추가 확인 필요")]
+    updated = app.st.session_state.analysis_result
+    assert updated["analyst_final_verdict"] is None
+    assert updated["approval_status"] == "PENDING"
+    assert updated["review_revision"] == 2
+    assert updated["final_verdict"] == system_verdict
+
+
 def test_dialog_rejects_invalid_reviewer_without_calling_backend(app, dialog):
     state, seen = dialog
     state["reviewer"] = "홍길동"

@@ -1333,12 +1333,17 @@ def review_dialog(analysis_id):
         )
     )
 
+    default_choice = (
+        "needs_review"
+        if is_reviewed(analysis) and analysis.get("analyst_final_verdict") is None
+        else current
+    )
     choice = st.radio(
         "수정할 판정",
         options=tuple(REVIEW_VERDICT_BY_GROUP),
         index=(
-            tuple(REVIEW_VERDICT_BY_GROUP).index(current)
-            if current in REVIEW_VERDICT_BY_GROUP
+            tuple(REVIEW_VERDICT_BY_GROUP).index(default_choice)
+            if default_choice in REVIEW_VERDICT_BY_GROUP
             else 0
         ),
         format_func=lambda key: (
