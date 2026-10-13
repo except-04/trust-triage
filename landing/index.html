@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TRUST-Triage — 신뢰도 기반 악성코드 Triage</title>
-<meta name="description" content="보정된 확률과 4대 위험 신호로 자동 판정·심층 분석·분석가 검토 대상을 나누는 악성코드 Triage 시스템.">
+<meta name="description" content="보정된 확률과 4대 위험 신호로 초기 분석 경로를 정하고, 분석 근거와 검토 우선순위를 함께 제공하는 악성코드 Triage 시스템.">
 <meta property="og:title" content="TRUST-Triage">
-<meta property="og:description" content="분석가가 볼 파일만 남겨 두는 신뢰도 기반 악성코드 Triage.">
+<meta property="og:description" content="분석가가 먼저 볼 파일을 근거와 함께 알려주는 악성코드 Triage.">
 <meta property="og:url" content="https://trust-triage.com/">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#020617">
@@ -71,6 +71,11 @@ nav .wrap{display:flex;align-items:center;justify-content:space-between;height:6
 .lg small{font-weight:500;color:var(--m2);font-size:12px;margin-left:2px}
 .nl{display:flex;align-items:center;gap:26px;font-size:14px;color:var(--m)}
 .nl a:hover{color:var(--fg)}
+/* 스크롤 위치에 따라 현재 섹션 메뉴 강조 */
+.nl a[href^="#"]{position:relative;transition:color .2s}
+.nl a[href^="#"]::after{content:"";position:absolute;left:0;right:0;bottom:-19px;height:2px;border-radius:2px;background:var(--cta);transform:scaleX(0);transition:transform .25s}
+.nl a[href^="#"].on{color:var(--fg)}
+.nl a[href^="#"].on::after{transform:scaleX(1)}
 .b{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:8px;font-size:14px;font-weight:600;transition:background .15s}
 .b1{background:var(--cta);color:#fff}.b1:hover{background:var(--cta2)}
 
@@ -93,11 +98,15 @@ h1{font-size:clamp(38px,6.4vw,74px);line-height:1.1;letter-spacing:-.045em;font-
 .hero .b{padding:12px 20px;font-size:15px}
 
 /* window frame */
-.win{margin:68px auto 0;border:1px solid var(--l2);border-radius:14px;background:var(--bg);overflow:hidden;text-align:left;box-shadow:var(--win-shadow);position:relative}
+.win{width:min(1400px,calc(100vw - 48px));left:50%;transform:translateX(-50%);margin:68px 0 0;border:1px solid var(--l2);border-radius:14px;background:var(--bg);overflow:hidden;text-align:left;box-shadow:var(--win-shadow);position:relative}
 .win-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--p);border-bottom:1px solid var(--l)}
+.demo-tag{flex:none;font-size:11px;font-weight:600;color:var(--m);border:1px solid var(--l2);border-radius:999px;padding:2px 9px;white-space:nowrap}
 .dots{display:flex;gap:6px}.dots i{width:10px;height:10px;border-radius:50%;background:var(--l2)}
 .url{flex:1;max-width:420px;margin:0 auto;font-size:12px;color:var(--m);background:var(--bg);border:1px solid var(--l);border-radius:6px;padding:4px 10px;text-align:center}
-.win-body{padding:22px;display:grid;grid-template-columns:1.25fr 1fr;gap:18px}
+.win-body{padding:26px;display:grid;grid-template-columns:1.7fr 1fr;gap:26px}
+.win-body > div{min-width:0}
+.win .sha{max-width:84px}
+.win th,.win td{padding:9px 10px}
 .win::after{content:"";position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(transparent,var(--bg));pointer-events:none}
 
 /* dashboard primitives (mirrors the service UI) */
@@ -105,13 +114,16 @@ h1{font-size:clamp(38px,6.4vw,74px);line-height:1.1;letter-spacing:-.045em;font-
 .ttl h5{font-size:17px;font-weight:700;letter-spacing:-.02em}
 .ttl span{font-size:11px;color:var(--m2)}
 .card{background:var(--p);border:1px solid var(--l);border-radius:10px;padding:14px}
-.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
-.st{border:1px solid var(--l);border-radius:8px;padding:10px 6px;text-align:center;background:var(--bg)}
+.stats{display:grid;grid-template-columns:repeat(5,1fr) 1px .9fr;gap:10px;margin-bottom:12px}
+.stats .sep{background:var(--l2);margin:4px 0}
+.st.fail{border-style:dashed;background:transparent}
+.st.fail small{color:var(--m2)}
+.st{border:1px solid var(--l);border-radius:8px;padding:6px 6px 5px;text-align:center;background:var(--bg)}
 .st.on{background:var(--p3);border-color:var(--l2)}
 .st.q{background:var(--warn-bg);border-color:var(--warn-bd)}
 .st small{display:block;font-size:9.5px;letter-spacing:.06em;color:var(--m);font-weight:600}
 .st.q small{color:var(--warn)}
-.st b{font-size:16px}
+.st b{font-size:15px;line-height:1.35}
 .st.q b{color:var(--warn)}
 .tbl-x{overflow-x:auto;border:1px solid var(--l);border-radius:8px;background:var(--inset)}
 table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap}
@@ -120,7 +132,7 @@ td{padding:8px 10px;border-bottom:1px solid var(--l);color:var(--fg2)}
 tr:last-child td{border-bottom:0}
 tr.sel td{background:var(--p2)}
 .sha{color:var(--m);max-width:150px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom}
-.pill{display:inline-flex;align-items:center;font-size:11px;font-weight:700;padding:4px 11px;border-radius:999px;border:1px solid transparent;letter-spacing:.01em}
+.pill{display:inline-flex;align-items:center;white-space:nowrap;font-size:11px;font-weight:700;padding:4px 11px;border-radius:999px;border:1px solid transparent;letter-spacing:.01em}
 .p-ok{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok)}
 .p-warn{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn)}
 .p-bad{background:var(--bad-bg);border-color:var(--bad-bd);color:var(--bad)}
@@ -129,8 +141,9 @@ tr.sel td{background:var(--p2)}
 .chip{display:inline-flex;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;border:1px solid var(--l2);color:var(--fg2);background:var(--bg)}
 .chip em{font-style:normal;color:var(--m);font-weight:500;margin-left:4px}
 .lbl{font-size:10.5px;color:var(--m);margin-bottom:6px}
-.sum{display:grid;grid-template-columns:repeat(3,auto) 1fr;gap:14px;align-items:start;padding-bottom:12px;border-bottom:1px solid var(--l)}
-.sum .rs{border-left:1px solid var(--l);padding-left:14px}
+.sum{display:flex;flex-wrap:wrap;gap:12px 22px;align-items:start;padding-bottom:12px;border-bottom:1px solid var(--l)}
+.sum .rs{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px 32px;border-top:1px dashed var(--l);padding-top:10px}
+.sum .rs .lbl{margin-bottom:2px}
 .sum .rs p{font-size:13px;font-weight:600}
 .met{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding-top:10px}
 .met div small{display:block;font-size:10px;color:var(--m);text-decoration:underline dotted var(--m2);text-underline-offset:2px}
@@ -164,7 +177,7 @@ h2{font-size:clamp(30px,4.4vw,50px);letter-spacing:-.04em;line-height:1.15;margi
 .fc b{font-weight:600;line-height:1.2}
 .runbtn{display:inline-block;margin-top:10px;background:var(--cta);color:#fff;font-size:11.5px;font-weight:600;padding:6px 12px;border-radius:6px}
 .prog{height:5px;border-radius:3px;background:var(--l);margin:10px 0 6px;overflow:hidden}
-.prog b{display:block;height:100%;width:62%;background:var(--blue);border-radius:3px}
+.prog b{display:block;height:100%;width:50%;background:var(--blue);border-radius:3px}
 .stl{display:flex;justify-content:space-between;font-size:11.5px;padding:5px 0;border-bottom:1px solid var(--l)}
 .stl:last-child{border-bottom:0}
 .stl span{color:var(--fg2)}
@@ -190,6 +203,9 @@ h2{font-size:clamp(30px,4.4vw,50px);letter-spacing:-.04em;line-height:1.15;margi
 .routes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
 .routes div{border:1px solid var(--l);border-radius:8px;padding:10px;background:var(--bg);font-size:12px;color:var(--m)}
 .routes div .pill{margin-bottom:6px}
+.routes.r4{grid-template-columns:repeat(4,1fr)}
+.bx.final{min-height:0}
+.bx p.final-note{font-size:13px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--l)}
 .fail{background:linear-gradient(135deg,var(--glow2),transparent 60%),var(--p)}
 
 /* explain */
@@ -227,6 +243,7 @@ footer a:hover{color:var(--fg)}
   .qwrap,.ex{grid-template-columns:1fr}
 }
 @media(max-width:900px){
+  .routes.r4{grid-template-columns:1fr 1fr}
   .nl a:not(.b){display:none}
   .steps,.bento{grid-template-columns:1fr}
   .c2,.c3,.c4,.c6{grid-column:auto}
@@ -234,11 +251,11 @@ footer a:hover{color:var(--fg)}
 }
 @media(max-width:600px){
   .wrap{padding:0 16px}
+  .win{width:calc(100vw - 32px)}
   .win-body{padding:14px}
   .stats{grid-template-columns:repeat(3,1fr)}
+  .stats .sep{display:none}
   .met{grid-template-columns:repeat(3,1fr)}
-  .sum{grid-template-columns:1fr 1fr}
-  .sum .rs{grid-column:1/-1;border-left:0;padding-left:0}
   .routes{grid-template-columns:1fr}
   .hero .bs{flex-direction:column;align-items:stretch;max-width:320px;margin:0 auto}
   .hero .b{justify-content:center}
@@ -256,30 +273,32 @@ footer a:hover{color:var(--fg)}
 <!-- HERO -->
 <section class="hero"><div class="wrap">
   <span class="eyebrow"><b>●</b> 신뢰 기반 악성코드 Triage 대시보드</span>
-  <h1>분석가가 볼 파일만<br>남겨 두는 Triage</h1>
-  <p class="lead">보정된 확률과 4대 위험 신호로 자동 판정·심층 분석·분석가 검토 대상을 나눕니다. 판정마다 근거가 남습니다.</p>
+  <h1>분석가가 먼저 볼 파일을<br>근거와 함께 알려주는 Triage</h1>
+  <p class="lead">보정된 확률과 4대 위험 신호로 초기 분석 경로를 정하고, 필요한 파일은 심층 분석으로 이어갑니다. 분석 근거와 검토 우선순위를 함께 제공합니다.</p>
   <div class="bs"><a class="b b1" href="https://app.trust-triage.com">지금 분석하기</a><a class="b b2" href="#flow">작동 방식 →</a></div>
 
   <div class="win" aria-label="서비스 화면 예시">
-    <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url mono">app.trust-triage.com</div><div style="width:46px"></div></div>
+    <div class="win-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url mono">app.trust-triage.com</div><span class="demo-tag">서비스 화면 예시</span></div>
     <div class="win-body">
       <!-- left: batch summary -->
       <div>
         <div class="ttl"><h5>분석 결과 요약</h5><span class="mono">Batch ID · batch_6e687225…eee5e</span></div>
         <div class="stats">
           <div class="st on"><small>TOTAL</small><b>4</b></div>
-          <div class="st"><small>NEEDS REVIEW</small><b>1</b></div>
-          <div class="st"><small>AUTO MALICIOUS</small><b>0</b></div>
-          <div class="st"><small>AUTO BENIGN</small><b>1</b></div>
-          <div class="st"><small>FAILED</small><b>0</b></div>
+          <div class="st"><small>MALICIOUS</small><b>1</b></div>
+          <div class="st"><small>SUSPICIOUS</small><b>1</b></div>
+          <div class="st"><small>BENIGN</small><b>1</b></div>
+          <div class="st"><small>INCONCLUSIVE</small><b>1</b></div>
+          <div class="sep" aria-hidden="true"></div>
+          <div class="st fail"><small>FAILED</small><b>0</b></div>
         </div>
         <div class="tbl-x"><table>
-          <thead><tr><th>Group</th><th>File</th><th>SHA-256</th><th>Status</th><th>Initial Verdict</th></tr></thead>
+          <thead><tr><th>Group</th><th>File</th><th>SHA-256</th><th>Status</th><th>Initial Verdict</th><th>Final Verdict</th></tr></thead>
           <tbody>
-            <tr><td>AUTO BENIGN</td><td>notepad.exe</td><td><span class="sha mono">468ffe129c395abf6b21a09efdf261910a95</span></td><td>COMPLETED</td><td><span class="pill p-ok">AUTO_BENIGN</span></td></tr>
-            <tr class="sel"><td>DEEP</td><td>kernel32.dll</td><td><span class="sha mono">8f8629741558b5df71def4e1dd8ef9645d4f</span></td><td>RUNNING</td><td><span class="pill p-warn">HIGH_RISK_UNCERTAIN</span></td></tr>
-            <tr><td>PENDING</td><td>calc.exe</td><td><span class="sha mono">621ba3934afc45c35a4ee16386f4da30119f</span></td><td>RUNNING</td><td style="color:var(--m2)">–</td></tr>
-            <tr><td>PENDING</td><td>shell32.dll</td><td><span class="sha mono">57231c16611c536a5905395858af37120bce</span></td><td>QUEUED</td><td style="color:var(--m2)">–</td></tr>
+            <tr><td>BENIGN</td><td>notepad.exe</td><td><span class="sha mono">468ffe129c395abf6b21a09efdf261910a95</span></td><td>COMPLETED</td><td><span class="pill p-ok">AUTO_BENIGN</span></td><td><span class="pill p-ok">BENIGN</span></td></tr>
+            <tr><td>MALICIOUS</td><td>sample_07.exe</td><td><span class="sha mono">b3e1a07c52d94f18aa6c0e7d2f95b41c88e0</span></td><td>COMPLETED</td><td><span class="pill p-bad">AUTO_MALICIOUS</span></td><td><span class="pill p-bad">MALICIOUS</span></td></tr>
+            <tr><td>SUSPICIOUS</td><td>sample_b07.exe</td><td><span class="sha mono">9c47d2e8a01f6b35c7e4d90a2b18f6e3d572</span></td><td>COMPLETED</td><td><span class="pill p-warn">HIGH_RISK_UNCERTAIN</span></td><td><span class="pill p-warn">SUSPICIOUS</span></td></tr>
+            <tr class="sel"><td>INCONCLUSIVE</td><td>kernel32.dll</td><td><span class="sha mono">8f8629741558b5df71def4e1dd8ef9645d4f</span></td><td>COMPLETED</td><td><span class="pill p-warn">HIGH_RISK_UNCERTAIN</span></td><td><span class="pill p-gray">INCONCLUSIVE</span></td></tr>
           </tbody>
         </table></div>
       </div>
@@ -289,9 +308,9 @@ footer a:hover{color:var(--fg)}
         <div class="card">
           <div class="sum">
             <div><div class="lbl">Initial Verdict</div><span class="pill p-warn">HIGH-RISK UNCERTAIN</span></div>
-            <div><div class="lbl">Final Verdict</div><span class="pill p-gray">분석 진행 중</span></div>
+            <div><div class="lbl">Final Verdict</div><span class="pill p-gray">INCONCLUSIVE</span></div>
             <div><div class="lbl">Route</div><span class="pill p-deep">Deep Analysis</span></div>
-            <div class="rs"><div class="lbl">Reason</div><p>OOD Detected</p><div class="lbl" style="margin:6px 0 2px">Triggered Signals</div><p>OOD</p></div>
+            <div class="rs"><div><div class="lbl">Reason</div><p>OOD Detected</p></div><div><div class="lbl">Triggered Signals</div><p>OOD</p></div></div>
           </div>
           <div class="met">
             <div><small>Raw Prob.</small><b>0.0%</b></div>
@@ -304,9 +323,9 @@ footer a:hover{color:var(--fg)}
         <div class="mini-h">분석 파이프라인</div>
         <div class="pipe">
           <div class="pp"><h6>ML Triage</h6><span class="badge-s done">✓ 완료</span></div>
-          <div class="pp"><h6>CAPA</h6><span class="badge-s run">진행 중</span></div>
-          <div class="pp"><h6>FLOSS</h6><span class="badge-s">대기</span></div>
-          <div class="pp"><h6>Speakeasy</h6><span class="badge-s">대기</span></div>
+          <div class="pp"><h6>CAPA</h6><span class="badge-s done">✓ 완료</span></div>
+          <div class="pp"><h6>FLOSS</h6><span class="badge-s done">✓ 완료</span></div>
+          <div class="pp"><h6>Speakeasy</h6><span class="badge-s done">✓ 완료</span></div>
         </div>
       </div>
     </div>
@@ -316,12 +335,12 @@ footer a:hover{color:var(--fg)}
 <!-- FLOW -->
 <section class="sec" id="flow"><div class="wrap">
   <div class="k">작동 방식</div>
-  <h2>올리면, 나눠서,<br>근거와 함께 돌려줍니다</h2>
+  <h2>파일을 올리면,<br>분석 경로와 근거를 함께 보여줍니다</h2>
   <p class="sp">PE 파일과 ZIP을 한 번에 올리면 파일별로 접수되고, 배치 진행 상황이 실시간으로 갱신됩니다.</p>
   <div class="steps">
     <div class="stp">
-      <div class="n">01</div><h3>분석 입력</h3>
-      <p>.exe·.dll과 ZIP을 함께 선택합니다. ZIP 해제와 내부 PE 검증은 백엔드가 맡습니다.</p>
+      <div class="n">01</div><h3>파일 업로드</h3>
+      <p>.exe·.dll 파일과 ZIP을 함께 선택하세요. 지원하는 파일을 확인하고 파일별 분석을 접수합니다.</p>
       <div class="ui">
         <div class="fchips">
           <div class="fc"><i></i><div><b>notepad.exe</b><small>352.0KB</small></div></div>
@@ -332,8 +351,8 @@ footer a:hover{color:var(--fg)}
       </div>
     </div>
     <div class="stp">
-      <div class="n">02</div><h3>배치 진행</h3>
-      <p>QUEUED · RUNNING · COMPLETED 상태가 몇 초 간격으로 자동 갱신됩니다.</p>
+      <div class="n">02</div><h3>분석 진행 확인</h3>
+      <p>파일별 대기·진행·완료·실패 상태가 자동으로 갱신됩니다.</p>
       <div class="ui">
         <div style="font-size:11.5px;font-weight:700">2 / 4 처리 종료</div>
         <div class="prog"><b></b></div>
@@ -344,9 +363,9 @@ footer a:hover{color:var(--fg)}
       </div>
     </div>
     <div class="stp">
-      <div class="n">03</div><h3>판정과 라우팅</h3>
-      <p>확실한 파일은 자동 판정으로 끝내고, 나머지는 심층 분석과 분석가 검토로 보냅니다.</p>
-      <div class="ui"><div class="vrow">
+      <div class="n">03</div><h3>초기 판정과 분석 경로</h3>
+      <p>보정된 확률과 위험 신호를 바탕으로 정상 처리 권고, 악성 경보, 심층 분석 경로를 정합니다.</p>
+      <div class="ui"><div class="lbl">초기 판정 (Initial Verdict)</div><div class="vrow">
         <div><span>notepad.exe</span><b class="pill p-ok">AUTO_BENIGN</b></div>
         <div><span>kernel32.dll</span><b class="pill p-warn">HIGH_RISK_UNCERTAIN</b></div>
         <div><span>sample_07.exe</span><b class="pill p-bad">AUTO_MALICIOUS</b></div>
@@ -358,17 +377,27 @@ footer a:hover{color:var(--fg)}
 <!-- SIGNALS -->
 <section class="sec" id="signals"><div class="wrap">
   <div class="k">Joint Risk Router</div>
-  <h2>확률이 아니라<br>신뢰도로 나눕니다</h2>
+  <h2>보정된 확률과 위험 신호로<br>분석 경로를 정합니다</h2>
   <p class="sp">4대 위험 신호를 독립적으로 평가하고, 하나라도 발현되면 자동 판정에서 제외합니다.</p>
   <div class="bento">
     <div class="bx c6">
-      <h3>세 갈래 라우팅</h3><p>정적 특징에서 출발해, 보정된 확률과 위험 신호를 함께 보고 경로를 정합니다.</p>
+      <h3>초기 판정 · 세 갈래 라우팅</h3><p>정적 특징에서 출발해, 보정된 확률과 위험 신호를 함께 보고 초기 분석 경로를 정합니다.</p>
       <div class="flowl"><span>정적 특징</span><i>→</i><span>LightGBM · XGBoost</span><i>→</i><span>Isotonic 보정</span><i>→</i><span class="a">Joint Risk Router</span></div>
       <div class="routes">
-        <div><span class="pill p-ok">AUTO_BENIGN</span><br>높은 정상 신뢰도 · 신호 없음 → 자동 종료</div>
-        <div><span class="pill p-bad">AUTO_MALICIOUS</span><br>높은 악성 신뢰도 · 신호 없음 → 자동 차단</div>
-        <div><span class="pill p-warn">HIGH_RISK_UNCERTAIN</span><br>신호 발현 · 확률 보류 구간 → 심층 분석</div>
+        <div><span class="pill p-ok">AUTO_BENIGN</span><br>정상 신뢰도가 높고 위험 신호가 없으면 정상 처리 권고</div>
+        <div><span class="pill p-bad">AUTO_MALICIOUS</span><br>악성 신뢰도가 높고 위험 신호가 없으면 악성 경보 제안 · 전문가 검토</div>
+        <div><span class="pill p-warn">HIGH_RISK_UNCERTAIN</span><br>위험 신호가 있거나 확률이 보류 구간이면 심층 분석</div>
       </div>
+    </div>
+    <div class="bx c6 final">
+      <h3>최종 판정 · 4단계</h3><p>심층 분석까지 마친 결과는 시스템 최종 판정 네 가지로 정리됩니다. 초기 판정과는 다른 단계의 결과입니다.</p>
+      <div class="routes r4">
+        <div><span class="pill p-bad">MALICIOUS</span><br>악성 판정</div>
+        <div><span class="pill p-warn">SUSPICIOUS</span><br>악성 정황이 있으나 근거가 부족하거나 상충</div>
+        <div><span class="pill p-ok">BENIGN</span><br>정상 판정</div>
+        <div><span class="pill p-gray">INCONCLUSIVE</span><br>확보한 근거로 판단하기 어려움</div>
+      </div>
+      <p class="final-note">시스템 판정과 분석가 검토 상태를 구분합니다. 검토를 보류해도 시스템 판정은 유지됩니다.</p>
     </div>
     <div class="bx c3"><h3>확률 불확실성</h3><p>과신된 원시 확률을 실제 정답률에 맞춰 보정하고, 보류 구간에 걸리면 자동 판정하지 않습니다.</p>
       <div class="mt"><div><small>Raw → Calibrated</small><b>0.4% → 4.0%</b></div></div></div>
@@ -378,7 +407,7 @@ footer a:hover{color:var(--fg)}
       <div class="mt"><div><small>OOD Score</small><b style="color:var(--warn)">-0.020</b></div><span class="pill p-warn">발현</span></div></div>
     <div class="bx c3"><h3>분석 난이도</h3><p>PE 구조 경고와 파싱 이상을 따로 점수화합니다.</p>
       <div class="mt"><div><small>Difficulty</small><b>0.0</b></div><span class="pill p-ok">정상</span></div></div>
-    <div class="bx c6 fail"><h3>Fail-Closed 안전 격상</h3><p>시스템 오류가 나거나 판단 근거가 부족하면 자동 처리로 흘려보내지 않고, 사람이 확인해야 할 건으로 올립니다. 분석가의 수동 보류도 같은 큐로 들어갑니다.</p></div>
+    <div class="bx c6 fail"><h3>Fail-Closed 안전 격상</h3><p>분석 오류나 근거 부족을 악성 증거로 취급하지 않습니다. 판정 불가·분석 실패·검토 보류를 구분해 표시하고, 확보된 근거를 전문가에게 제공합니다.</p></div>
   </div>
 </div></section>
 
@@ -386,7 +415,7 @@ footer a:hover{color:var(--fg)}
 <section class="sec" id="evidence"><div class="wrap">
   <div class="k">설명 가능성</div>
   <h2>판정마다<br>근거가 남습니다</h2>
-  <p class="sp">SHAP 기여도와 발현된 신호를 함께 보여주고, CAPA·FLOSS로 정적 근거를 모은 뒤 부족하면 Speakeasy로 에뮬레이션합니다. 결과는 MITRE ATT&amp;CK 기준으로 정리됩니다.</p>
+  <p class="sp">SHAP 기여도와 발현된 신호를 함께 보여주고, CAPA·FLOSS로 정적 근거를 모은 뒤 부족하면 Speakeasy로 에뮬레이션합니다. 결과는 MITRE ATT&amp;CK 기준으로 정리됩니다. CAPA의 규칙 매칭은 정적 기능 단서이며, 실제 실행 여부는 동적 관측과 구분해 표시합니다.</p>
   <div class="ex">
     <div class="card" style="padding:22px">
       <div style="font-weight:700;font-size:15px;margin-bottom:14px">SHAP 주요 특성 Top 5 <span style="color:var(--m2);font-weight:500;font-size:12px" class="mono">· kernel32.dll</span></div>
@@ -407,11 +436,11 @@ footer a:hover{color:var(--fg)}
         <div class="pp"><h6>ML Triage</h6><span class="badge-s done">✓ 완료</span></div>
         <div class="pp"><h6>CAPA</h6><span class="badge-s done">✓ 완료</span></div>
         <div class="pp"><h6>FLOSS</h6><span class="badge-s done">✓ 완료</span></div>
-        <div class="pp"><h6>Speakeasy</h6><span class="badge-s run">진행 중</span></div>
-        <div class="pp full"><h6>Final</h6><span class="badge-s run">진행 중</span></div>
+        <div class="pp"><h6>Speakeasy</h6><span class="badge-s done">✓ 완료</span></div>
+        <div class="pp full"><h6>Final</h6><span class="pill p-gray">INCONCLUSIVE</span></div>
       </div>
       <div style="margin-top:auto;padding-top:16px;display:flex;gap:6px;flex-wrap:wrap">
-        <span class="chip">CAPA<em>COMPLETED</em></span><span class="chip">FLOSS<em>COMPLETED</em></span><span class="chip">Speakeasy<em>RUNNING</em></span>
+        <span class="chip">CAPA<em>COMPLETED</em></span><span class="chip">FLOSS<em>COMPLETED</em></span><span class="chip">Speakeasy<em>COMPLETED</em></span>
       </div>
     </div>
   </div>
@@ -421,7 +450,7 @@ footer a:hover{color:var(--fg)}
 <section class="sec" id="queue"><div class="wrap">
   <div class="k">분석가 큐</div>
   <h2>급한 것부터,<br>이유와 함께 쌓입니다</h2>
-  <p class="sp">심층 분석 대상은 위험도 순으로 정렬되고, SHA-256으로 지난 분석 이력을 모두 다시 찾을 수 있습니다.</p>
+  <p class="sp">위험 신호와 관측 근거를 바탕으로 검토 우선순위를 정하고, SHA-256으로 저장된 분석 이력을 조회합니다.</p>
   <div class="qwrap">
     <div class="card" style="padding:20px">
       <div class="tabs"><span class="on">심층 분석 (DEEP)</span><span>자동 처리 (AUTO)</span><span>재학습 데이터 (RETRAIN)</span><span>검토 완료 (COMPLETED)</span><span>오류 항목 (ERROR)</span></div>
@@ -444,7 +473,7 @@ footer a:hover{color:var(--fg)}
         <div class="ord"><i>03</i><div>모델 불일치</div></div>
         <div class="ord"><i>04</i><div>분포 이탈</div></div>
         <div class="ord"><i>05</i><div>분석 난이도</div></div>
-        <div class="ord"><i>06</i><div>신호 미감지<small>안전 격상·수동 보류 등 사람의 확인이 필요한 건</small></div></div>
+        <div class="ord"><i>06</i><div>신호 미감지<small>안전 격상 등 사람의 확인이 필요한 건</small></div></div>
       </div>
     </div>
   </div>
@@ -463,6 +492,19 @@ footer a:hover{color:var(--fg)}
     if(meta)meta.setAttribute("content",t==="dark"?"#020617":"#f8fafc");
   }
   apply(root.getAttribute("data-theme")==="light"?"light":"dark");
+  /* 스크롤 위치에 맞춰 메뉴 강조 */
+  var links=[].slice.call(document.querySelectorAll('.nl a[href^="#"]')),
+      secs=links.map(function(a){return document.querySelector(a.getAttribute("href"))});
+  function spy(){
+    var y=window.scrollY+window.innerHeight*0.35,idx=-1;
+    secs.forEach(function(sec,i){if(sec&&sec.offsetTop<=y)idx=i});
+    if(window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-2)idx=secs.length-1;
+    links.forEach(function(a,i){a.classList.toggle("on",i===idx);if(i===idx)a.setAttribute("aria-current","true");else a.removeAttribute("aria-current")});
+  }
+  var ticking=false;
+  window.addEventListener("scroll",function(){if(!ticking){ticking=true;requestAnimationFrame(function(){spy();ticking=false})}},{passive:true});
+  window.addEventListener("resize",spy);
+  spy();
   btn.addEventListener("click",function(){
     var t=root.getAttribute("data-theme")==="dark"?"light":"dark";
     apply(t);try{localStorage.setItem("tt-theme",t)}catch(e){}
