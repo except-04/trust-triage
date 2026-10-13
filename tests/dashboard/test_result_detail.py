@@ -36,9 +36,10 @@ def sample(app, verdict, state):
         result["final_verdict"] = "BENIGN" if verdict == "AUTO_BENIGN" else "MALICIOUS"
     elif state in ("COMPLETED", "FAILED"):
         result = app.merge_deep_result(result, deep_response(state))
+        result["final_verdict"] = "INCONCLUSIVE"
         if state == "COMPLETED":
             result["final_assessment"] = {
-                "final_verdict": "UNCERTAIN",
+                "final_verdict": "INCONCLUSIVE",
                 "reason": "Review evidence",
             }
     return result
@@ -302,7 +303,7 @@ def test_real_streamlit_opens_selected_result_before_batch_finishes(
     group = {
         "AUTO_BENIGN": "auto_benign",
         "AUTO_MALICIOUS": "auto_malicious",
-        "HIGH_RISK_UNCERTAIN": "needs_review",
+        "HIGH_RISK_UNCERTAIN": "inconclusive" if state == "COMPLETED" else "total",
     }[verdict]
     dashboard = Path(__file__).parents[2] / "dashboard"
     # Exercise the real fragment and selector, with all HTTP transport prohibited.

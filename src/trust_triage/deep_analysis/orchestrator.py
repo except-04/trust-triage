@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..evidence import EvidenceStatus
 from .checkpoints import StaticAnalysisCheckpoint, tool_snapshot
 from .models import (
     AnalysisTier,
@@ -549,11 +550,35 @@ class DeepAnalysisOrchestrator:
         ):
             final_verdict = _normalize_verdict(llm_interpretation.verdict) or "UNKNOWN"
             result_reason_codes.append("FINAL_VERDICT_FROM_LLM")
+            supporting = [
+                item
+                for item in evidence
+                if item.evidence_id in llm_interpretation.supporting_evidence_ids
+            ]
+            if final_verdict != "UNKNOWN" and not supporting:
+                final_verdict = "UNKNOWN"
+                result_reason_codes.append("NO_SUPPORTING_VERDICT_EVIDENCE")
+            elif final_verdict == "MALICIOUS" and (
+                llm_interpretation.contradicting_evidence_ids
+                or not any(
+                    item.source == "SPEAKEASY"
+                    and item.status == EvidenceStatus.OBSERVED
+                    and item.attack_techniques
+                    for item in supporting
+                )
+            ):
+                final_verdict = "SUSPICIOUS"
+                result_reason_codes.append("MALICIOUS_EVIDENCE_REQUIRES_CORROBORATION")
+            elif final_verdict == "BENIGN" and (
+                llm_interpretation.contradicting_evidence_ids or result_errors
+            ):
+                final_verdict = "UNKNOWN"
+                result_reason_codes.append("BENIGN_EVIDENCE_INCOMPLETE_OR_CONFLICTING")
         else:
             final_verdict = "UNKNOWN"
             result_reason_codes.append("FINAL_VERDICT_UNKNOWN_WITHOUT_LLM")
 
-        requires_human_review = final_verdict in {"MALICIOUS", "UNKNOWN"}
+        requires_human_review = final_verdict in {"MALICIOUS", "SUSPICIOUS", "UNKNOWN"}
         if llm_interpretation is not None:
             requires_human_review = (
                 requires_human_review or llm_interpretation.manual_review_required
@@ -566,7 +591,7 @@ class DeepAnalysisOrchestrator:
             final_verdict=final_verdict,
             disposition=(
                 DeepAnalysisDisposition.MANUAL_REVIEW
-                if final_verdict == "UNKNOWN"
+                if final_verdict in {"SUSPICIOUS", "UNKNOWN"}
                 else _disposition_for_verdict(final_verdict)
             ),
             last_tier=last_tier,

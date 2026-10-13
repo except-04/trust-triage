@@ -273,6 +273,7 @@ def test_empty_analyses_are_safe_for_summary_helpers(app):
         "needs_review": [],
         "auto_malicious": [],
         "auto_benign": [],
+        "inconclusive": [],
         "failed": [],
     }
     assert app.poll_status_counts([])["QUEUED"] == 0

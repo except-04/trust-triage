@@ -74,11 +74,19 @@ class InitialVerdict(str, Enum):
 
 
 class FinalVerdict(str, Enum):
-    """시스템 최종 판정. BENIGN: 정상, MALICIOUS: 악성, UNCERTAIN: 확정하기 어려워 검토 필요."""
+    """시스템 판정. 악성·의심·정상·판정 불가이며 분석 실패 상태와 구분한다."""
 
     BENIGN = "BENIGN"
     MALICIOUS = "MALICIOUS"
-    UNCERTAIN = "UNCERTAIN"
+    SUSPICIOUS = "SUSPICIOUS"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+    @classmethod
+    def _missing_(cls, value):
+        # 이전에 저장된 판정은 재분석 없이 읽을 수 있도록 유지한다.
+        if value == "UNCERTAIN":
+            return cls.INCONCLUSIVE
+        return None
 
 
 class ErrorDetail(APIModel):
@@ -328,7 +336,7 @@ class FinalAssessment(APIModel):
     """시스템이 제안한 최종 판정과 처리 방식입니다."""
 
     final_verdict: FinalVerdict = Field(
-        description="시스템이 제안한 정상·악성·불확실 판정입니다."
+        description="시스템이 제안한 악성·의심·정상·판정 불가 결과입니다."
     )
     disposition: Literal[
         "AUTO_ALLOW_RECOMMENDED",
@@ -342,7 +350,7 @@ class FinalAssessment(APIModel):
         description="true이면 전문가의 검토가 필요합니다."
     )
     reason: str = Field(description="이 판정과 처리 방식을 제안한 이유입니다.")
-    policy_version: str = "backend-review-first-v1"
+    policy_version: str = "backend-evidence-verdict-v2"
 
 
 class ReviewRequest(APIModel):

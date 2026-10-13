@@ -49,15 +49,17 @@ SPEAKEASY_PREVIEW_LIMIT = 10
 # 글자(#dbeaff)가 되도록 고른 원래 색이다. 라이트 모드에서는 연한 파랑으로 보인다.
 DEEP_SEARCH_HIGHLIGHT = "background-color: #9cc0ff; color: #000f63; font-weight: 600"
 # 분석가가 판정을 옮길 수 있는 그룹과, 그룹별로 백엔드에 저장하는 analyst_final_verdict.
-# 백엔드에는 "검토 필요" 값이 없으므로 Needs Review는 보류(null)로 저장한다.
-REVIEW_GROUPS = ("needs_review", "auto_malicious", "auto_benign")
+# 보류(null)는 검토 상태만 바꾸며 시스템 판정은 유지한다.
+REVIEW_GROUPS = ("needs_review", "inconclusive", "auto_malicious", "auto_benign")
 REVIEW_VERDICT_BY_GROUP = {
     "needs_review": None,
     "auto_malicious": "MALICIOUS",
     "auto_benign": "BENIGN",
 }
 REVIEW_GROUP_BY_VERDICT = {
-    verdict: group for group, verdict in REVIEW_VERDICT_BY_GROUP.items()
+    verdict: group
+    for group, verdict in REVIEW_VERDICT_BY_GROUP.items()
+    if verdict is not None
 }
 # 백엔드 ReviewRequest 와 같은 제한. 어긋나면 422를 받기 전에 프론트에서 막는다.
 REVIEWER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
@@ -101,14 +103,17 @@ def select_analysis_result(widget_key="selected_analysis_id"):
 
 def verdict_badge_markup(verdict):
     labels = {
-        "MALICIOUS": "악성 (Malicious)",
-        "BENIGN": "정상 (Benign)",
-        "UNCERTAIN": "판정 보류 (Uncertain)",
+        "MALICIOUS": "MALICIOUS",
+        "BENIGN": "BENIGN",
+        "SUSPICIOUS": "SUSPICIOUS",
+        "INCONCLUSIVE": "INCONCLUSIVE",
+        "UNCERTAIN": "INCONCLUSIVE",
+        "UNKNOWN": "INCONCLUSIVE",
         "AUTO_MALICIOUS": "AUTO MALICIOUS",
         "AUTO_BENIGN": "AUTO BENIGN",
         "HIGH_RISK_UNCERTAIN": "HIGH-RISK UNCERTAIN",
-        "Malicious": "악성 (Malicious)",
-        "Benign": "정상 (Benign)",
+        "Malicious": "MALICIOUS",
+        "Benign": "BENIGN",
         "Analyst Review": "분석가 검토 (Analyst Review)",
         "High-Risk Uncertain": "HIGH-RISK UNCERTAIN",
         "Pending": "분석 진행 중 (Pending)",
@@ -120,7 +125,7 @@ def verdict_badge_markup(verdict):
     elif verdict in {"BENIGN", "AUTO_BENIGN", "Benign"}:
         badge_class = "badge-success"
     elif verdict in {
-        "UNCERTAIN",
+        "SUSPICIOUS",
         "HIGH_RISK_UNCERTAIN",
         "Analyst Review",
         "High-Risk Uncertain",
@@ -342,6 +347,7 @@ def derive_batch_summary(analyses):
         "high_risk_uncertain": 0,
         "auto_malicious": 0,
         "auto_benign": 0,
+        "inconclusive": 0,
         "failed": 0,
     }
     # 분석가가 판정을 수정한 건은 수정된 그룹으로 센다. 그룹 타일과 같은 기준이다.
@@ -350,6 +356,7 @@ def derive_batch_summary(analyses):
         "needs_review": "high_risk_uncertain",
         "auto_malicious": "auto_malicious",
         "auto_benign": "auto_benign",
+        "inconclusive": "inconclusive",
     }
     for analysis in analyses:
         key = summary_key.get(triage_group_key(analysis))
@@ -807,10 +814,11 @@ def filter_batch_analyses(analyses, query):
 
 BATCH_GROUP_LABELS = {
     "total": "Total",
-    "needs_review": "Needs Review",
-    "auto_malicious": "Auto Malicious",
-    "auto_benign": "Auto Benign",
-    "failed": "Failed",
+    "auto_malicious": "MALICIOUS",
+    "needs_review": "SUSPICIOUS",
+    "auto_benign": "BENIGN",
+    "inconclusive": "INCONCLUSIVE",
+    "failed": "FAILED",
 }
 
 
@@ -822,33 +830,54 @@ def is_reviewed(analysis):
 def initial_group_key(analysis):
     """시스템 초기 판정 기준 그룹. 분석가 수정과 무관한 '원래' 그룹이다."""
     return {
-        "HIGH_RISK_UNCERTAIN": "needs_review",
+        "HIGH_RISK_UNCERTAIN": "inconclusive",
         "AUTO_MALICIOUS": "auto_malicious",
         "AUTO_BENIGN": "auto_benign",
     }.get(analysis.get("initial_verdict"))
 
 
-def triage_group_key(analysis):
-    """분석 한 건이 속한 그룹 키. 아직 판정 전이면 None.
+def display_verdict(analysis):
+    """확정한 분석가 판정을 우선하며 검토 보류는 시스템 판정을 유지한다."""
+    verdict = analysis.get("analyst_final_verdict") or analysis.get("final_verdict")
+    if verdict in {"UNCERTAIN", "UNKNOWN"}:
+        verdict = "INCONCLUSIVE"
+    if analysis.get("status") == "FAILED" and verdict == "INCONCLUSIVE":
+        return None
+    return verdict
 
-    분석가가 판정을 저장한 건은 그 판정을 따른다. 백엔드는 initial_verdict를
-    바꾸지 않으므로 그룹 이동은 프론트가 analyst_final_verdict로 정한다.
-    보류(null)로 저장한 건은 Needs Review로 간다.
-    """
+
+def system_group_key(analysis):
+    """완료된 시스템 판정을 사용하고 이전 결과만 초기 판정으로 보완한다."""
+    if analysis.get("status") != "COMPLETED":
+        return None
+    return {
+        "MALICIOUS": "auto_malicious",
+        "SUSPICIOUS": "needs_review",
+        "BENIGN": "auto_benign",
+        "INCONCLUSIVE": "inconclusive",
+        "UNCERTAIN": "inconclusive",
+        "UNKNOWN": "inconclusive",
+    }.get(analysis.get("final_verdict")) or initial_group_key(analysis)
+
+
+def triage_group_key(analysis):
+    """목록과 상세는 최신 판정을 사용하며 실패·진행 상태는 별도로 다룬다."""
     if analysis["status"] == "FAILED":
         return "failed"
-    if is_reviewed(analysis):
-        return REVIEW_GROUP_BY_VERDICT.get(
-            analysis.get("analyst_final_verdict"), "needs_review"
-        )
-    return initial_group_key(analysis)
+    return REVIEW_GROUP_BY_VERDICT.get(
+        analysis.get("analyst_final_verdict")
+    ) or system_group_key(analysis)
 
 
 def review_mark(analysis):
     """세 그룹 표의 수정 여부 열 글자."""
     if not is_reviewed(analysis):
+        if (analysis.get("final_assessment") or {}).get("requires_human_review"):
+            return "REVIEW PENDING"
         return "-"
-    original = initial_group_key(analysis)
+    if analysis.get("analyst_final_verdict") is None:
+        return "REVIEW PENDING"
+    original = system_group_key(analysis)
     if original is not None and original != triage_group_key(analysis):
         return f"수정됨 · 원래 {BATCH_GROUP_LABELS[original].upper()}"
     # 저장은 했지만 원래 그룹과 같다(시스템 판정을 확인했거나 되돌린 경우)
@@ -867,6 +896,7 @@ def group_batch_analyses(analyses):
         "needs_review": [],
         "auto_malicious": [],
         "auto_benign": [],
+        "inconclusive": [],
         "failed": [],
     }
     for analysis in analyses:
@@ -1075,13 +1105,18 @@ def final_verdict_cell(analysis):
     분석가가 판정을 저장했으면 시스템 판정 대신 분석가 판정을 보여 주고,
     라벨에 수정/승인/보류 여부를 붙인다. 시스템 판정은 백엔드에 그대로 남아 있다.
     """
+    verdict = display_verdict(analysis)
+    if analysis.get("status") == "FAILED":
+        return "Final Verdict · FAILED", verdict_badge_markup(verdict or "-")
     if not is_reviewed(analysis):
-        return "Final Verdict", verdict_badge_markup(
-            analysis.get("final_verdict") or "Pending"
-        )
+        pending = (analysis.get("final_assessment") or {}).get("requires_human_review")
+        label = "Final Verdict · REVIEW PENDING" if pending else "Final Verdict"
+        return label, verdict_badge_markup(verdict or "Pending")
     verdict = analysis.get("analyst_final_verdict")
     if verdict is None:
-        return "Final Verdict · 분석가 보류", verdict_badge_markup("UNCERTAIN")
+        return "Final Verdict · REVIEW PENDING", verdict_badge_markup(
+            display_verdict(analysis) or "Pending"
+        )
     note = "분석가 승인" if analysis.get("approval_status") == "APPROVED" else "수정됨"
     return f"Final Verdict · {note}", verdict_badge_markup(verdict)
 
@@ -1091,7 +1126,7 @@ def review_blocker(analysis):
     if analysis.get("status") != "COMPLETED":
         return "분석이 완료된 파일만 판정을 수정할 수 있습니다."
     if triage_group_key(analysis) not in REVIEW_GROUPS:
-        return "Needs Review / Auto Malicious / Auto Benign 판정만 수정할 수 있습니다."
+        return "완료된 시스템 판정만 검토할 수 있습니다."
     batch_data = st.session_state.get("batch_data")
     if batch_data and pending_analyses(batch_data):
         # 진행 화면은 2초마다 다시 그려져서 열어 둔 팝업이 닫힌다
@@ -1203,22 +1238,22 @@ def format_review_time(value):
 
 def review_history_rows(items, analysis):
     """수정 이력 표. 최신 저장이 위로 오고, 각 줄은 직전 그룹 → 저장한 그룹으로 보여 준다."""
-    previous = initial_group_key(analysis)
+    system_group = system_group_key(analysis)
+    previous = system_group
     rows = []
     for item in items:
-        group = REVIEW_GROUP_BY_VERDICT.get(
-            item.get("analyst_final_verdict"), "needs_review"
-        )
+        group = REVIEW_GROUP_BY_VERDICT.get(item.get("analyst_final_verdict"))
         before = BATCH_GROUP_LABELS[previous].upper() if previous else "-"
+        after = BATCH_GROUP_LABELS[group].upper() if group else "REVIEW PENDING"
         rows.append(
             {
                 "Reviewed At": format_review_time(item.get("reviewed_at")),
                 "Reviewer": item.get("reviewer_id") or "-",
-                "Change": f"{before} → {BATCH_GROUP_LABELS[group].upper()}",
+                "Change": f"{before} → {after}",
                 "Notes": item.get("analyst_notes") or "",
             }
         )
-        previous = group
+        previous = group or system_group
     return list(reversed(rows))
 
 
@@ -1298,11 +1333,24 @@ def review_dialog(analysis_id):
         )
     )
 
+    default_choice = (
+        "needs_review"
+        if is_reviewed(analysis) and analysis.get("analyst_final_verdict") is None
+        else current
+    )
     choice = st.radio(
         "수정할 판정",
-        options=REVIEW_GROUPS,
-        index=REVIEW_GROUPS.index(current) if current in REVIEW_GROUPS else 0,
-        format_func=lambda key: BATCH_GROUP_LABELS[key].upper(),
+        options=tuple(REVIEW_VERDICT_BY_GROUP),
+        index=(
+            tuple(REVIEW_VERDICT_BY_GROUP).index(default_choice)
+            if default_choice in REVIEW_VERDICT_BY_GROUP
+            else 0
+        ),
+        format_func=lambda key: (
+            "REVIEW PENDING"
+            if REVIEW_VERDICT_BY_GROUP[key] is None
+            else BATCH_GROUP_LABELS[key].upper()
+        ),
         horizontal=True,
         # revision을 key에 넣어, 충돌로 최신 판정을 받아 오면 이전 선택이 남지 않고
         # 최신 판정이 선택된 새 위젯으로 다시 만들어지게 한다. (key가 같으면 브라우저가
@@ -1353,19 +1401,26 @@ def review_dialog(analysis_id):
                 st.session_state.get("review_conflict", {}).pop(analysis_id, None)
                 # 재조회가 실패해도 저장된 판정·revision이 화면에 남도록 응답부터 반영한다
                 apply_saved_review(analysis_id, saved)
+                notice = (
+                    "검토를 보류했습니다. 시스템 판정은 유지됩니다."
+                    if REVIEW_VERDICT_BY_GROUP[choice] is None
+                    else f"판정을 {BATCH_GROUP_LABELS[choice].upper()}(으)로 저장했습니다."
+                )
                 try:
                     refresh_review_fields(analysis_id)
                 except ApiError as e:
                     st.session_state.review_notice = (
-                        f"판정을 {BATCH_GROUP_LABELS[choice].upper()}(으)로 저장했습니다. "
+                        f"{notice} "
                         f"(다른 결과 항목은 새로 불러오지 못했습니다: {e.message})"
                     )
                 else:
-                    st.session_state.review_notice = f"판정을 {BATCH_GROUP_LABELS[choice].upper()}(으)로 저장했습니다."
+                    st.session_state.review_notice = notice
                 # 특정 그룹을 보고 있었다면 옮겨 간 그룹으로 따라간다. 그룹 위젯은
                 # 다음 실행에서 만들어지기 전에 이 값으로 바꾼다.
                 if st.session_state.get("batch_group") not in (None, "total"):
-                    st.session_state.pending_batch_group = choice
+                    st.session_state.pending_batch_group = triage_group_key(
+                        review_target(analysis_id) or analysis
+                    )
                 st.rerun()
 
     st.markdown("**수정 이력**")
@@ -1882,10 +1937,22 @@ def render_deep_analysis(analysis, deep, state):
     if assessment:
         assessment_box = deep.expander("Final Assessment", expanded=True)
         assessment_box.write(
-            f"**Final Verdict:** {assessment.get('final_verdict') or analysis.get('final_verdict') or '-'}"
+            f"**Final Verdict:** {display_verdict(analysis) or '-'}"
         )
-        assessment_box.write(f"**Disposition:** {assessment.get('disposition') or '-'}")
-        assessment_box.write(assessment.get("reason") or "-")
+        assessment_box.write(
+            f"**System Verdict:** {assessment.get('final_verdict') or analysis.get('final_verdict') or '-'}"
+        )
+        assessment_box.write(f"**Analysis Status:** {analysis.get('status') or status}")
+        review = analysis.get("approval_status") or (
+            "PENDING" if assessment.get("requires_human_review") else "AUTO_POLICY"
+        )
+        assessment_box.write(
+            f"**Review Status:** {'REVIEW PENDING' if review == 'PENDING' else review}"
+        )
+        assessment_box.write(
+            f"**System Disposition:** {assessment.get('disposition') or '-'}"
+        )
+        assessment_box.write(f"**System Reason:** {assessment.get('reason') or '-'}")
 
 
 def commit_receipt(batch_data):
@@ -2097,7 +2164,7 @@ def hash_search_rows(analyses):
             "File": analysis.get("filename") or "-",
             "Status": analysis.get("status") or "-",
             "Initial Verdict": analysis.get("initial_verdict") or "-",
-            "Final Verdict": analysis.get("final_verdict") or "-",
+            "Final Verdict": display_verdict(analysis) or "-",
             # 분석가가 판정을 수정한 이력도 배치 표와 같은 글자로 보여 준다
             REVIEW_COLUMN: review_mark(analysis),
         }
@@ -2310,18 +2377,22 @@ def batch_group_rows(group_key, analyses):
                 "SHA-256": analysis.get("sha256") or "-",
                 "Status": analysis["status"],
                 "Initial Verdict": analysis.get("initial_verdict") or "-",
-                "Reason": analysis.get("reason") or "-",
+                "Final Verdict": display_verdict(analysis) or "-",
+                "System Reason": (analysis.get("final_assessment") or {}).get("reason")
+                or analysis.get("reason") or "-",
             }
             for analysis in analyses
         ]
-    if group_key == "needs_review":
+    if group_key in {"needs_review", "inconclusive"}:
         return [
             {
                 "File": analysis["filename"],
                 "SHA-256": analysis.get("sha256") or "-",
                 "Status": analysis["status"],
                 REVIEW_COLUMN: review_mark(analysis),
-                "JRR Reason": analysis["reason"],
+                "Final Verdict": display_verdict(analysis) or "-",
+                "System Reason": (analysis.get("final_assessment") or {}).get("reason")
+                or analysis.get("reason") or "-",
                 "Deep Analysis Status": deep_analysis_status_text(analysis),
             }
             for analysis in analyses
@@ -2334,7 +2405,8 @@ def batch_group_rows(group_key, analyses):
                 "Status": analysis["status"],
                 REVIEW_COLUMN: review_mark(analysis),
                 "Calibrated Probability": (f"{analysis['calibrated_probability']:.4f}"),
-                "Reason": analysis["reason"],
+                "System Reason": (analysis.get("final_assessment") or {}).get("reason")
+                or analysis.get("reason") or "-",
             }
             for analysis in analyses
         ]
@@ -2343,6 +2415,7 @@ def batch_group_rows(group_key, analyses):
             "File": analysis["filename"],
             "SHA-256": analysis.get("sha256") or "-",
             "Status": analysis["status"],
+            "Final Verdict": display_verdict(analysis) or "-",
             "Initial Verdict": analysis["initial_verdict"],
             "Reason": analysis["reason"],
         }
@@ -2395,7 +2468,7 @@ def render_batch_group_results(group_key, analyses, result_card=st):
     )
 
     selected = analysis_by_id.get(st.session_state.get(selector_key))
-    if selected is not None and triage_group_key(selected) == "needs_review":
+    if selected is not None and selected.get("initial_verdict") == "HIGH_RISK_UNCERTAIN":
         result_card.markdown(
             f"""
             <div class="deep-status-row">
@@ -3602,10 +3675,10 @@ st.markdown(
             width: 100% !important;
             max-width: 100% !important;
         }
-        /* 버튼들의 바로 위 상자를 5칸 격자로 */
+        /* Total, 네 판정, 실패 상태를 6칸 격자로 */
         .st-key-batch_group *:has(> button) {
             display: grid !important;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
+            grid-template-columns: repeat(6, minmax(0, 1fr));
             gap: 0.75rem;
         }
         .st-key-batch_group [data-testid="stButtonGroup"] button {
@@ -3635,7 +3708,7 @@ st.markdown(
             letter-spacing: 0.04em;
             text-transform: uppercase;
         }
-        /* 선택된 타일: 분류별 색 (1 Total, 2 Needs Review, 3 Auto Malicious, 4 Auto Benign, 5 Failed) */
+        /* 선택된 타일: Total, Malicious, Suspicious, Benign, Inconclusive, Failed */
         .st-key-batch_group button[aria-checked="true"] { border-width: 2px !important; }
         .st-key-batch_group button[aria-checked="true"] p::first-line { color: inherit; font-weight: 700; }
         .st-key-batch_group button:nth-of-type(1)[aria-checked="true"] {
@@ -3644,25 +3717,25 @@ st.markdown(
         }
         .st-key-batch_group button:nth-of-type(1)[aria-checked="true"] p { color: var(--text) !important; }
         .st-key-batch_group button:nth-of-type(2)[aria-checked="true"] {
-            background: var(--warning-soft) !important;
-            border-color: var(--warning-border) !important;
-        }
-        .st-key-batch_group button:nth-of-type(2)[aria-checked="true"] p { color: var(--warning-fg) !important; }
-        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] {
             background: var(--danger-bg) !important;
             border-color: var(--danger-border) !important;
         }
-        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] p { color: var(--danger-fg) !important; }
+        .st-key-batch_group button:nth-of-type(2)[aria-checked="true"] p { color: var(--danger-fg) !important; }
+        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] {
+            background: var(--warning-soft) !important;
+            border-color: var(--warning-border) !important;
+        }
+        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] p { color: var(--warning-fg) !important; }
         .st-key-batch_group button:nth-of-type(4)[aria-checked="true"] {
             background: var(--success-bg) !important;
             border-color: var(--success-border) !important;
         }
         .st-key-batch_group button:nth-of-type(4)[aria-checked="true"] p { color: var(--success-fg) !important; }
-        .st-key-batch_group button:nth-of-type(5)[aria-checked="true"] {
+        .st-key-batch_group button:is(:nth-of-type(5), :nth-of-type(6))[aria-checked="true"] {
             background: var(--neutral-bg) !important;
             border-color: var(--border-strong) !important;
         }
-        .st-key-batch_group button:nth-of-type(5)[aria-checked="true"] p { color: var(--text-2) !important; }
+        .st-key-batch_group button:is(:nth-of-type(5), :nth-of-type(6))[aria-checked="true"] p { color: var(--text-2) !important; }
 
         /* 머리글 오른쪽 버튼(새 파일 분석, 판정 수정): 열 비율 대신 고정 폭을 써서
            배치 화면·단건 화면 어디에 있든 같은 크기로 보이게 한다 */

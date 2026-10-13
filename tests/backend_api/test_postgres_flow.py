@@ -131,7 +131,7 @@ def test_zip_http_receipt_and_summary_survive_service_restart(flow):
 
 @pytest.mark.parametrize(
     "verdict,expected",
-    [("AUTO_BENIGN", "BENIGN"), ("HIGH_RISK_UNCERTAIN", "UNCERTAIN")],
+    [("AUTO_BENIGN", "BENIGN"), ("HIGH_RISK_UNCERTAIN", "INCONCLUSIVE")],
 )
 def test_http_processor_restart_and_analyst_review_with_real_postgres(
     flow, verdict, expected

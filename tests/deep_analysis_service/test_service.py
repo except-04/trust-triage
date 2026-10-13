@@ -34,7 +34,9 @@ def test_sufficient_static_completes_and_llm_runs_only_once(tmp_path):
     h = ServiceHarness(tmp_path, sufficient=True)
     result = h.service.start(h.request)
     assert result.phase is DeepAnalysisPhase.COMPLETED
-    assert result.result["final_verdict"] == "MALICIOUS"
+    assert result.checkpoint["static"]["assessment"]["sufficient"] is True
+    assert result.checkpoint["static"]["needs_speakeasy"] is False
+    assert result.result["final_verdict"] == "SUSPICIOUS"
     assert result.result["executed_tiers"] == ["CAPA", "FLOSS"]
     assert {item.source for item in h.llm.inputs[0]} == {"CAPA", "FLOSS"}
     assert h.calls == (1, 1, 1, 1)
