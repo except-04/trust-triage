@@ -652,7 +652,11 @@ class PostgresAnalysisRepository:
                         x["queue_name"],
                         policy_rank(x["score_policy"]),
                         0,  # placeholder for emergency_obs_level
-                        -x["priority_score"],
+                        -(
+                            x["calibrated_probability"]
+                            if x["score_policy"] == "uncertainty-v2"
+                            else x["priority_score"]
+                        ),
                         x["created_at"].timestamp(),
                         x["analysis_id"],
                     )

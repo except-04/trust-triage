@@ -432,7 +432,11 @@ class MemoryAnalysisRepository:
                     x["queue_name"],
                     policy_rank(x["score_policy"]),
                     0,
-                    -x["priority_score"],
+                    -(
+                        x["calibrated_probability"]
+                        if x["score_policy"] == "uncertainty-v2"
+                        else x["priority_score"]
+                    ),
                     created_dt.timestamp(),
                     x["analysis_id"],
                 )

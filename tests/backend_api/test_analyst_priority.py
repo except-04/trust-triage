@@ -4,6 +4,45 @@ from tests.backend_api.fake_repository import MemoryAnalysisRepository
 from trust_triage.backend_api.repository import AnalysisRecord
 
 
+def test_uncertainty_queue_orders_by_malicious_probability_then_fifo():
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    rows = []
+    for index, (analysis_id, probability, hour) in enumerate([
+        ("p7784", 0.7784, 0),
+        ("p7933", 0.7933, 0),
+        ("p8416", 0.8416, 0),
+        ("high-new", 0.8525, 2),
+        ("high-old", 0.8525, 1),
+    ]):
+        rows.append({
+            "analysis_id": analysis_id,
+            "sha256": f"{index:064x}",
+            "filename": f"{analysis_id}.exe",
+            "initial_result": {
+                "initial_verdict": "HIGH_RISK_UNCERTAIN",
+                "prediction": {"calibrated_probability": probability},
+                "triggered_signals": ["UNCERTAIN_PROBABILITY"],
+            },
+            "created_at": datetime(2026, 10, 13, hour, tzinfo=timezone.utc),
+        })
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = rows
+    repo = object.__new__(PostgresAnalysisRepository)
+    repo._connection = MagicMock()
+    repo._connection.return_value.__enter__.return_value = connection
+
+    result = repo.get_priority_recommendations()
+    assert [item["analysis_id"] for item in result] == [
+        "high-old", "high-new", "p8416", "p7933", "p7784",
+    ]
+    assert [item["rank"] for item in result] == [1, 2, 3, 4, 5]
+
+
 def test_analyst_priority_recommendations():
     repo = MemoryAnalysisRepository()
 
