@@ -335,6 +335,88 @@ def test_high_risk_waits_for_deep_then_finalizes_for_review(harness):
     assert {row.sha256 for row in harness.deep.calls} == {accepted.sha256}
 
 
+@pytest.mark.parametrize(
+    ("deep_verdict", "llm_verdict", "final_verdict", "disposition"),
+    [
+        ("MALICIOUS", "MALICIOUS", "MALICIOUS", "ALERT_RECOMMENDED"),
+        ("SUSPICIOUS", "MALICIOUS", "SUSPICIOUS", "MANUAL_REVIEW"),
+        ("BENIGN", "BENIGN", "BENIGN", "MANUAL_REVIEW"),
+        ("UNKNOWN", "BENIGN", "INCONCLUSIVE", "MANUAL_REVIEW"),
+    ],
+    ids=["malicious", "suspicious", "benign", "inconclusive"],
+)
+def test_deep_verdict_is_persisted_and_returned_after_finalization(
+    harness, deep_verdict, llm_verdict, final_verdict, disposition
+):
+    harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
+
+    def completed_snapshot(record):
+        value = deep_snapshot(record)
+        # Evidence checks may downgrade the raw LLM verdict before persistence.
+        value["result"].update(
+            final_verdict=deep_verdict,
+            llm_interpretation={"status": "SUCCESS", "verdict": llm_verdict},
+        )
+        return value
+
+    harness.deep.outcomes.append(completed_snapshot)
+    accepted = submit(harness)
+    complete(harness, accepted.analysis_id)
+
+    stored = harness.repository.get(accepted.analysis_id)
+    assert stored.status == "COMPLETED" and stored.phase == "DONE"
+    assert stored.error is None
+    assert stored.deep_result["result"]["final_verdict"] == deep_verdict
+    assessment = stored.final_assessment
+    assert assessment["final_verdict"] == final_verdict
+    assert assessment["disposition"] == disposition
+    assert assessment["requires_human_review"] is True
+
+    response = views.analysis(harness.service.get(accepted.analysis_id)).model_dump(
+        mode="json"
+    )
+    assert response["final_verdict"] == final_verdict
+    assert response["final_assessment"] == assessment
+
+    reference = next(
+        ref
+        for ref in harness.repository.list_artifacts(accepted.analysis_id)
+        if ref.tool == "FINAL_ASSESSMENT"
+    )
+    artifact = json.loads(harness.processor.artifacts.read(reference))
+    assert artifact["final_assessment"] == assessment
+
+    resumed = harness.processor.resume(accepted.analysis_id)
+    assert resumed.final_assessment == assessment
+    assert len(harness.deep.calls) == 1
+
+
+@pytest.mark.parametrize("llm_status", ["TIMEOUT", "NOT_CONFIGURED", None])
+def test_deep_verdict_without_successful_llm_is_persisted_as_inconclusive(
+    harness, llm_status
+):
+    harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
+
+    def completed_snapshot(record):
+        value = deep_snapshot(record)
+        value["result"]["final_verdict"] = "MALICIOUS"
+        if llm_status is None:
+            value["result"].pop("llm_interpretation")
+        else:
+            value["result"]["llm_interpretation"] = {"status": llm_status}
+        return value
+
+    harness.deep.outcomes.append(completed_snapshot)
+    accepted = submit(harness)
+    complete(harness, accepted.analysis_id)
+
+    stored = harness.repository.get(accepted.analysis_id)
+    assert stored.status == "COMPLETED"
+    assert stored.final_assessment["final_verdict"] == "INCONCLUSIVE"
+    assert stored.final_assessment["disposition"] == "MANUAL_REVIEW"
+    assert stored.final_assessment["requires_human_review"] is True
+
+
 def test_shap_failure_preserves_initial_jrr_and_requests_review(harness):
     harness.initial.value = initial_result(xai_failed=True)
     accepted = submit(harness)
