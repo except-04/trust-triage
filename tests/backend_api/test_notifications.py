@@ -17,12 +17,14 @@ import pytest
 
 from trust_triage.backend_api import notifications as module
 from trust_triage.backend_api.config import BackendConfig
+from trust_triage.backend_api.initial_analysis import _predict_initial
 from trust_triage.backend_api.errors import BackendError
 from trust_triage.backend_api.notifications import DiscordNotifier
 from trust_triage.backend_api.processor import BackendProcessor
 from trust_triage.backend_api.repository import AnalysisRecord
 from trust_triage.storage.artifacts import ArtifactError
 
+from .test_initial_analysis import components  # noqa: F401 - pytest fixture
 from .test_service_processor import (  # noqa: F401 - pytest fixture registration
     deep_snapshot,
     harness,
@@ -590,4 +592,122 @@ def test_notification_format_failure_never_changes_analysis(connected, http, mon
     assert h.repository.calls["release"] == 0
     assert http.url not in caplog.text
     assert events(http) == []
+
+
+
+@pytest.mark.parametrize(
+    "stage,component,method,invalid,invalid_code",
+    [
+        ("MODEL_INFERENCE", "lgbm", "predict_proba",
+         [[float("nan"), 0.5]], "MODEL_OUTPUT_INVALID"),
+        ("CALIBRATION", "calibrator", "predict",
+         [float("nan")], "CALIBRATION_OUTPUT_INVALID"),
+        ("RISK_SIGNALS", "ood_model", "decision_function",
+         [float("nan")], "RISK_OUTPUT_INVALID"),
+        ("INITIAL_JRR", "router", "route_sample", {}, "JRR_OUTPUT_INVALID"),
+    ],
+)
+@pytest.mark.parametrize("raises", [False, True], ids=["invalid-output", "exception"])
+def test_actual_initial_errors_reach_failed_notification(
+    connected, http, components, monkeypatch, caplog,
+    stage, component, method, invalid, invalid_code, raises,
+):
+    h = connected
+    result, bundle = components
+    private_message = "private component details " + http.url + " @everyone"
+    operation = (
+        Mock(side_effect=RuntimeError(private_message))
+        if raises else Mock(return_value=invalid)
+    )
+    monkeypatch.setattr(getattr(bundle, component), method, operation)
+
+    def fail_initial(path, *, sha256, check):
+        check()
+        # Exercise the real adapter's output checks and exception-to-code mapping.
+        # The reused components are fakes; no models, PE execution or HTTP are used.
+        return _predict_initial(result, bundle, result.sha256)[0]
+
+    monkeypatch.setattr(h.initial, "analyze", fail_initial)
+    accepted = submit(h)
+    row = h.processor.resume(accepted.analysis_id)
+    drain(h.processor.notifications)
+
+    code = stage + "_FAILED" if raises else invalid_code
+    assert row.status == "FAILED"
+    assert row.error["stage"] == stage and row.error["code"] == code
+    assert events(http) == ["ANALYSIS_STARTED", "ANALYSIS_FAILED"]
+    payload = payloads(http)[-1]
+    assert fields(payload)["실패 단계"] == stage
+    assert fields(payload)["오류 코드"] == code
+    assert payload["allowed_mentions"]["parse"] == []
+    serialized = json.dumps(payload, ensure_ascii=False)
+    for private in (private_message, http.url, http.token, "@everyone"):
+        assert private not in serialized and private not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "stage,code",
+    [
+        # model_bundle.py: configuration, artifact loading and schema validation.
+        ("MODEL_LOADING", "MODEL_NOT_CONFIGURED"),
+        ("MODEL_LOADING", "MODEL_ARTIFACT_MISSING"),
+        ("MODEL_LOADING", "MODEL_SCHEMA_MISMATCH"),
+        ("MODEL_LOADING", "MODEL_LOAD_FAILED"),
+        # initial_analysis.py / initial_worker.py: feature and IPC failures.
+        ("FEATURE_EXTRACTION", "FEATURE_EXTRACTION_TIMEOUT"),
+        ("FEATURE_EXTRACTION", "SAMPLE_HASH_MISMATCH"),
+        ("FEATURE_EXTRACTION", "FEATURE_SCHEMA_MISMATCH"),
+        ("FEATURE_EXTRACTION", "FEATURE_NONFINITE"),
+        ("MODEL_INFERENCE", "INITIAL_ANALYSIS_FAILED"),
+        ("MODEL_LOADING", "INITIAL_ANALYSIS_START_FAILED"),
+        ("MODEL_INFERENCE", "INITIAL_ANALYSIS_TIMEOUT"),
+        ("MODEL_INFERENCE", "INITIAL_ANALYSIS_PROCESS_EXITED"),
+        ("MODEL_INFERENCE", "INITIAL_ANALYSIS_PROTOCOL_ERROR"),
+    ],
+)
+def test_initial_worker_errors_preserve_safe_fields(connected, http, stage, code):
+    h = connected
+    h.initial.outcomes.append(BackendError(
+        code, "private worker detail " + http.url, stage=stage,
+    ))
+    accepted = submit(h)
+    row = h.processor.resume(accepted.analysis_id)
+    drain(h.processor.notifications)
+
+    assert row.status == "FAILED"
+    assert events(http) == ["ANALYSIS_STARTED", "ANALYSIS_FAILED"]
+    payload = payloads(http)[-1]
+    assert fields(payload)["실패 단계"] == stage
+    assert fields(payload)["오류 코드"] == code
+    assert "private" not in json.dumps(payload)
+    assert http.url not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    "stage,code,expected_stage,expected_code",
+    [
+        ("MODEL_INFERENCE_PRIVATE", "MODEL_OUTPUT_INVALID_PRIVATE",
+         "확인 불가", "ANALYSIS_ERROR"),
+        ("CALIBRATION", "CALIBRATION_CUSTOM_FAILED",
+         "CALIBRATION", "ANALYSIS_ERROR"),
+        ("RISK_SIGNALS_CUSTOM", "RISK_OUTPUT_INVALID",
+         "확인 불가", "RISK_OUTPUT_INVALID"),
+        ("INITIAL_JRR @here", "INITIAL_JRR_FAILED @everyone",
+         "확인 불가", "ANALYSIS_ERROR"),
+    ],
+)
+def test_similar_but_unlisted_error_strings_stay_filtered(
+    notifier, http, row, stage, code, expected_stage, expected_code,
+):
+    notifier.emit("ANALYSIS_FAILED", row, error={
+        "stage": stage, "code": code,
+        "message": http.url, "traceback": "private internal stack",
+    })
+    drain(notifier)
+    payload = payloads(http)[0]
+    assert fields(payload)["실패 단계"] == expected_stage
+    assert fields(payload)["오류 코드"] == expected_code
+    serialized = json.dumps(payload)
+    for private in (http.url, http.token, "PRIVATE", "CUSTOM", "@", "private"):
+        assert private not in serialized
 
