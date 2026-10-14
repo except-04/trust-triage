@@ -134,6 +134,29 @@ def test_model_worker_loads_bundle_and_builds_shap_only_once(monkeypatch):
     assert wire.closed
 
 
+def test_model_worker_fail_closed_skips_shap_and_retires(monkeypatch):
+    import trust_triage.feature_extraction as extraction
+
+    result, bundle = components()
+    bundle.calibrator.probability = float("nan")
+    monkeypatch.setattr(extraction, "EmberV3Extractor", lambda **kwargs: SimpleNamespace(schema=bundle.selector.source_schema))
+    monkeypatch.setattr(ModelBundle, "load", lambda *args: bundle)
+    def unexpected_explanation(*args):
+        pytest.fail("Fail-Closed scores must not be explained as a model prediction")
+    monkeypatch.setattr(module, "_build_explainer", unexpected_explanation)
+    wire = WireDouble([{
+        "kind": "analyze", "job_id": "job-fail-closed",
+        "payload": {"features": result.to_dict(), "sha256": SHA256},
+    }])
+    module._model_entry(InitialAnalysisConfig(), wire)
+    assert [message["kind"] for message in wire.outgoing] == ["ready", "initial", "xai"]
+    initial = wire.outgoing[1]["payload"]
+    assert initial["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+    assert initial["prediction"]["calibrated_probability"] is None
+    assert wire.outgoing[2]["payload"]["xai_status"] == "NOT_REQUIRED"
+    assert wire.closed
+
+
 def test_extractor_sends_only_features_not_pe_or_unused_metadata(monkeypatch):
     import trust_triage.feature_extraction as extraction
 

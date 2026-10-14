@@ -129,6 +129,11 @@ def _model_entry(config: InitialAnalysisConfig, connection: Any) -> None:
                 result = FeatureExtractionResult(**feature_data)
                 initial, vector = _predict_initial(result, bundle, payload["sha256"])
                 _send(connection, "initial", job_id, initial)
+                if initial.get("reason_code") == "SYSTEM_ERROR_FAIL_CLOSED":
+                    _send(connection, "xai", job_id, {
+                        "top_features": [], "xai_status": "NOT_REQUIRED", "xai_error": None
+                    })
+                    break
             except Exception as exc:  # noqa: BLE001 - retire possibly dirty native state.
                 _send_error(connection, exc, job_id, "MODEL_INFERENCE")
                 break

@@ -207,7 +207,7 @@ def _predict_initial(
         verdict = routed.get("initial_verdict")
         if (
             verdict not in expected_routes
-            or routed.get("route") != expected_routes[verdict]
+            or routed.get("route") not in {"FINAL", "DEEP_ANALYSIS"}
             or not isinstance(routed.get("reason"), str)
         ):
             raise _failure(
@@ -218,8 +218,10 @@ def _predict_initial(
         try:
             # New executions must follow the current JRR contract. Only stored
             # legacy results may omit this field; never infer it from reason.
-            signals = _TRIGGERED_SIGNALS.validate_python(
-                routed.get("triggered_signals")
+            raw_signals = routed.get("triggered_signals")
+            signals = (
+                _TRIGGERED_SIGNALS.validate_python(raw_signals)
+                if raw_signals is not None else None
             )
         except ValidationError as exc:
             raise _failure(
@@ -227,14 +229,37 @@ def _predict_initial(
                 "The initial JRR returned invalid or missing triggered signals.",
                 stage,
             ) from exc
-        if (verdict == "HIGH_RISK_UNCERTAIN") != bool(signals):
+        from .jrr_contract import recover_jrr_inconsistency
+
+        routed = recover_jrr_inconsistency(routed)
+        verdict, signals = routed["initial_verdict"], routed["triggered_signals"]
+        fail_closed = routed.get("reason_code") == "SYSTEM_ERROR_FAIL_CLOSED"
+        if (
+            fail_closed
+            and (verdict != "HIGH_RISK_UNCERTAIN" or signals
+                 or routed.get("calibrated_probability") is not None)
+        ) or (
+            not fail_closed and routed.get("reason_code") != "JRR_RESULT_INCONSISTENT"
+            and (verdict == "HIGH_RISK_UNCERTAIN") != bool(signals)
+        ):
             raise _failure(
                 "JRR_OUTPUT_INVALID",
                 "The JRR verdict must match the presence of triggered risk signals.",
                 stage,
             )
-    except BackendError:
-        raise
+        if fail_closed:
+            p_lgbm = p_xgb = p_calibrated = None
+            disagreement = ood = difficulty = None
+    except BackendError as exc:
+        if exc.code not in {
+            "MODEL_OUTPUT_INVALID", "CALIBRATION_OUTPUT_INVALID", "RISK_OUTPUT_INVALID"
+        }:
+            raise
+        # Invalid numerical scores must never become an automatic verdict.
+        routed = bundle.router.fail_closed()
+        verdict, signals = routed["initial_verdict"], []
+        p_lgbm = p_xgb = p_calibrated = None
+        disagreement = ood = difficulty = None
     except Exception as exc:
         raise _failure(
             f"{stage}_FAILED", "An initial-analysis component failed.", stage
@@ -282,6 +307,8 @@ def _predict_initial(
         "initial_verdict": verdict,
         "route": routed["route"],
         "reason": routed["reason"],
+        "reason_code": routed.get("reason_code"),
+        "jrr_error": routed.get("jrr_error"),
         "triggered_signals": signals,
         "top_features": [],
         "feature_metadata": metadata,
@@ -360,6 +387,9 @@ def _worker_entry(
         sender.send(("phase", stage))
         initial, vector = _predict_initial(result, bundle, sha256)
         sender.send(("initial", initial))
+        if initial.get("reason_code") == "SYSTEM_ERROR_FAIL_CLOSED":
+            sender.send(("xai", {"top_features": [], "xai_status": "NOT_REQUIRED", "xai_error": None}))
+            return
         try:
             features = _explain(bundle, vector, config.shap_top_k)
             sender.send(

@@ -282,9 +282,10 @@ def test_fresh_initial_result_must_record_triggered_signals(harness, signals):
         harness.initial.value["triggered_signals"] = signals
     accepted = submit(harness)
     record = harness.processor.resume(accepted.analysis_id)
-    assert record.status == "FAILED" and record.initial_result is None
-    assert record.error["code"] == "INITIAL_RESULT_INVALID"
-    assert record.final_assessment["final_verdict"] == "INCONCLUSIVE"
+    assert record.phase == "WAITING_DEEP" and record.initial_result is not None
+    assert record.error is None
+    assert record.initial_result["reason_code"] == "JRR_RESULT_INCONSISTENT"
+    assert record.initial_result["jrr_error"]["original_triggered_signals"] == signals
     assert harness.deep.calls == []
 
 
@@ -339,6 +340,45 @@ def test_high_risk_waits_for_deep_then_finalizes_for_review(harness):
     assert len(harness.initial.calls) == 1 and len(harness.deep.calls) == 2
     assert {row.analysis_id for row in harness.deep.calls} == {accepted.analysis_id}
     assert {row.sha256 for row in harness.deep.calls} == {accepted.sha256}
+
+
+def test_fail_closed_result_is_persisted_and_runs_deep(harness):
+    value = initial_result("HIGH_RISK_UNCERTAIN")
+    value.update(reason_code="SYSTEM_ERROR_FAIL_CLOSED", triggered_signals=[])
+    value["prediction"] = {key: None for key in value["prediction"]}
+    value["risk_signals"] = {key: None for key in value["risk_signals"]}
+    harness.initial.value = value
+    accepted = submit(harness)
+    first = harness.processor.resume(accepted.analysis_id)
+    assert first.phase == "WAITING_DEEP"
+    assert first.error is None
+    triage = views.triage(first)
+    assert triage.reason_code == "SYSTEM_ERROR_FAIL_CLOSED"
+    assert triage.prediction.calibrated_probability is None
+    finished = next_step(harness, accepted.analysis_id)
+    assert harness.deep.calls
+    assert finished.status == "COMPLETED"
+    assert views.analysis(finished).reason_code == "SYSTEM_ERROR_FAIL_CLOSED"
+
+
+@pytest.mark.parametrize("mutation", ["auto", "signal", "probability"])
+def test_malformed_fail_closed_result_is_rejected(harness, mutation):
+    value = initial_result("HIGH_RISK_UNCERTAIN")
+    value.update(reason_code="SYSTEM_ERROR_FAIL_CLOSED", triggered_signals=[])
+    value["prediction"] = {key: None for key in value["prediction"]}
+    value["risk_signals"] = {key: None for key in value["risk_signals"]}
+    if mutation == "auto":
+        value.update(initial_verdict="AUTO_BENIGN", route="FINAL")
+    elif mutation == "signal":
+        value["triggered_signals"] = ["OOD"]
+    else:
+        value["prediction"]["calibrated_probability"] = 0.1
+    harness.initial.value = value
+    accepted = submit(harness)
+    record = harness.processor.resume(accepted.analysis_id)
+    assert record.status == "FAILED"
+    assert record.initial_result is None
+    assert harness.deep.calls == []
 
 
 @pytest.mark.parametrize(
@@ -670,16 +710,74 @@ def test_unexpected_initial_exception_is_sanitized_without_retry(harness):
     assert harness.repository.calls["release"] == 0
 
 
-def test_initial_route_contract_is_rejected_before_persisting(harness):
+def test_initial_route_inconsistency_is_preserved_before_deep(harness):
     harness.initial.value["route"] = "DEEP_ANALYSIS"
     accepted = submit(harness)
     finished = harness.processor.resume(accepted.analysis_id)
-    assert (
-        finished.status == "FAILED"
-        and finished.error["code"] == "INITIAL_RESULT_INVALID"
+    assert finished.phase == "WAITING_DEEP"
+    assert finished.error is None
+    assert finished.initial_result["jrr_error"]["original_verdict"] == "AUTO_BENIGN"
+    assert harness.repository.calls["save_initial"] == 1
+
+
+@pytest.mark.parametrize("kind", ["empty_signals", "auto_with_signal", "wrong_route"])
+@pytest.mark.parametrize("deep_verdict", ["BENIGN", "MALICIOUS", "SUSPICIOUS"])
+def test_jrr_inconsistency_survives_deep_success_and_requires_review(harness, kind, deep_verdict):
+    from copy import deepcopy
+
+    value = initial_result("HIGH_RISK_UNCERTAIN" if kind == "empty_signals" else "AUTO_BENIGN")
+    if kind == "empty_signals":
+        value["triggered_signals"] = []
+    elif kind == "auto_with_signal":
+        value["triggered_signals"] = ["OOD"]
+    else:
+        value["route"] = "DEEP_ANALYSIS"
+    original = deepcopy(value)
+    harness.initial.value = value
+
+    def successful(record):
+        snapshot = deep_snapshot(record)
+        snapshot["result"].update(
+            final_verdict=deep_verdict,
+            llm_interpretation={"status": "SUCCESS", "verdict": deep_verdict},
+        )
+        return snapshot
+
+    harness.deep.outcomes.append(successful)
+    accepted = submit(harness)
+    first = harness.processor.resume(accepted.analysis_id)
+    assert first.phase == "WAITING_DEEP" and first.error is None
+    error_history = deepcopy(first.initial_result["jrr_error"])
+    assert error_history["original_verdict"] == original["initial_verdict"]
+    assert error_history["original_route"] == original["route"]
+    assert error_history["original_triggered_signals"] == original["triggered_signals"]
+    assert value == original
+    # Resume with another processor to verify recovery depends on saved state.
+    harness.processor = BackendProcessor(
+        harness.repository, harness.storage, harness.initial, harness.deep, harness.config
     )
-    assert finished.initial_result is None
-    assert harness.repository.calls["save_initial"] == 0
+    finished = next_step(harness, accepted.analysis_id)
+    assert finished.status == "COMPLETED" and harness.deep.calls
+    assert finished.initial_result["jrr_error"] == error_history
+    assert finished.final_assessment["requires_human_review"] is True
+    assert finished.final_assessment["disposition"] != "AUTO_ALLOW_RECOMMENDED"
+    response = views.analysis(finished).model_dump(mode="json")
+    assert response["jrr_error"] == error_history
+    assert response["approval_status"] == "PENDING"
+    assert len(harness.initial.calls) == 1
+
+
+def test_initial_failure_without_result_is_visible_in_error_queue(harness):
+    harness.initial.outcomes.append(BackendError("JRR_OUTPUT_INVALID", "Invalid output", stage="INITIAL_JRR"))
+    accepted = submit(harness)
+    failed = harness.processor.resume(accepted.analysis_id)
+    assert failed.status == "FAILED" and failed.initial_result is None
+    payload = harness.service.get_priority_recommendations()
+    assert payload["deep_recommendations"] == []
+    candidate = payload["error_queue"][0]
+    assert candidate["analysis_id"] == failed.analysis_id
+    assert candidate["error"]["code"] == "JRR_OUTPUT_INVALID"
+    assert "JRR_OUTPUT_INVALID" in candidate["queue_reason"]
 
 
 def test_checkpoint_database_failure_is_retryable_and_preserves_input(harness):

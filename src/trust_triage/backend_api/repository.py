@@ -380,10 +380,27 @@ class PostgresAnalysisRepository:
             )
 
     def _determine_queue(
-        self, prob_float, initial_verdict, triggered_signals, risk_signals, deep_result
+        self, prob_float, initial_verdict, triggered_signals, risk_signals, deep_result,
+        reason_code=None, status=None, error=None,
     ) -> dict[str, Any]:
+        if status == "FAILED" and initial_verdict is None:
+            error = error or {}
+            return {
+                "queue_name": "ERROR",
+                "queue_reason": f"초기 분석 실패: {error.get('code', 'UNKNOWN_ERROR')}",
+                "priority_score": -1.0,
+                "score_policy": "error-v1",
+                "priority_reason": "초기 분석 실패",
+                "selection_reason": "초기 결과 저장 전 실패한 분석 확인 필요",
+            }
         # Handle ERROR state for invalid probability
-        if prob_float < 0.0:
+        fail_closed = (
+            reason_code == "SYSTEM_ERROR_FAIL_CLOSED"
+            and initial_verdict == "HIGH_RISK_UNCERTAIN"
+            and not triggered_signals
+            and prob_float < 0.0
+        )
+        if prob_float < 0.0 and not fail_closed:
             return {
                 "queue_name": "ERROR",
                 "queue_reason": "비정상/누락된 악성 확률 값",
@@ -415,13 +432,38 @@ class PostgresAnalysisRepository:
         is_deep = False
         deep_reasons = []
         deep_priority_score = 0.0
-        deep_score_policy = "exception-v2"
-        deep_priority_reason = "신호 미감지"
+        deep_score_policy = "none"
+        deep_priority_reason = ""
         deep_queue_reason = ""
 
-        raw_ood = float(risk_signals.get("ood_score", 0))
-        disagreement = float(risk_signals.get("disagreement", 0))
-        difficulty = float(risk_signals.get("difficulty_score", 0))
+        if fail_closed and not is_emergency:
+            return {
+                "queue_name": "DEEP",
+                "queue_reason": "모델 확률이나 위험 점수가 유효하지 않아 심층 분석 필요",
+                "priority_score": 0.0,
+                "deep_priority_score": 0.0,
+                "score_policy": "fail-closed-v1",
+                "priority_reason": "점수 계산 오류",
+                "selection_reason": "점수 계산 오류로 심층 분석 필요",
+            }
+        inconsistent = (
+            reason_code == "JRR_RESULT_INCONSISTENT"
+            or (initial_verdict == "HIGH_RISK_UNCERTAIN" and not triggered_signals and not fail_closed)
+            or (initial_verdict in {"AUTO_BENIGN", "AUTO_MALICIOUS"} and bool(triggered_signals))
+        )
+        if inconsistent and not is_emergency:
+            return {
+                "queue_name": "DEEP",
+                "queue_reason": "초기 판정과 위험 신호 또는 처리 경로 불일치",
+                "priority_score": 0.0,
+                "deep_priority_score": 0.0,
+                "score_policy": "jrr-inconsistent-v1",
+                "priority_reason": "초기 판정 불일치",
+                "selection_reason": "JRR 오류 이력 확인 및 분석가 검토 필요",
+            }
+        raw_ood = float(risk_signals.get("ood_score") or 0)
+        disagreement = float(risk_signals.get("disagreement") or 0)
+        difficulty = float(risk_signals.get("difficulty_score") or 0)
 
         has_uncertainty = "UNCERTAIN_PROBABILITY" in triggered_signals
         has_disagreement = "DISAGREEMENT" in triggered_signals
@@ -527,21 +569,27 @@ class PostgresAnalysisRepository:
                     a.deep_result,
                     a.created_at,
                     a.final_assessment,
+                    a.status,
+                    a.error,
                     EXISTS (
                         SELECT 1 FROM api_reviews r 
                         WHERE r.analysis_id = a.analysis_id AND r.review_status = 'PENDING'
-                    ) AS is_pending
+                    ) AS is_pending,
+                    EXISTS (
+                        SELECT 1 FROM api_reviews r
+                        WHERE r.analysis_id = a.analysis_id AND r.review_status = 'COMPLETED'
+                    ) AS is_reviewed
                 FROM api_analyses a
-                WHERE a.initial_result IS NOT NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM api_reviews r 
+                WHERE (a.initial_result IS NOT NULL OR a.status = 'FAILED')
+                AND (a.status = 'FAILED' OR NOT EXISTS (
+                    SELECT 1 FROM api_reviews r
                     WHERE r.analysis_id = a.analysis_id AND r.review_status = 'COMPLETED'
-                )
-                AND NOT EXISTS (
-                    SELECT 1 FROM api_reviews r2 
+                ))
+                AND (a.status = 'FAILED' OR NOT EXISTS (
+                    SELECT 1 FROM api_reviews r2
                     JOIN api_analyses a2 ON r2.analysis_id = a2.analysis_id
                     WHERE a2.sha256 = a.sha256 AND r2.review_status = 'COMPLETED'
-                )
+                ))
                 ORDER BY a.created_at DESC
             """)
             rows = cur.fetchall()
@@ -549,11 +597,13 @@ class PostgresAnalysisRepository:
             candidates = []
             seen_sha256 = set()
             for row in rows:
-                if row["sha256"] in seen_sha256:
+                failed = row.get("status") == "FAILED"
+                if not failed and row["sha256"] in seen_sha256:
                     continue
-                seen_sha256.add(row["sha256"])
+                if not failed:
+                    seen_sha256.add(row["sha256"])
 
-                initial_result = row["initial_result"]
+                initial_result = row["initial_result"] or {}
                 deep_result = row.get("deep_result") or {}
 
                 initial_verdict = initial_result.get("initial_verdict")
@@ -585,8 +635,10 @@ class PostgresAnalysisRepository:
                     triggered_signals,
                     risk_signals,
                     deep_result,
+                    reason_code=initial_result.get("reason_code"),
+                    status=row.get("status"), error=row.get("error"),
                 )
-                if q["queue_name"] == "UNKNOWN":
+                if q["queue_name"] == "UNKNOWN" and not failed:
                     continue
 
                 candidates.append(
@@ -609,11 +661,20 @@ class PostgresAnalysisRepository:
                         "_emergency_level": q.get("_emergency_level", 99),
                         "_emergency_obs_level": q.get("_emergency_obs_level", 99),
                         "initial_verdict": initial_verdict,
+                        "reason_code": initial_result.get("reason_code"),
+                        "jrr_error": initial_result.get("jrr_error"),
+                        "error": row.get("error"),
+                        "status": row.get("status"),
+                        "has_initial_result": bool(initial_result),
                         "triggered_signals": triggered_signals,
-                        "review_status": "검토 중" if row.get("is_pending") else "검토 필요",
+                        "review_status": "검토 완료" if row.get("is_reviewed") else "검토 중" if row.get("is_pending") else "검토 필요",
                         "created_at": row["created_at"],
                     }
                 )
+                if failed:
+                    from .failure_queue import expose_failed_candidate
+
+                    candidates.extend(expose_failed_candidate(candidates.pop()))
 
             def policy_rank(policy):
                 order = {
@@ -621,14 +682,15 @@ class PostgresAnalysisRepository:
                     "disagreement-v2": 1,
                     "ood-v2": 2,
                     "difficulty-v2": 3,
-                    "exception-v2": 4,
+                    "fail-closed-v1": 4,
+                    "jrr-inconsistent-v1": 5,
                     "probability-v1": 5,
                     "error-v1": 99,
                 }
                 return order.get(policy, 99)
 
             def get_sort_key(x):
-                if x["queue_name"] == "AUTO":
+                if x["queue_name"] in {"AUTO", "ERROR"}:
                     return (
                         x["queue_name"],
                         0,
@@ -1364,6 +1426,7 @@ class PostgresAnalysisRepository:
                 triggered_signals,
                 risk_signals,
                 deep_result,
+                reason_code=initial_result.get("reason_code"),
             )
             queue_name = q["queue_name"]
             score_policy = q["score_policy"]

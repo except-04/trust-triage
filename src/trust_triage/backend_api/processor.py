@@ -13,6 +13,7 @@ from trust_triage.storage.artifacts import ArtifactError, ArtifactIdentity
 from .config import BackendConfig
 from .deep_gateway import DeepGateway, current_deep_stage, validate_snapshot
 from .errors import BackendError
+from .jrr_contract import recover_jrr_inconsistency
 from .notifications import DiscordNotifier
 from .repository import AnalysisRecord, AnalysisRepository
 from .schemas import FinalAssessment, InitialResult
@@ -139,6 +140,11 @@ def assess(record: AnalysisRecord, *, failure: bool = False) -> dict[str, Any]:
             requires_human_review=True,
             reason=reason,
         )
+    if initial.get("jrr_error"):
+        value.requires_human_review = True
+        if value.disposition == "AUTO_ALLOW_RECOMMENDED":
+            value.disposition = "MANUAL_REVIEW"
+        value.reason += " 초기 JRR 판정 불일치 이력이 있으므로 분석가 검토가 필요합니다."
     return value.model_dump(mode="json")
 
 
@@ -250,6 +256,8 @@ class BackendProcessor:
                             path, sha256=record.sha256, check=lease.check
                         )
                     value = InitialResult.model_validate(value).model_dump(mode="json")
+                    value = recover_jrr_inconsistency(value)
+                    value = InitialResult.model_validate(value).model_dump(mode="json")
                     if (
                         (value["route"] == "DEEP_ANALYSIS")
                         != (value["initial_verdict"] == "HIGH_RISK_UNCERTAIN")
@@ -257,6 +265,9 @@ class BackendProcessor:
                         or (
                             value["initial_verdict"] == "HIGH_RISK_UNCERTAIN"
                             and not value["triggered_signals"]
+                            and value.get("reason_code") not in {
+                                "SYSTEM_ERROR_FAIL_CLOSED", "JRR_RESULT_INCONSISTENT"
+                            }
                         )
                         or (
                             value["initial_verdict"] != "HIGH_RISK_UNCERTAIN"

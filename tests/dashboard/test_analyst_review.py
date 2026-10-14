@@ -53,6 +53,45 @@ def analysis(
     return item
 
 
+def test_fail_closed_with_unavailable_scores_opens_detail(app):
+    item = analysis(
+        verdict="HIGH_RISK_UNCERTAIN", reason_code="SYSTEM_ERROR_FAIL_CLOSED",
+        calibrated_probability=None, raw_probability=None, disagreement=None,
+        ood_score=None, difficulty_score=None,
+    )
+    assert app.initial_detail_available(item)
+    assert app.detail_blocker(item) is None
+    assert app._metric_text(None, "{:.1%}") == "계산 불가"
+
+
+def test_fail_closed_queue_uses_fifo_after_risk_signals(app):
+    items = [
+        {"analysis_id": "new", "score_policy": "fail-closed-v1",
+         "created_at": "2026-10-14T02:00:00+00:00", "priority_score": 999},
+        {"analysis_id": "old", "score_policy": "fail-closed-v1",
+         "created_at": "2026-10-14T01:00:00+00:00", "priority_score": 0},
+        {"analysis_id": "risk", "score_policy": "difficulty-v2", "priority_score": 6},
+    ]
+    assert [it["analysis_id"] for it in app.sort_deep_queue_items(items)] == ["risk", "old", "new"]
+
+
+def test_error_without_initial_result_has_no_detail_button(app, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "streamlit", app.st)
+    monkeypatch.setattr(app.st, "dataframe", lambda *args, **kwargs: SimpleNamespace(selection=SimpleNamespace(rows=[0])))
+    buttons = []
+    monkeypatch.setattr(app.st, "button", lambda *args, **kwargs: buttons.append(args[0]) or False)
+    app.render_queue_table("error", "오류", [{
+        "analysis_id": "initial-failure", "filename": "Notepad.exe", "sha256": "a" * 64,
+        "rank": 1, "has_initial_result": False, "queue_reason": "초기 분석 실패: PROCESSING_FAILED",
+    }])
+    assert "상세 결과 보기" not in buttons
+
+
+
+
 # ---- 그룹 규칙 ---------------------------------------------------------------
 
 

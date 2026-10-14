@@ -579,6 +579,8 @@ def to_view(full, previous):
         "initial_verdict": full.get("initial_verdict"),
         "route": full.get("route"),
         "reason": full.get("reason"),
+        "reason_code": full.get("reason_code"),
+        "jrr_error": full.get("jrr_error"),
         "triggered_signals": full.get("triggered_signals"),
         "final_verdict": full.get("final_verdict"),
         "final_assessment": full.get("final_assessment"),
@@ -929,6 +931,10 @@ def deep_analysis_status_text(analysis):
 
 def initial_detail_available(analysis):
     """Initial Analysis 상세를 안전하게 그릴 수 있을 만큼 저장되었는지 확인한다."""
+    if (analysis.get("reason_code") == "SYSTEM_ERROR_FAIL_CLOSED"
+        and analysis.get("initial_verdict") == "HIGH_RISK_UNCERTAIN"
+        and analysis.get("route") == "DEEP_ANALYSIS"):
+        return True
     return bool(analysis.get("initial_verdict") and analysis.get("route")) and all(
         analysis.get(key) is not None for key in DETAIL_REQUIRED_FIELDS
     )
@@ -1060,7 +1066,7 @@ def deep_analysis_state(analysis):
 
 def _metric_text(value, pattern):
     if value is None:
-        return "-"
+        return "계산 불가"
     try:
         return pattern.format(float(value))
     except (TypeError, ValueError):
@@ -1444,6 +1450,14 @@ def review_dialog(analysis_id):
 def render_result_detail(analysis, target=st):
     """완료/진행/실패 결과가 공유하는 상세 shell. API 호출이나 polling은 하지 않는다."""
     state = result_detail_state(analysis)
+    if analysis.get("jrr_error"):
+        jrr_error = analysis["jrr_error"]
+        target.warning("초기 JRR 판정 불일치 이력이 있습니다. 심층 분석 결과와 별개로 분석가 검토가 필요합니다.")
+        target.caption(
+            f"원래 판정: {jrr_error.get('original_verdict')} · "
+            f"원래 경로: {jrr_error.get('original_route')} · "
+            f"원래 위험 신호: {', '.join(jrr_error.get('original_triggered_signals') or []) or '없음/미기록'}"
+        )
     if not state["available"]:
         if analysis.get("status") == "FAILED":
             error = analysis.get("error") or {}
@@ -2072,6 +2086,8 @@ def detail_blocker(analysis):
     if status != "COMPLETED" and not progressive_failure:
         return f"완료된 분석만 상세 화면으로 열 수 있습니다. (상태: {status or '알 수 없음'})"
 
+    if analysis.get("reason_code") == "SYSTEM_ERROR_FAIL_CLOSED" and initial_detail_available(analysis):
+        return None
     missing = [key for key in DETAIL_REQUIRED_FIELDS if analysis.get(key) is None]
     if missing:
         return "상세 화면에 필요한 모델 결과가 이 이력에 없습니다: " + ", ".join(
@@ -3845,6 +3861,27 @@ st.markdown(
 )
 
 
+ERROR_REASON_LABELS = {
+    "PROCESSING_FAILED": "분석 처리 중 오류 발생",
+    "FEATURE_EXTRACTION_TIMEOUT": "파일 특성 추출 시간 초과",
+    "MODEL_NOT_CONFIGURED": "분석 모델이 설정되지 않음",
+    "JRR_OUTPUT_INVALID": "JRR 판정 결과 검증 오류",
+    "INITIAL_RESULT_INVALID": "초기 분석 결과 검증 오류",
+    "DEEP_REQUIRES_S3": "심층 분석에 필요한 S3 설정이 갖춰지지 않음",
+    "DEEP_RESULT_INVALID": "심층 분석 결과 검증 오류",
+    "DEEP_WAIT_TIMEOUT": "심층 분석 대기 시간 초과",
+}
+
+
+def error_queue_reason_text(item):
+    reason = item.get("queue_reason") or ""
+    if not reason.startswith(("초기 분석 실패:", "심층 분석 실패:", "분석 실패:")):
+        return reason
+    code = (item.get("error") or {}).get("code") or reason.split(":", 1)[1].strip()
+    label = ERROR_REASON_LABELS.get(code, "분석 오류로 원인 확인 필요")
+    return f"{reason.split(':', 1)[0]}: {label}"
+
+
 def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     if not items:
         import streamlit as st
@@ -3877,14 +3914,16 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         page_items = items[offset : offset + limit]
 
     df = pd.DataFrame(page_items)
+    if queue_name.lower() == "error" and "queue_reason" in df.columns:
+        df["queue_reason"] = [error_queue_reason_text(item) for item in page_items]
 
     if "calibrated_probability" in df.columns:
         df["calibrated_probability_display"] = df["calibrated_probability"].apply(
-            lambda x: f"{x * 100:.2f}%" if pd.notnull(x) else "N/A"
+            lambda x: f"{x * 100:.2f}%" if pd.notnull(x) else "계산 불가"
         )
 
     display_cols = {
-        "rank": "순위" if queue_name.lower() != "auto" else "순서",
+        "rank": "순서" if queue_name.lower() in {"auto", "error"} else "순위",
         "filename": "파일명",
         "sha256": "SHA-256",
         "initial_verdict": "모델 판정 결과",
@@ -3896,6 +3935,8 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     if queue_name.lower() == "auto":
         # 역순 넘버링: 가장 밑(오래된 파일)이 1번, 가장 위(최신 파일)가 N번
         df["rank"] = list(range(len(df), 0, -1))
+    elif queue_name.lower() == "error":
+        df["rank"] = list(range(total_count - offset, total_count - offset - len(df), -1))
 
     if queue_name.lower() == "retrain":
         display_cols["selection_reason"] = "판정 변경 내역"
@@ -3909,10 +3950,16 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     st.write(f"### {title} ({total_count}건)")
     if queue_name.lower() == "deep":
         st.markdown(
-            "**정렬 기준**: 긴급 대응 → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 순으로 표시합니다. 확률 불확실성 그룹은 악성 확률 내림차순, 나머지 일반 그룹은 신호 점수 내림차순으로 정렬하며, 동점이면 등록순입니다."
+            "**정렬 기준**: 긴급 대응 → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 점수 계산 오류 → 초기 판정 불일치 순으로 표시합니다. 확률 불확실성 그룹은 악성 확률 내림차순, 나머지 위험 신호 그룹은 신호 점수 내림차순으로 정렬합니다. 점수 계산 오류·초기 판정 불일치 그룹과 각 그룹 내 동점은 등록순입니다."
         )
         st.caption(
             "💡 **긴급 대응 순서**: 데이터 파괴·랜섬웨어(1등급) → 복구 방해·서비스 중단(2등급) 순으로 우선합니다. 같은 등급에서는 동적 관측을 우선하고, 이후 악성 확률 내림차순으로 정렬하며, 동점이면 등록순입니다."
+        )
+        st.caption(
+            "💡 **점수 계산 오류**: 모델 확률이나 위험 점수가 유효하지 않아 자동 판정 대신 심층 분석으로 넘긴 건입니다. 계산하지 못한 값은 ‘계산 불가’로 표시합니다. (예: 악성 확률이 정상적인 숫자가 아닌 NaN이나 무한대로 나온 경우)"
+        )
+        st.caption(
+            "💡 **초기 판정 불일치**: JRR 판정과 위험 신호 또는 처리 경로가 모순되어 심층 분석으로 넘긴 건입니다. 원래 판정과 오류 이력을 보존하며, 심층 분석이 성공해도 분석가 검토가 필요합니다. (예: 위험 신호가 있는데 ‘자동 정상 처리’로 판정된 경우)"
         )
 
     event = st.dataframe(
@@ -3957,6 +4004,9 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         row_idx = event.selection.rows[0]
         selected_item = page_items[row_idx]
         st.write(f"**선택됨**: {selected_item['filename']}")
+        if queue_name.lower() == "error" and not selected_item.get("has_initial_result", True):
+            st.caption("초기 분석 결과가 저장되지 않아 상세 결과를 제공할 수 없습니다. 목록의 실패 사유를 확인해 주세요.")
+            return
         if st.button(
             "상세 결과 보기",
             key=f"btn_view_{selected_item['analysis_id']}",
@@ -3991,8 +4041,9 @@ DEEP_POLICY_RANK = {
     "disagreement-v2": 2,
     "ood-v2": 3,
     "difficulty-v2": 4,
-    "exception-v2": 5,
-    "probability-v1": 6,
+    "fail-closed-v1": 5,
+    "jrr-inconsistent-v1": 6,
+    "probability-v1": 7,
 }
 
 
@@ -4151,7 +4202,7 @@ def sort_deep_queue_items(items):
             return (em_tier, em_level, em_obs, prob_key, created_ts, str(it.get("analysis_id", "")))
         else:
             # 확률 불확실성은 악성 확률, 나머지 일반 그룹은 신호 강도로 정렬한다.
-            score_key = -score
+            score_key = 0 if policy in {"fail-closed-v1", "jrr-inconsistent-v1"} else -score
             if policy == "uncertainty-v2":
                 score_key = float("inf")
                 try:
@@ -4203,7 +4254,7 @@ def render_analyst_priority_queue():
 
     with tabs[0]:
         st.markdown(
-            "**대상**: 고위험 행위 증거(데이터 파괴·랜섬웨어 등)가 확인되었거나, 4대 위험 신호(확률 불확실성·모델 불일치·분포 이탈·분석 난이도) 중 하나 이상이 감지되어 검토가 필요한 건입니다."
+            "**대상**: 고위험 행위 증거 또는 4대 위험 신호가 감지된 건과, 점수 계산 오류나 초기 판정 불일치로 심층 분석에 전환된 건입니다."
         )
         raw_deep_items = (
             recs_data.get("emergency_recommendations", [])
@@ -4350,7 +4401,7 @@ def render_analyst_priority_queue():
 
     with tabs[4]:
         st.markdown(
-            "**대상**: 악성 확률이 누락되거나 유효하지 않은 건, 또는 위험 신호 기록 없이 불확실 판정이 저장된 건"
+            "**대상**: 초기 결과 저장 전에 분석이 실패한 건, 또는 심층 분석 전환 사유 없이 확률이 누락되거나 유효하지 않은 건입니다."
         )
         render_queue_table(
             "error", "비정상 오류 대상", recs_data.get("error_queue", [])

@@ -144,6 +144,29 @@ approval_status         = PENDING     "검토를 기다리고 있어요."
 
 ## 4. 서버 상태 API
 
+### 초기 판정의 Fail-Closed 사유
+
+모델 확률, 보정 확률 또는 위험 점수의 수치가 유효하지 않으면 자동 정상·악성 판정을
+보류하고 `HIGH_RISK_UNCERTAIN` / `DEEP_ANALYSIS`로 처리한다. 이때
+`reason_code`는 `SYSTEM_ERROR_FAIL_CLOSED`, `triggered_signals`는 빈 배열이며,
+신뢰할 수 없는 `prediction` 및 `risk_signals` 값은 `null`로 반환한다.
+화면에서는 이를 ‘점수 계산 오류’, 값은 ‘계산 불가’로 표시한다.
+정상 위험 신호 그룹 다음에 등록순으로 검토하며 고위험 행위 증거가 있으면 긴급 배정을 우선한다.
+
+JRR 판정과 신호 또는 경로가 불일치하면 `JRR_RESULT_INCONSISTENT` 사유로
+HRU / 심층 분석 경로로 전환한다. `initial_result.jrr_error`에 원래 판정·경로·신호·사유와
+오류 코드를 보존하고 API에도 공개한다. 심층 분석이 성공해도 이 이력은 남으며
+`requires_human_review=true`로 분석가 검토를 요구한다. 원래 불일치 판정을 자동 정상으로 사용하지 않는다.
+저장된 신호 없는 HRU도 초기 판정 불일치 검토 그룹에 배정한다.
+초기 결과 저장 전에 실패한 `FAILED` 파일도 오류 큐에 포함하며 실패 코드와 정보를 제공한다.
+실패 분석은 분석 ID별로 유지하며 동일 해시의 최신 분석이나 검토 완료 이력으로 제외하지 않는다.
+초기 결과가 있는 심층 분석 실패는 기존 DEEP/긴급 검토 대상과 ERROR 양쪽에 표시한다.
+초기 결과가 없는 오류 항목은 `has_initial_result=false`이며 상세 결과 보기 버튼을 표시하지 않는다.
+새 실패 확인 상태는 추가하지 않는다.
+파일 파싱·모델 로딩 실패 등은 이 수치 오류 정책에 포함하지 않는다.
+`reason_code`는 기존 `initial_result` JSONB에 저장하므로 DB 스키마 변경은 필요 없다.
+기존 사유 문자열을 보고 Fail-Closed 코드를 추정하거나 과거 데이터를 자동 변경하지 않는다.
+
 ### GET /health
 
 입력 없이 HTTP 서버의 동작 여부를 확인한다. `status`, `service`, `version`을 반환한다. DB·모델·분석 도구 전체의 준비 여부를 검사하는 요청은 아니다.

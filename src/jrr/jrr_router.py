@@ -33,6 +33,20 @@ class JointRiskRouter:
         """실시간 추론 시 두 모델 간의 불일치도 계산"""
         return abs(p_lgb - p_xgb)
 
+    @staticmethod
+    def fail_closed() -> dict:
+        return {
+            "initial_verdict": "HIGH_RISK_UNCERTAIN",
+            "route": "DEEP_ANALYSIS",
+            "calibrated_probability": None,
+            "disagreement": None,
+            "ood_score": None,
+            "difficulty_score": None,
+            "reason_code": "SYSTEM_ERROR_FAIL_CLOSED",
+            "reason": "시스템 점수 오류로 자동 판정을 보류하고 심층 분석을 요청합니다.",
+            "triggered_signals": [],
+        }
+
     def route_sample(
         self,
         p_calib: float,
@@ -54,16 +68,7 @@ class JointRiskRouter:
             or p_calib < 0.0
             or p_calib > 1.0
         ):
-            return {
-                "initial_verdict": "HIGH_RISK_UNCERTAIN",
-                "route": "DEEP_ANALYSIS",
-                "calibrated_probability": -1.0,
-                "disagreement": -1.0,
-                "ood_score": 0.0,
-                "difficulty_score": 0.0,
-                "reason": "System Error: NaN values detected (Fail-Closed)",
-                "triggered_signals": [],
-            }
+            return self.fail_closed()
 
         decision = None
         reason = None

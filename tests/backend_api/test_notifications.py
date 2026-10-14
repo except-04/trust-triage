@@ -628,12 +628,23 @@ def test_actual_initial_errors_reach_failed_notification(
         check()
         # Exercise the real adapter's output checks and exception-to-code mapping.
         # The reused components are fakes; no models, PE execution or HTTP are used.
-        return _predict_initial(result, bundle, result.sha256)[0]
+        value = _predict_initial(result, bundle, result.sha256)[0]
+        return {**value, "xai_status": "NOT_REQUIRED", "xai_error": None}
 
     monkeypatch.setattr(h.initial, "analyze", fail_initial)
     accepted = submit(h)
     row = h.processor.resume(accepted.analysis_id)
     drain(h.processor.notifications)
+
+    if not raises and stage != "INITIAL_JRR":
+        assert row.phase == "WAITING_DEEP"
+        assert row.error is None
+        assert row.initial_result["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+        assert row.initial_result["prediction"]["calibrated_probability"] is None
+        assert events(http) == ["RISK_ALERT"]
+        assert http.url not in json.dumps(payloads(http))
+        assert private_message not in caplog.text
+        return
 
     code = stage + "_FAILED" if raises else invalid_code
     assert row.status == "FAILED"

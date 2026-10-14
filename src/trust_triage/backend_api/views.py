@@ -92,6 +92,8 @@ def triage(record: AnalysisRecord) -> TriageResponse:
                     "initial_verdict",
                     "route",
                     "reason",
+                    "reason_code",
+                    "jrr_error",
                     "triggered_signals",
                     "feature_metadata",
                 )
@@ -445,6 +447,8 @@ def analysis(record: AnalysisRecord) -> AnalysisResponse:
         initial_verdict=initial.initial_verdict,
         route=initial.route,
         reason=initial.reason,
+        reason_code=initial.reason_code,
+        jrr_error=initial.jrr_error,
         triggered_signals=initial.triggered_signals,
         top_features=xai(record).top_features,
         deep_analysis_status=deep.deep_analysis_status,
