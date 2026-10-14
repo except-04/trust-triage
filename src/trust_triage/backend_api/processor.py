@@ -13,6 +13,7 @@ from trust_triage.storage.artifacts import ArtifactError, ArtifactIdentity
 from .config import BackendConfig
 from .deep_gateway import DeepGateway, current_deep_stage, validate_snapshot
 from .errors import BackendError
+from .notifications import DiscordNotifier
 from .repository import AnalysisRecord, AnalysisRepository
 from .schemas import FinalAssessment, InitialResult
 from .service import stored_sample
@@ -158,8 +159,10 @@ class BackendProcessor:
             config,
         )
         self.artifacts = storage.artifact_store(max_bytes=config.max_artifact_bytes)
+        self.notifications = DiscordNotifier(config)
 
     def close(self) -> None:
+        self.notifications.close()
         close = getattr(self.initial, "close", None)
         if close is not None:
             close()
@@ -216,6 +219,12 @@ class BackendProcessor:
                 check=lease.check,
             )
         )
+        self.notifications.emit(
+            "ANALYSIS_FAILED" if failed else "ANALYSIS_COMPLETED",
+            record,
+            assessment=assessment,
+            error=error,
+        )
         return self.repository.get(analysis_id)
 
     def _finalize_now(self, analysis_id, token, lease) -> AnalysisRecord:
@@ -233,6 +242,8 @@ class BackendProcessor:
             return record
         with _Lease(self.repository, analysis_id, token, self.config) as lease:
             try:
+                if record.phase == "INITIAL" and record.attempt_count == 1:
+                    self.notifications.emit("ANALYSIS_STARTED", record)
                 if record.phase == "INITIAL":
                     with self.storage.materialize(
                         stored_sample(record), lease.check
@@ -271,6 +282,7 @@ class BackendProcessor:
                             check=lease.check,
                         )
                     )
+                    self.notifications.emit("RISK_ALERT", record, initial=value)
                     if value["route"] != "DEEP_ANALYSIS":
                         # 심층 분석이 필요 없는 건은 같은 lease로 바로 마무리한다.
                         # 다음 루프 바퀴로 미루면 앞선 건의 CAPA/FLOSS가 끝날 때까지
@@ -375,8 +387,9 @@ class BackendProcessor:
                                 analysis_id, token, assessment, error=failure
                             )
 
+                        saved = False
                         try:
-                            self._checkpoint(
+                            saved = self._checkpoint(
                                 record,
                                 token,
                                 "FINAL_ASSESSMENT",
@@ -392,10 +405,14 @@ class BackendProcessor:
                                 "failure_artifact_unavailable analysis_id=%s",
                                 analysis_id,
                             )
-                            finish_failure(self.repository)
+                            saved = finish_failure(self.repository)
                         except LeaseLost:
                             LOGGER.warning(
                                 "analysis_lease_lost analysis_id=%s", analysis_id
+                            )
+                        if saved:
+                            self.notifications.emit(
+                                "ANALYSIS_FAILED", record, error=failure
                             )
                 except BackendError:
                     # 연결 복구 후 lease 만료로 재개한다. DB 오류 본문에 DSN은 남기지 않는다.
