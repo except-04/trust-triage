@@ -10,6 +10,7 @@ import queue
 import re
 import threading
 import unicodedata
+from collections import Counter, OrderedDict
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -18,13 +19,14 @@ from .config import BackendConfig
 LOGGER = logging.getLogger(__name__)
 HTTP_TIMEOUT_SECONDS = 2.0
 BUFFER_SIZE = 128
+BATCH_HISTORY_SIZE = 1024
 # One HTTP attempt per event, zero retries (including 429/5xx/timeouts).
 # A timeout may mean Discord accepted the message; never blindly replay it.
 EVENTS = {
-    "ANALYSIS_STARTED": ("분석 시작", 0x3498DB),
     "RISK_ALERT": ("초기 위험 판정", 0xE67E22),
     "ANALYSIS_COMPLETED": ("분석 완료", 0x2ECC71),
     "ANALYSIS_FAILED": ("분석 실패", 0xE74C3C),
+    "BATCH_SUMMARY": ("배치 분석 완료", 0x2ECC71),
 }
 INITIAL_VERDICTS = {"AUTO_BENIGN", "AUTO_MALICIOUS", "HIGH_RISK_UNCERTAIN"}
 FINAL_VERDICTS = {"MALICIOUS", "SUSPICIOUS", "BENIGN", "INCONCLUSIVE"}
@@ -86,6 +88,7 @@ class DiscordNotifier:
         self._lock = threading.Lock()
         self._stopped = threading.Event()
         self._thread = None
+        self._summarized_batches = OrderedDict()
         if value and not self._url:
             LOGGER.warning("discord_notifications_disabled_invalid_configuration")
 
@@ -112,7 +115,73 @@ class DiscordNotifier:
         )
         return " ".join(text.split())[:limit] or "확인 불가"
 
+    def finished(self, record, repository, *, assessment=None, error=None):
+        """Called only after a terminal commit; notification reads cannot fail a job."""
+        if not self.enabled:
+            return
+        try:
+            if error is not None:
+                self.emit("ANALYSIS_FAILED", record, error=error)
+            elif record.batch_id is None:
+                self.emit("ANALYSIS_COMPLETED", record, assessment=assessment)
+            if record.batch_id is not None:
+                batch = repository.batch_record(record.batch_id)
+                if batch is not None:
+                    self.emit("BATCH_SUMMARY", batch)
+        except Exception:  # noqa: BLE001 - never expose DB/notification error details
+            LOGGER.warning("discord_notification_completion_failed")
+
+    def _batch_payload(self, batch):
+        rows = batch.analyses
+        if batch.batch_id is None or not rows or not all(row.terminal for row in rows):
+            return None
+        counts = Counter(row.status for row in rows)
+        verdicts = Counter(
+            (row.final_assessment or {}).get("final_verdict")
+            for row in rows if row.status == "COMPLETED"
+        )
+        skipped = sum(
+            entry.status == "SKIPPED" for entry in batch.input_report.entries
+        ) if batch.input_report is not None else 0
+        identity = batch.batch_id
+        safe_id = (
+            identity if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identity)
+            and not any(secret in identity for secret in self._secrets)
+            else "확인 불가"
+        )
+        values = [
+            ("배치 ID", safe_id), ("분석 대상 파일 수", len(rows)),
+            ("정상 완료", counts["COMPLETED"]), ("분석 실패", counts["FAILED"]),
+            ("SKIPPED", skipped),
+        ]
+        values.extend(
+            (verdict, verdicts[verdict])
+            for verdict in ("MALICIOUS", "SUSPICIOUS", "BENIGN", "INCONCLUSIVE")
+        )
+        title, color = EVENTS["BATCH_SUMMARY"]
+        return {
+            "allowed_mentions": {"parse": [], "users": [], "roles": []},
+            "embeds": [{
+                "title": title, "color": color,
+                "description": (
+                    "배치의 모든 분석이 종료되었습니다. 최종 시스템 판정은 정상 완료 건만 "
+                    "집계하며 분석가의 확정 판정과 별도입니다. 분석 실패는 악성 증거가 아닙니다."
+                ),
+                "fields": [
+                    {"name": name, "value": str(value), "inline": False}
+                    for name, value in values
+                ],
+                "footer": {"text": "BATCH_SUMMARY"},
+            }],
+        }
+
     def _payload(self, event, record, *, initial=None, assessment=None, error=None):
+        if event == "ANALYSIS_STARTED":
+            return None
+        if event == "ANALYSIS_COMPLETED" and record.batch_id is not None:
+            return None
+        if event == "BATCH_SUMMARY":
+            return self._batch_payload(record)
         title, color = EVENTS[event]
         initial = initial if initial is not None else record.initial_result or {}
         verdict = initial.get("initial_verdict")
@@ -133,12 +202,7 @@ class DiscordNotifier:
               else "확인 불가")
         field("파일명", self._text(record.filename, filename=True))
         description = ""
-        if event == "ANALYSIS_STARTED":
-            field("SHA-256 (앞 12자리)", record.sha256[:12]
-                  if re.fullmatch(r"[0-9a-f]{64}", record.sha256) else "확인 불가")
-            field("상태", "RUNNING")
-            description = "Worker가 작업을 확보하여 실제 분석을 시작했습니다."
-        elif event == "RISK_ALERT":
+        if event == "RISK_ALERT":
             field("초기 JRR 판정", verdict)
             probability = (initial.get("prediction") or {}).get("calibrated_probability")
             valid = (isinstance(probability, (int, float))
@@ -193,6 +257,8 @@ class DiscordNotifier:
             with self._lock:
                 if self._stopped.is_set():
                     return
+                if event == "BATCH_SUMMARY" and record.batch_id in self._summarized_batches:
+                    return
                 if self._thread is None:
                     thread = threading.Thread(
                         target=self._run, name="discord-notifications", daemon=True,
@@ -200,6 +266,11 @@ class DiscordNotifier:
                     thread.start()
                     self._thread = thread
                 self._buffer.put_nowait(data)
+                if event == "BATCH_SUMMARY":
+                    # Record enqueue, not HTTP success: delivery is never retried.
+                    self._summarized_batches[record.batch_id] = None
+                    if len(self._summarized_batches) > BATCH_HISTORY_SIZE:
+                        self._summarized_batches.popitem(last=False)
         except queue.Full:
             LOGGER.warning("discord_notification_buffer_full")
         except Exception:  # noqa: BLE001 - URL and exception text must never escape

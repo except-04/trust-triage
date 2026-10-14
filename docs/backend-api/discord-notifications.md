@@ -25,13 +25,24 @@ canary.discord.com, ptb.discord.com 호스트와 표준 /api/webhooks 또는
 
 | 이벤트 | 실제 알림 요청 시점 | 색상 / 주요 내용 |
 | --- | --- | --- |
-| ANALYSIS_STARTED | claim 성공 반환 후 INITIAL 단계이며 attempt_count가 1인 경우 | 파란색 / 분석 ID, 정리한 파일명, SHA-256 앞 12자리, RUNNING |
+| ANALYSIS_STARTED | 전송 중단 | 없음 |
 | RISK_ALERT | _checkpoint의 sample_transaction이 성공적으로 종료되어 save_initial이 commit된 뒤 | 주황색 / 초기 JRR 판정, 보정 확률, 발현 위험 신호 |
-| ANALYSIS_COMPLETED | _finalize의 finish와 artifact 참조 저장이 commit된 뒤 | 초록색 / 초기 판정, 최종 시스템 판정, 전문가 검토 필요 여부 |
+| ANALYSIS_COMPLETED | 배치에 속하지 않은 단일 분석의 finish가 commit된 뒤 | 초록색 / 초기 판정, 최종 시스템 판정, 전문가 검토 필요 여부 |
 | ANALYSIS_FAILED | 심층 실패의 _finalize 또는 최종 예외 처리에서 FAILED 저장이 commit된 뒤 | 빨간색 / 실패 단계, 허용된 오류 코드 |
+| BATCH_SUMMARY | 파일별 최종 commit 후 기존 batch_record 조회에서 모든 분석의 종료를 확인한 경우 | 초록색 / 배치 ID, 대상·완료·실패·SKIPPED 및 최종 판정별 건수 |
 
-업로드 접수 자체는 시작 이벤트를 만들지 않는다. 기존 attempt_count는 claim 때 증가하고
-DB에 보존되므로, 일시적 오류의 재시도나 lease 만료 후 재시작에는 시작 알림을 반복하지 않는다.
+업로드 접수 및 실제 claim 모두 시작 알림을 보내지 않는다.
+batch_id가 없는 단일 파일은 정상 완료 알림 1건을 유지한다. 복수 파일 또는 ZIP 배치에서는
+파일별 완료 알림을 생략한다. 배치로 접수했다면 분석 대상이 1개만 남은 경우도 요약으로 처리한다.
+배치 중 위험 판정 및 최종 실패는 배치 종료를 기다리지 않고 기존 시점에 전송 버퍼에 넣는다.
+
+배치 조회에는 기존 repository.batch_record(), BatchRecord, BatchInputReport를 재사용한다.
+분석 대상이 1건 이상이고 모든 작업이 COMPLETED 또는 FAILED일 때만 요약을 생성한다.
+QUEUED/RUNNING이 남아 있거나 전부 SKIPPED여서 분석 대상이 0건이면 보내지 않는다.
+SKIPPED는 입력 보고서의 제외 항목을 세며, 입력 보고서가 없는 이전 배치는 0으로 표시한다.
+MALICIOUS/SUSPICIOUS/BENIGN/INCONCLUSIVE는 COMPLETED 작업의
+final_assessment.final_verdict만 집계한다. FAILED 작업의 판정은 포함하지 않으며
+초기 JRR 또는 분석가의 수정 판정을 대신 사용하지 않는다. 파일명 목록은 전송하지 않는다.
 
 RISK_ALERT는 HIGH_RISK_UNCERTAIN(심층 분석 대상)과 AUTO_MALICIOUS(악성 경보 및
 전문가 검토 대상)에만 전송한다. 둘 다 분석가가 확정한 악성으로 표현하지 않는다.
@@ -43,7 +54,13 @@ AUTO_BENIGN에는 위험 경고가 없다.
 일시적 release/retry에는 실패 이벤트를 만들지 않는다.
 실패 artifact 저장 불가 시 기존 DB-only finish 경로도, finish가 True를 반환해야 알린다.
 
-알림 호출은 트랜잭션 밖에 있고, DB 결과를 재조회하거나 수정하지 않는다.
+알림 호출과 배치 조회는 파일별 저장 트랜잭션이 성공적으로 종료된 뒤 수행하며,
+DB 결과를 수정하지 않는다. 최종 저장 실패·rollback·lease 거절에는 배치를 조회하지 않는다.
+알림 비활성화 또는 단일 파일에서는 배치 조회도 하지 않는다.
+배치 조회·집계 예외는 고정 로그 discord_notification_completion_failed 또는
+discord_notification_enqueue_failed로 격리하여 저장된 결과나 분석 재시도에 영향을 주지 않는다.
+배치 작업마다 최종 저장 후 기존 DB 조회 1회가 추가된다. 조회는 기존 repository의 연결 및
+statement timeout을 따르므로 DB 지연만큼 다음 작업 시작이 늦어질 수 있다.
 emit은 허용된 필드만 추출하여 작은 JSON을 만든 후 메모리 버퍼에 비차단 방식으로 넣는다.
 전용 daemon 스레드 하나가 HTTP를 처리하므로 Worker는 네트워크 응답을 기다리지 않는다.
 
@@ -79,9 +96,22 @@ embeds, allowed_mentions, wait 동작을 따른다.
 
 정상 resume는 INITIAL → WAITING_DEEP/FINALIZING → DONE 체크포인트와 lease fencing을
 따르므로 초기 경고/완료를 다시 발송하지 않는다. 완료된 작업은 claim되지 않는다.
-이 중복 억제는 프로세스 메모리의 발송 이력이 아닌 기존 DB 상태에 의존한다.
+파일별 이벤트의 중복 억제는 기존 DB 상태에 의존한다.
 
-- claim 또는 결과 commit 직후 enqueue 전에 프로세스가 종료되면 알림이 유실된다.
+배치 요약은 같은 DiscordNotifier 인스턴스 안에서 잠금으로 확인·enqueue·기록을 함께 수행한다.
+최근 요약 1,024개 배치 ID만 OrderedDict에 보관하고 한도를 넘으면 가장 오래된 ID를 제거한다.
+기록 기준은 HTTP 성공이 아닌 전송 버퍼 삽입 성공이다. HTTP 오류·타임아웃 뒤 같은 배치의
+콜백이 다시 와도 재전송하지 않는다. 버퍼 포화 등으로 삽입하지 못한 배치는 기록하지 않는다.
+원래의 파일별 경고·실패 알림에는 이 배치 중복 방지 기록을 적용하지 않는다.
+
+- 재시작/인스턴스 교체 시 배치 기록이 사라지고, 여러 Processor 사이에서도 공유되지 않는다.
+  동시 실행되는 별도 인스턴스나 재시작 후 종료 콜백 재실행, 오래된 ID의 캐시 퇴출 이후
+  재처리에서는 중복 요약이 가능하다. 단일 인스턴스 내 동시 호출만 잠금으로 억제한다.
+- 재시작 자체가 완료 배치를 다시 보내지는 않는다. 기존 terminal 작업은 claim되지 않으며,
+  완료 배치를 검색하여 알림을 복구하는 별도의 sweep/replay 기능도 없다.
+- 마지막 작업 commit 후 배치 조회가 실패하거나 enqueue 전에 프로세스가 종료되면
+  요약이 유실될 수 있다. 추가 종료 콜백이 없다면 자동으로 복구하지 않는다.
+- 결과 commit 직후 enqueue 전에 프로세스가 종료되면 파일별 알림도 유실된다.
   commit은 됐지만 응답이 유실된 경우도 알림을 보내지 않을 수 있다.
 - 버퍼 포화, 종료, 장애, rate limit은 유실로 이어진다. 자동 재전송과 영속 재생 기능은 없다.
 - Discord가 수신했지만 응답이 유실된 경우 전송 성공 여부를 알 수 없다.
@@ -109,6 +139,10 @@ GitHub Actions의 .github/workflows/ci.yml은 이미 tests/backend_api 전체를
 
 ## 향후 EC2 적용 시
 
+이미 Webhook이 동작하는 환경에서는 이번 정책 변경에 새 환경변수, Webhook URL 변경,
+DB migration, AWS 설정 또는 workflow 변경이 필요 없다. 승인된 코드 배포 후 기존
+Backend processor를 재시작하면 적용된다. 아래는 신규 설정 환경을 위한 기존 안내다.
+
 1. 승인된 코드 배포 후 trust-triage-processor.service가 읽는 기존 비밀 설정 경로에
    DISCORD_WEBHOOK_URL을 안전하게 주입한다. API나 Speakeasy 프로세스만 설정하면 알림이 생기지 않는다.
 2. 해당 서비스의 EnvironmentFile 또는 기존 --env-file 연결을 확인한다.
@@ -125,7 +159,27 @@ GitHub Actions의 .github/workflows/ci.yml은 이미 tests/backend_api 전체를
 이번 작업에서는 실제 Discord 메시지 전송, AWS 리소스 변경, EC2 배포를 수행하지 않는다.
 
 
-## 이번 변경의 검증 기록
+## 경량 알림 정책 검증 기록
+
+HTTP를 전부 mock한 로컬 검증에서 알림·processor·배치/ZIP 접수·조회·repository·API·runtime
+회귀 테스트가 358 passed, 2 skipped, 41 deselected (115.10초)로 완료됐다.
+두 skip은 실제 PostgreSQL이 필요한 schema upgrade 및 직접 SQL 제약 검증이고,
+41개는 not postgres 조건으로 제외했다. 기존 Starlette/httpx deprecation 경고 1건이 있었다.
+처음 알림 테스트 113개가 통과한 뒤, 동시 최초 요약 제출 검증을 보강하고
+재시도·누락 배치·버퍼 포화 테스트 3개를 추가하여 위 회귀 실행에 포함했다.
+
+```powershell
+$env:DISCORD_WEBHOOK_URL = ''
+$env:BACKEND_TEST_DATABASE_URL = ''
+$env:WORKER_TEST_DATABASE_URL = ''
+$env:AWS_EC2_METADATA_DISABLED = 'true'
+$env:LLM_ENABLED = 'false'
+& .\trust-triage-env\Scripts\python.exe -m pytest tests/backend_api/test_notifications.py tests/backend_api/test_service_processor.py tests/backend_api/test_batch_inputs.py tests/backend_api/test_batch_results.py tests/backend_api/test_repository.py tests/backend_api/test_app.py tests/backend_api/test_runtime_cli.py -m 'not postgres' -q -p no:cacheprovider --basetemp=artifacts/pytest_policy_final
+```
+
+실제 Discord 전송, 운영 환경 검증 또는 원격 GitHub Actions 실행은 수행하지 않았다.
+
+## 최초 알림 구현 시 검증 기록 (이전 정책)
 
 실제 Discord/DB/AWS 연결 없이 로컬 가상환경에서 검증했다.
 알림 최종 테스트는 60 passed이며, 전체 회귀는 1132 passed, 2 skipped,

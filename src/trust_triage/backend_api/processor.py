@@ -219,9 +219,9 @@ class BackendProcessor:
                 check=lease.check,
             )
         )
-        self.notifications.emit(
-            "ANALYSIS_FAILED" if failed else "ANALYSIS_COMPLETED",
+        self.notifications.finished(
             record,
+            self.repository,
             assessment=assessment,
             error=error,
         )
@@ -242,8 +242,6 @@ class BackendProcessor:
             return record
         with _Lease(self.repository, analysis_id, token, self.config) as lease:
             try:
-                if record.phase == "INITIAL" and record.attempt_count == 1:
-                    self.notifications.emit("ANALYSIS_STARTED", record)
                 if record.phase == "INITIAL":
                     with self.storage.materialize(
                         stored_sample(record), lease.check
@@ -411,8 +409,8 @@ class BackendProcessor:
                                 "analysis_lease_lost analysis_id=%s", analysis_id
                             )
                         if saved:
-                            self.notifications.emit(
-                                "ANALYSIS_FAILED", record, error=failure
+                            self.notifications.finished(
+                                record, self.repository, error=failure
                             )
                 except BackendError:
                     # 연결 복구 후 lease 만료로 재개한다. DB 오류 본문에 DSN은 남기지 않는다.
