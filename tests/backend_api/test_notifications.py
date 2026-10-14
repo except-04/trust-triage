@@ -1072,3 +1072,44 @@ def test_batch_enqueue_failure_does_not_record_history(notifier, http, row, monk
     drain(notifier)
     assert events(http) == ["BATCH_SUMMARY"]
 
+
+
+@pytest.mark.parametrize("legacy,current", [(1, 1), (2, 3), (0, 2), (2, 0)])
+def test_batch_summary_normalizes_legacy_completed_verdicts(
+    notifier, http, row, legacy, current,
+):
+    completed = (
+        ["MALICIOUS", "SUSPICIOUS", "BENIGN"]
+        + ["UNCERTAIN"] * legacy
+        + ["INCONCLUSIVE"] * current
+    )
+    states = (
+        [("COMPLETED", verdict) for verdict in completed]
+        + [("FAILED", verdict) for verdict in ("UNCERTAIN", "INCONCLUSIVE", "MALICIOUS")]
+    )
+    batch = BatchRecord("batch-legacy-verdicts", [
+        replace(
+            row, analysis_id=f"analysis-{index}", batch_id="batch-legacy-verdicts",
+            status=status, final_assessment={"final_verdict": verdict},
+        )
+        for index, (status, verdict) in enumerate(states)
+    ])
+    original_assessments = [dict(item.final_assessment) for item in batch.analyses]
+
+    notifier.emit("BATCH_SUMMARY", batch)
+    drain(notifier)
+
+    assert events(http) == ["BATCH_SUMMARY"]
+    summary = fields(payloads(http)[0])
+    assert summary["분석 대상 파일 수"] == str(len(states))
+    assert summary["정상 완료"] == str(len(completed))
+    assert summary["분석 실패"] == "3"
+    assert summary["INCONCLUSIVE"] == str(legacy + current)
+    for verdict in ("MALICIOUS", "SUSPICIOUS", "BENIGN"):
+        assert summary[verdict] == "1"
+    assert "UNCERTAIN" not in summary
+    assert sum(int(summary[verdict]) for verdict in module.FINAL_VERDICTS) == int(
+        summary["정상 완료"]
+    )
+    assert [item.final_assessment for item in batch.analyses] == original_assessments
+

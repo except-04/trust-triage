@@ -136,10 +136,12 @@ class DiscordNotifier:
         if batch.batch_id is None or not rows or not all(row.terminal for row in rows):
             return None
         counts = Counter(row.status for row in rows)
-        verdicts = Counter(
-            (row.final_assessment or {}).get("final_verdict")
-            for row in rows if row.status == "COMPLETED"
-        )
+        verdicts = Counter()
+        for row in rows:
+            if row.status == "COMPLETED":
+                verdict = (row.final_assessment or {}).get("final_verdict")
+                # Match the API's legacy alias without changing stored assessments.
+                verdicts["INCONCLUSIVE" if verdict == "UNCERTAIN" else verdict] += 1
         skipped = sum(
             entry.status == "SKIPPED" for entry in batch.input_report.entries
         ) if batch.input_report is not None else 0
