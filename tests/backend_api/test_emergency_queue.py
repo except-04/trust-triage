@@ -230,8 +230,12 @@ def test_emergency_queue_logic():
 
     # emergency: test-both, test-tie-2, test-tie-1, test-ransom-dyn, test-data-dest-static
     assert len(emergency) == 5
-    # deep: test-impact-only, test-inhibit-attempt, test-candidate-encrypt
-    assert len(deep) == 3
+    # No qualifying emergency evidence or risk signals: inconsistent verdicts.
+    assert deep == []
+    errors = [r for r in recs if r["queue_name"] == "ERROR"]
+    assert {r["analysis_id"] for r in errors} == {
+        "test-impact-only", "test-inhibit-attempt", "test-candidate-encrypt"
+    }
 
     assert emergency[0]["analysis_id"] == "test-both"
     assert emergency[1]["analysis_id"] == "test-tie-2"

@@ -157,6 +157,7 @@ def test_jrr_preserves_all_triggered_signals_and_first_reason(components):
     "fields",
     [
         {},
+        {"triggered_signals": []},
         {"triggered_signals": None},
         {"triggered_signals": "OOD"},
         {"triggered_signals": ("OOD",)},

@@ -4350,7 +4350,7 @@ def render_analyst_priority_queue():
 
     with tabs[4]:
         st.markdown(
-            "**대상**: 확률 값 오류, NaN, 무한대, 누락 등으로 시스템 처리가 불가능한 비정상 건"
+            "**대상**: 악성 확률이 누락되거나 유효하지 않은 건, 또는 위험 신호 기록 없이 불확실 판정이 저장된 건"
         )
         render_queue_table(
             "error", "비정상 오류 대상", recs_data.get("error_queue", [])

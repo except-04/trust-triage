@@ -227,10 +227,10 @@ def _predict_initial(
                 "The initial JRR returned invalid or missing triggered signals.",
                 stage,
             ) from exc
-        if verdict != "HIGH_RISK_UNCERTAIN" and signals:
+        if (verdict == "HIGH_RISK_UNCERTAIN") != bool(signals):
             raise _failure(
                 "JRR_OUTPUT_INVALID",
-                "An automatic JRR verdict cannot contain triggered risk signals.",
+                "The JRR verdict must match the presence of triggered risk signals.",
                 stage,
             )
     except BackendError:

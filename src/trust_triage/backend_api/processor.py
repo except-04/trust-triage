@@ -255,6 +255,10 @@ class BackendProcessor:
                         != (value["initial_verdict"] == "HIGH_RISK_UNCERTAIN")
                         or value["triggered_signals"] is None
                         or (
+                            value["initial_verdict"] == "HIGH_RISK_UNCERTAIN"
+                            and not value["triggered_signals"]
+                        )
+                        or (
                             value["initial_verdict"] != "HIGH_RISK_UNCERTAIN"
                             and value["triggered_signals"]
                         )

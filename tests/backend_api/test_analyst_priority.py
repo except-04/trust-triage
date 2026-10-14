@@ -1,7 +1,27 @@
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from tests.backend_api.fake_repository import MemoryAnalysisRepository
 from trust_triage.backend_api.repository import AnalysisRecord
+
+
+@pytest.mark.parametrize("signals", [None, []])
+@pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
+def test_uncertain_verdict_without_signals_is_error(signals, repository_kind):
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    repository = (
+        object.__new__(PostgresAnalysisRepository)
+        if repository_kind == "postgres"
+        else MemoryAnalysisRepository()
+    )
+    result = repository._determine_queue(
+        0.8, "HIGH_RISK_UNCERTAIN", signals or [], {}, {}
+    )
+    assert result["queue_name"] == "ERROR"
+    assert result["score_policy"] == "error-v1"
+    assert result["priority_reason"] == "초기 판정과 위험 신호 불일치"
 
 
 def test_uncertainty_queue_orders_by_malicious_probability_then_fifo():
@@ -118,17 +138,19 @@ def test_analyst_priority_recommendations():
     recs = repo.get_priority_recommendations()
     assert len(recs) == 4
 
-    # Check sorting: exception-v2 policy, priority_score is 0.0 for all, created_at ASC
+    # Missing signal records are errors, ordered by creation time within ERROR.
     assert recs[0]["analysis_id"] == "test-1"  # 00:00
     assert recs[1]["analysis_id"] == "test-3"  # 00:30
-    assert recs[2]["analysis_id"] == "test-2"  # 01:00
+    assert recs[2]["analysis_id"] == "test-5"  # 00:30
     assert (
-        recs[3]["analysis_id"] == "test-5"
-    )  # 00:30 but missing probability -> ERROR queue (error-v1, rank 99)
+        recs[3]["analysis_id"] == "test-2"
+    )  # 01:00; all candidates are in ERROR
 
     assert recs[0]["rank"] == 1
     assert recs[1]["rank"] == 2
     assert recs[2]["rank"] == 3
+    assert all(item["queue_name"] == "ERROR" for item in recs)
+    assert all(item["score_policy"] == "error-v1" for item in recs)
 
 
 def test_budget_logic():
@@ -293,6 +315,7 @@ def test_auto_review_does_not_deduct_budget_and_no_waiting_restriction():
         initial_result={
             "prediction": {"calibrated_probability": 0.75},
             "initial_verdict": "HIGH_RISK_UNCERTAIN",
+            "triggered_signals": ["UNCERTAIN_PROBABILITY"],
         },
         created_at="2026-10-04T00:00:00+00:00",
     )

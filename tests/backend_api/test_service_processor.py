@@ -273,13 +273,19 @@ def test_initial_final_flow_is_durable_and_does_not_run_deep(
     assert len(harness.initial.calls) == 1
 
 
-def test_fresh_initial_result_must_record_triggered_signals(harness):
-    harness.initial.value.pop("triggered_signals")
+@pytest.mark.parametrize("signals", [None, []])
+def test_fresh_initial_result_must_record_triggered_signals(harness, signals):
+    harness.initial.value = initial_result("HIGH_RISK_UNCERTAIN")
+    if signals is None:
+        harness.initial.value.pop("triggered_signals")
+    else:
+        harness.initial.value["triggered_signals"] = signals
     accepted = submit(harness)
     record = harness.processor.resume(accepted.analysis_id)
     assert record.status == "FAILED" and record.initial_result is None
     assert record.error["code"] == "INITIAL_RESULT_INVALID"
     assert record.final_assessment["final_verdict"] == "INCONCLUSIVE"
+    assert harness.deep.calls == []
 
 
 def test_legacy_initial_checkpoint_can_resume_without_inventing_signals(harness):

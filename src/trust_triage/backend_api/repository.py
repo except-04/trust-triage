@@ -459,12 +459,15 @@ class PostgresAnalysisRepository:
                 deep_score_policy = "difficulty-v2"
                 deep_priority_reason = "분석 난이도"
                 deep_queue_reason = f"PE 구조 경고 점수 {int(difficulty)}"
-        elif initial_verdict == "HIGH_RISK_UNCERTAIN":
-            is_deep = True
-            deep_priority_score = 0.0
-            deep_score_policy = "exception-v2"
-            deep_priority_reason = "신호 미감지"
-            deep_queue_reason = "위험 신호 없는 불확실 파일"
+        elif initial_verdict == "HIGH_RISK_UNCERTAIN" and not is_emergency:
+            return {
+                "queue_name": "ERROR",
+                "queue_reason": "불확실 판정의 위험 신호 기록이 없거나 비어 있음",
+                "priority_score": -1.0,
+                "score_policy": "error-v1",
+                "priority_reason": "초기 판정과 위험 신호 불일치",
+                "selection_reason": "판정 데이터 오류 확인 필요",
+            }
 
         queue_name = "UNKNOWN"
         queue_reason = ""
