@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS api_analyses (
     size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
     status text NOT NULL DEFAULT 'QUEUED'
         CHECK (status IN ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED')),
+    priority text NOT NULL DEFAULT 'NORMAL'
+        CHECK (priority IN ('NORMAL', 'URGENT')),
     current_stage text NOT NULL DEFAULT 'UPLOAD' CHECK (current_stage IN (
         'UPLOAD', 'INITIAL_ANALYSIS', 'JRR', 'CAPA_FLOSS', 'SPEAKEASY', 'LLM', 'FINAL_ASSESSMENT'
     )),
@@ -132,6 +134,13 @@ CREATE INDEX IF NOT EXISTS api_analyses_cleanup_idx
     WHERE status IN ('COMPLETED', 'FAILED') AND storage_deleted_at IS NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS api_analyses_identity_idx ON api_analyses (analysis_id, sha256);
+
+-- Additive migration for priority column
+ALTER TABLE api_analyses ADD COLUMN IF NOT EXISTS priority text NOT NULL DEFAULT 'NORMAL'
+    CHECK (priority IN ('NORMAL', 'URGENT'));
+CREATE INDEX IF NOT EXISTS api_analyses_pending_priority_idx
+    ON api_analyses ((priority = 'URGENT') DESC, updated_at, analysis_id)
+    WHERE status IN ('QUEUED', 'RUNNING');
 
 -- Only references are registered here. Artifact bytes live beside their sample.
 CREATE TABLE IF NOT EXISTS api_analysis_artifacts (

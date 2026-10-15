@@ -197,14 +197,17 @@ class ExistingDeepGateway:
             ) from exc
 
     def _request(self, record: AnalysisRecord):
-        return self._request_type(
-            analysis_id=record.analysis_id,
-            sha256=record.sha256,
-            file_location=record.file_location,
-            initial_route="DEEP_ANALYSIS",
-            initial_verdict="UNKNOWN",
-            requested_at=record.created_at,
-        )
+        kwargs = {
+            "analysis_id": record.analysis_id,
+            "sha256": record.sha256,
+            "file_location": record.file_location,
+            "initial_route": "DEEP_ANALYSIS",
+            "initial_verdict": "UNKNOWN",
+            "requested_at": record.created_at,
+        }
+        if "priority" in getattr(self._request_type, "__dataclass_fields__", {}):
+            kwargs["priority"] = getattr(record, "priority", "NORMAL")
+        return self._request_type(**kwargs)
 
     def can_delete(self, record: AnalysisRecord) -> bool:
         """원본을 참조하는 심층 분석과 Worker가 모두 끝났을 때만 삭제한다."""

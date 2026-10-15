@@ -114,6 +114,10 @@ class AnalysisIdentity(APIModel):
     created_at: AwareDatetime = Field(
         description="접수 시각입니다. Z는 UTC를 뜻하며 한국 시각은 UTC보다 9시간 빠릅니다."
     )
+    priority: Literal["NORMAL", "URGENT"] = Field(
+        default="NORMAL",
+        description="분석 작업의 우선순위입니다. URGENT는 긴급 분석을 의미합니다.",
+    )
 
 
 class AnalysisAccepted(AnalysisIdentity):

@@ -36,8 +36,8 @@ _DYNAMIC_EVENT_CATEGORIES = (
 
 def identity(record: AnalysisRecord) -> dict[str, Any]:
     return {
-        key: getattr(record, key)
-        for key in ("analysis_id", "batch_id", "sha256", "created_at")
+        key: getattr(record, key, "NORMAL")
+        for key in ("analysis_id", "batch_id", "sha256", "created_at", "priority")
     }
 
 

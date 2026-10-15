@@ -78,6 +78,7 @@ def create_service(config: BackendConfig | None = None) -> BackendService:
         storage = S3SampleStorage(
             client,
             bucket=config.s3_bucket,
+            quarantine_bucket=config.quarantine_s3_bucket,
             prefix=config.s3_prefix,
             temp_root=config.temp_root,
             max_file_bytes=config.max_file_bytes,

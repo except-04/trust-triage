@@ -8,15 +8,26 @@ from .repository import JobRepository
 
 
 class JobPublisher:
-    def __init__(self, repository: JobRepository, queue: JobQueue) -> None:
+    def __init__(
+        self,
+        repository: JobRepository,
+        queue: JobQueue,
+        urgent_queue: JobQueue | None = None,
+    ) -> None:
         self.repository = repository
         self.queue = queue
+        self.urgent_queue = urgent_queue
 
-    def submit(self, job: SpeakeasyJob) -> JobRecord:
+    def submit(self, job: SpeakeasyJob, *, urgent: bool = False) -> JobRecord:
         # 먼저 DB에 남긴다. SQS 전송 실패 시에도 run/dispatch에서 같은 요청을 복구한다.
         record = self.repository.register(job, dispatch_pending=True)
         if record.dispatch_pending and not record.status.terminal:
-            self.queue.send(record.job)
+            target_queue = (
+                self.urgent_queue
+                if (urgent and self.urgent_queue is not None)
+                else self.queue
+            )
+            target_queue.send(record.job)
             self.repository.mark_dispatched(record.job.analysis_id)
             record = self.repository.get(job.analysis_id)
         return record

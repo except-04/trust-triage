@@ -24,9 +24,10 @@ _REQUEST_FIELDS = frozenset(
         "initial_route",
         "initial_verdict",
         "requested_at",
+        "priority",
     }
 )
-_REQUIRED_FIELDS = _REQUEST_FIELDS - {"initial_verdict", "requested_at"}
+_REQUIRED_FIELDS = _REQUEST_FIELDS - {"initial_verdict", "requested_at", "priority"}
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class DeepAnalysisRequest:
     initial_route: str
     initial_verdict: str = "UNKNOWN"
     requested_at: str = field(default_factory=utc_now)
+    priority: str = "NORMAL"
 
     def __post_init__(self) -> None:
         job = self.worker_job
@@ -54,6 +56,9 @@ class DeepAnalysisRequest:
             raise InvalidJob("initial_verdict must be BENIGN, MALICIOUS, or UNKNOWN")
         object.__setattr__(self, "initial_route", self.initial_route.upper())
         object.__setattr__(self, "initial_verdict", self.initial_verdict.upper())
+        object.__setattr__(
+            self, "priority", "URGENT" if str(self.priority).upper() == "URGENT" else "NORMAL"
+        )
 
     @property
     def worker_job(self) -> SpeakeasyJob:
@@ -69,6 +74,7 @@ class DeepAnalysisRequest:
             self.worker_job.same_input(other.worker_job)
             and self.initial_route == other.initial_route
             and self.initial_verdict == other.initial_verdict
+            and self.priority == other.priority
         )
 
     def to_dict(self) -> dict[str, str]:
@@ -79,6 +85,7 @@ class DeepAnalysisRequest:
             "initial_route": self.initial_route,
             "initial_verdict": self.initial_verdict,
             "requested_at": self.requested_at,
+            "priority": self.priority,
         }
 
     @classmethod

@@ -19,6 +19,7 @@ class WorkerConfig:
     dlq_url: str
     database_url: str = field(repr=False)
     s3_bucket: str
+    urgent_queue_url: str | None = None
     s3_prefix: str = "raw/"
     temp_root: str = "artifacts/worker/tmp"
     poll_seconds: int = 20
@@ -31,10 +32,13 @@ class WorkerConfig:
     def __post_init__(self) -> None:
         if not self.region or not self.database_url.strip():
             raise ValueError("AWS_REGION and WORKER_DATABASE_URL are required")
-        for name, value in (
+        urls_to_check = [
             ("SQS_QUEUE_URL", self.queue_url),
             ("SQS_DLQ_URL", self.dlq_url),
-        ):
+        ]
+        if self.urgent_queue_url:
+            urls_to_check.append(("SQS_URGENT_QUEUE_URL", self.urgent_queue_url))
+        for name, value in urls_to_check:
             parsed = urlsplit(value)
             if (
                 parsed.scheme != "https"
@@ -85,6 +89,7 @@ class WorkerConfig:
             dlq_url=required("SQS_DLQ_URL"),
             database_url=required("WORKER_DATABASE_URL"),
             s3_bucket=required("WORKER_S3_BUCKET"),
+            urgent_queue_url=values.get("SQS_URGENT_QUEUE_URL") or None,
             s3_prefix=values.get("WORKER_S3_PREFIX", "raw/"),
             temp_root=values.get("WORKER_TEMP_DIR", "artifacts/worker/tmp"),
             poll_seconds=int(values.get("WORKER_POLL_SECONDS", "20")),

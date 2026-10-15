@@ -55,6 +55,9 @@ class SampleStorage(Protocol):
     ): ...
     def delete(self, sample: StoredSample) -> None: ...
     def check(self) -> None: ...
+    def generate_upload_url(
+        self, filename: str, *, expires_in: int = 300
+    ) -> dict[str, Any]: ...
 
 
 def _safe_id(value: str) -> str:
@@ -73,10 +76,10 @@ def _filename(value: str) -> str:
         char for char in name if ord(char) >= 32 and ord(char) != 127
     ).strip()
     suffix = Path(name).suffix.lower()
-    if suffix not in {".exe", ".dll"}:
+    if suffix not in {".exe", ".dll", ".zip"}:
         raise BackendError(
             "UNSUPPORTED_FILE_TYPE",
-            ".exe 또는 .dll 파일을 올려주세요.",
+            ".exe, .dll 또는 .zip 파일을 올려주세요.",
             http_status=422,
             stage="UPLOAD",
         )
@@ -221,6 +224,20 @@ class LocalSampleStorage:
     def artifact_store(self, *, max_bytes: int):
         return LocalArtifactStorage(self.root, max_bytes=max_bytes)
 
+    def generate_upload_url(
+        self, filename: str, *, expires_in: int = 300
+    ) -> dict[str, Any]:
+        safe_name = _filename(filename)
+        from uuid import uuid4
+        unique_key = f"incoming/{uuid4().hex[:8]}_{safe_name}"
+        return {
+            "upload_url": f"local://quarantine/{unique_key}",
+            "bucket": "local-quarantine",
+            "key": unique_key,
+            "filename": safe_name,
+            "expires_in_seconds": expires_in,
+        }
+
     def _path(self, sample: StoredSample) -> Path:
         analysis_id = _safe_id(sample.analysis_id)
         try:
@@ -337,6 +354,7 @@ class S3SampleStorage:
         client,
         *,
         bucket: str,
+        quarantine_bucket: str = "trust-triage-quarantine-except04",
         prefix: str = "raw/",
         temp_root: Path,
         max_file_bytes: int = 50 * 1024 * 1024,
@@ -344,6 +362,8 @@ class S3SampleStorage:
     ) -> None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket):
             raise ValueError("S3 bucket name is invalid")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", quarantine_bucket):
+            raise ValueError("S3 quarantine bucket name is invalid")
         if (
             not prefix.endswith("/")
             or prefix.startswith("/")
@@ -354,6 +374,7 @@ class S3SampleStorage:
         if not 0 < download_timeout_seconds <= 600 or max_file_bytes < 1:
             raise ValueError("invalid storage limits")
         self.client, self.bucket, self.prefix = client, bucket, prefix
+        self.quarantine_bucket = quarantine_bucket
         self.temp_root = Path(temp_root).resolve()
         self.max_file_bytes, self.download_timeout_seconds = (
             max_file_bytes,
@@ -365,6 +386,32 @@ class S3SampleStorage:
             self.client.head_bucket(Bucket=self.bucket)
         except (BotoCoreError, ClientError) as exc:
             raise _aws_error(exc, stage="STORAGE") from exc
+
+    def generate_upload_url(
+        self, filename: str, *, expires_in: int = 300
+    ) -> dict[str, Any]:
+        safe_name = _filename(filename)
+        from uuid import uuid4
+        unique_key = f"incoming/{uuid4().hex[:8]}_{safe_name}"
+        try:
+            url = self.client.generate_presigned_url(
+                ClientMethod="put_object",
+                Params={
+                    "Bucket": self.quarantine_bucket,
+                    "Key": unique_key,
+                    "ContentType": "application/octet-stream",
+                },
+                ExpiresIn=expires_in,
+            )
+            return {
+                "upload_url": url,
+                "bucket": self.quarantine_bucket,
+                "key": unique_key,
+                "filename": safe_name,
+                "expires_in_seconds": expires_in,
+            }
+        except (BotoCoreError, ClientError) as exc:
+            raise _aws_error(exc, stage="UPLOAD") from exc
 
     def artifact_store(self, *, max_bytes: int):
         return S3ArtifactStorage(

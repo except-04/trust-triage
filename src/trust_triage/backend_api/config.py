@@ -31,6 +31,7 @@ class BackendConfig:
     temp_root: Path = Path("artifacts/backend/tmp")
     aws_region: str = "ap-northeast-2"
     s3_bucket: str = ""
+    quarantine_s3_bucket: str = "trust-triage-quarantine-except04"
     s3_prefix: str = "raw/"
     api_token: str = field(default="", repr=False)
     reviewer_token: str = field(default="", repr=False)
@@ -129,6 +130,9 @@ class BackendConfig:
             temp_root=Path(os.getenv("BACKEND_TEMP_DIR", "artifacts/backend/tmp")),
             aws_region=os.getenv("AWS_REGION", "ap-northeast-2"),
             s3_bucket=os.getenv("BACKEND_S3_BUCKET", os.getenv("WORKER_S3_BUCKET", "")),
+            quarantine_s3_bucket=os.getenv(
+                "BACKEND_QUARANTINE_S3_BUCKET", "trust-triage-quarantine-except04"
+            ),
             s3_prefix=os.getenv("BACKEND_S3_PREFIX", "raw/"),
             max_artifact_bytes=_integer("BACKEND_MAX_ARTIFACT_BYTES", 64 * 1024 * 1024),
             api_token=os.getenv("BACKEND_API_TOKEN", ""),

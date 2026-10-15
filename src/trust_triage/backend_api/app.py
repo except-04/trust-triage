@@ -395,8 +395,18 @@ def create_app(
         svc.repository.check()
         return {"status": "ready"}
 
-    async def submit(request: Request, svc, batch, key, *, archive=False):
+    async def submit(request: Request, svc, batch, key, *, archive=False, priority="NORMAL"):
         expected = "files" if batch and not archive else "file"
+        header_priority = request.headers.get("x-priority")
+        if header_priority:
+            priority = header_priority.strip().upper()
+        if priority not in {"NORMAL", "URGENT"}:
+            raise BackendError(
+                "INVALID_PRIORITY",
+                "priority는 NORMAL 또는 URGENT여야 합니다.",
+                http_status=422,
+                stage="UPLOAD",
+            )
         if (
             request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             != "multipart/form-data"
@@ -426,14 +436,27 @@ def create_app(
             uploads = [(value.file, value.filename or "") for _, value in entries]
             if archive:
                 return await run_in_threadpool(
-                    svc.submit_zip, uploads, idempotency_key=key
+                    svc.submit_zip, uploads, idempotency_key=key, priority=priority
                 )
             return await run_in_threadpool(
                 svc.submit,
                 uploads,
                 batch=batch,
                 idempotency_key=key,
+                priority=priority,
             )
+
+    @app.get(
+        "/analyses/upload-url",
+        dependencies=dependencies,
+        summary="S3 격리 버킷 Presigned Upload URL 발급",
+        description="클라이언트가 백엔드를 거치지 않고 S3 격리 버킷으로 직통 업로드할 수 있는 5분짜리 Presigned URL을 발급합니다.",
+    )
+    def get_upload_url(
+        filename: Annotated[str, Query(description="업로드할 파일명 (예: sample.exe)")],
+        svc: Annotated[BackendService, Depends(backend)],
+    ):
+        return svc.storage.generate_upload_url(filename)
 
     @app.post(
         "/analyses",
@@ -447,8 +470,12 @@ def create_app(
         request: Request,
         svc: Annotated[BackendService, Depends(backend)],
         idempotency_key: IdempotencyKey = None,
+        priority: Annotated[
+            Literal["NORMAL", "URGENT"],
+            Query(description="분석 작업의 우선순위 (NORMAL 또는 URGENT)"),
+        ] = "NORMAL",
     ):
-        return await submit(request, svc, False, idempotency_key)
+        return await submit(request, svc, False, idempotency_key, priority=priority)
 
     @app.post(
         "/batches",
@@ -462,8 +489,12 @@ def create_app(
         request: Request,
         svc: Annotated[BackendService, Depends(backend)],
         idempotency_key: IdempotencyKey = None,
+        priority: Annotated[
+            Literal["NORMAL", "URGENT"],
+            Query(description="분석 작업의 우선순위 (NORMAL 또는 URGENT)"),
+        ] = "NORMAL",
     ):
-        return await submit(request, svc, True, idempotency_key)
+        return await submit(request, svc, True, idempotency_key, priority=priority)
 
     @app.post(
         "/batches/zip",
@@ -477,8 +508,14 @@ def create_app(
         request: Request,
         svc: Annotated[BackendService, Depends(backend)],
         idempotency_key: IdempotencyKey = None,
+        priority: Annotated[
+            Literal["NORMAL", "URGENT"],
+            Query(description="분석 작업의 우선순위 (NORMAL 또는 URGENT)"),
+        ] = "NORMAL",
     ):
-        return await submit(request, svc, True, idempotency_key, archive=True)
+        return await submit(
+            request, svc, True, idempotency_key, archive=True, priority=priority
+        )
 
     @app.get(
         "/analyses",

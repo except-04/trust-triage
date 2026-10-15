@@ -85,6 +85,7 @@ class BackendService:
         *,
         batch: bool = False,
         idempotency_key: str | None = None,
+        priority: str = "NORMAL",
     ):
         if (
             not files
@@ -99,7 +100,9 @@ class BackendService:
             )
         _validate_idempotency_key(idempotency_key)
         if batch:
-            return self._submit_batch(files, idempotency_key=idempotency_key)
+            return self._submit_batch(
+                files, idempotency_key=idempotency_key, priority=priority
+            )
         published: list[StoredSample] = []
         try:
             with ExitStack() as staging:
@@ -119,7 +122,7 @@ class BackendService:
                     # Rows are invisible until all new objects have been published.
                     # An idempotency replay publishes nothing, even after expiry.
                     records = transaction.register(
-                        [asdict(item.sample) for item in prepared],
+                        [{**asdict(item.sample), "priority": priority} for item in prepared],
                         batch_id=None,
                         idempotency_key=idempotency_key,
                     )
@@ -130,11 +133,21 @@ class BackendService:
             raise
         return views.accepted(records[0])
 
-    def submit_zip(self, files: list[tuple[BinaryIO, str]], *, idempotency_key=None):
+    def submit_zip(
+        self,
+        files: list[tuple[BinaryIO, str]],
+        *,
+        idempotency_key=None,
+        priority: str = "NORMAL",
+    ):
         _validate_idempotency_key(idempotency_key)
-        return self._submit_batch(files, archive=True, idempotency_key=idempotency_key)
+        return self._submit_batch(
+            files, archive=True, idempotency_key=idempotency_key, priority=priority
+        )
 
-    def _submit_batch(self, files, *, archive=False, idempotency_key=None):
+    def _submit_batch(
+        self, files, *, archive=False, idempotency_key=None, priority="NORMAL"
+    ):
         published: list[StoredSample] = []
         try:
             with ExitStack() as staging:
@@ -170,7 +183,7 @@ class BackendService:
                     [item.sample.sha256 for item in prepared]
                 ) as transaction:
                     batch = transaction.register_batch(
-                        [asdict(item.sample) for item in prepared],
+                        [{**asdict(item.sample), "priority": priority} for item in prepared],
                         batch_id=f"batch_{uuid4().hex}",
                         input_report=report,
                         idempotency_key=idempotency_key,

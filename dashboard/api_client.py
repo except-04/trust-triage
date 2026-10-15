@@ -75,29 +75,55 @@ def _request(method, path, *, timeout=None, **kwargs):
     return response.json()
 
 
-def upload(filename, content):
+def get_upload_url(filename):
+    """S3 격리 버킷으로 직통 업로드할 수 있는 5분짜리 Presigned URL을 발급받는다."""
+    return _request("GET", f"/analyses/upload-url?filename={filename}")
+
+
+def upload_to_quarantine(upload_url, content):
+    """발급받은 Presigned URL을 통해 S3 격리 버킷으로 파일을 직통 전송한다."""
+    resp = requests.put(
+        upload_url,
+        data=content,
+        headers={"Content-Type": "application/octet-stream"},
+        timeout=TIMEOUT_SEC,
+    )
+    if resp.status_code not in (200, 204):
+        raise ApiError(
+            "S3_UPLOAD_FAILED",
+            f"S3 격리 버킷 업로드 실패 (HTTP {resp.status_code})",
+            stage="UPLOAD",
+            http_status=resp.status_code,
+        )
+    return resp
+
+
+def upload(filename, content, priority="NORMAL"):
     """PE 파일 하나를 접수한다.
 
     반환: {"analysis_id": ..., "sha256": ..., "status": "QUEUED", ...}
     """
     files = {"file": (filename, content, "application/octet-stream")}
-    return _request("POST", "/analyses", files=files)
+    path = f"/analyses?priority={priority}" if priority else "/analyses"
+    return _request("POST", path, files=files)
 
 
-def upload_batch(files_):
+def upload_batch(files_, priority="NORMAL"):
     """여러 파일을 한 번에 접수한다. files_: [(filename, content), ...]"""
     payload = [("files", (name, content, "application/octet-stream")) for name, content in files_]
-    return _request("POST", "/batches", files=payload)
+    path = f"/batches?priority={priority}" if priority else "/batches"
+    return _request("POST", path, files=payload)
 
 
-def upload_zip(filename, content):
+def upload_zip(filename, content, priority="NORMAL"):
     """ZIP 한 개를 접수한다. 해제·내부 PE 검증·보안 검사는 백엔드가 수행한다.
 
     필드 이름은 files가 아니라 file 하나다 (POST /batches/zip 계약).
     반환: batch_id / entries / analyses / accepted_count / skipped_count ...
     """
     files = {"file": (filename, content, "application/zip")}
-    return _request("POST", "/batches/zip", files=files, timeout=ZIP_TIMEOUT_SEC)
+    path = f"/batches/zip?priority={priority}" if priority else "/batches/zip"
+    return _request("POST", path, files=files, timeout=ZIP_TIMEOUT_SEC)
 
 
 def get_status(analysis_id):

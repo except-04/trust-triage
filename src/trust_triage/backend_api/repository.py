@@ -49,6 +49,7 @@ class AnalysisRecord:
     size_bytes: int
     batch_id: str | None = None
     status: str = "QUEUED"
+    priority: str = "NORMAL"
     current_stage: str = "UPLOAD"
     phase: str = "INITIAL"
     initial_result: Mapping[str, Any] | None = None
@@ -120,7 +121,9 @@ class AnalysisRepository(Protocol):
         sort: str = "newest",
     ) -> tuple[list[AnalysisRecord], int]: ...
     def get_batch(self, batch_id: str) -> list[AnalysisRecord] | None: ...
-    def pending_ids(self, limit: int = 10) -> list[str]: ...
+    def pending_ids(
+        self, limit: int = 10, *, priority: str | None = None
+    ) -> list[str]: ...
     def claim(self, analysis_id: str, lease_seconds: int) -> Claim: ...
     def renew(self, analysis_id: str, token: str, lease_seconds: int) -> bool: ...
     def release(
@@ -366,8 +369,8 @@ class PostgresAnalysisRepository:
                 connection.execute(
                     """INSERT INTO api_analyses
                        (analysis_id, request_id, batch_id, batch_position, sha256,
-                        file_location, filename, size_bytes, duplicate_of)
-                       VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s)""",
+                        file_location, filename, size_bytes, duplicate_of, priority)
+                       VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (
                         item["analysis_id"],
                         request_id,
@@ -378,6 +381,7 @@ class PostgresAnalysisRepository:
                         item["filename"],
                         item["size_bytes"],
                         duplicate["analysis_id"] if duplicate else None,
+                        item.get("priority", "NORMAL"),
                     ),
                 )
             records = [
@@ -493,14 +497,24 @@ class PostgresAnalysisRepository:
                 else None,
             )
 
-    def pending_ids(self, limit: int = 10) -> list[str]:
+    def pending_ids(
+        self, limit: int = 10, *, priority: str | None = None
+    ) -> list[str]:
         _limit(limit)
+        clause = _READY
+        params: list[Any] = []
+        if priority is not None:
+            if priority not in {"NORMAL", "URGENT"}:
+                raise ValueError("priority must be NORMAL or URGENT")
+            clause += " AND priority = %s"
+            params.append(priority)
+        params.append(limit)
         with self._connection() as connection:
             rows = connection.execute(
                 "SELECT analysis_id FROM api_analyses WHERE "
-                + _READY
-                + " ORDER BY updated_at, analysis_id LIMIT %s",
-                (limit,),
+                + clause
+                + " ORDER BY (priority = 'URGENT') DESC, updated_at, analysis_id LIMIT %s",
+                tuple(params),
             ).fetchall()
             return [row["analysis_id"] for row in rows]
 
@@ -897,15 +911,17 @@ def registration_input(analyses, batch_id, idempotency_key, input_report=None):
         )
     normalized = []
     for value in analyses:
-        if not isinstance(value, Mapping) or set(value) != {
-            "analysis_id",
-            "sha256",
-            "file_location",
-            "filename",
-            "size_bytes",
-        }:
+        keys = set(value) if isinstance(value, Mapping) else set()
+        if not isinstance(value, Mapping) or not (
+            keys == {"analysis_id", "sha256", "file_location", "filename", "size_bytes"}
+            or keys == {"analysis_id", "sha256", "file_location", "filename", "size_bytes", "priority"}
+        ):
             raise ValueError("analysis input has missing or unknown fields")
         item = dict(value)
+        priority = item.get("priority", "NORMAL")
+        if priority not in {"NORMAL", "URGENT"}:
+            raise ValueError("priority must be NORMAL or URGENT")
+        item["priority"] = priority
         _identifier(item["analysis_id"], "analysis_id")
         _hash(item["sha256"])
         for name, maximum in (("file_location", 4096), ("filename", 512)):
@@ -1087,7 +1103,15 @@ def _iso(value):
 
 def _record(row):
     keys = AnalysisRecord.__dataclass_fields__
-    payload = {name: row[name] for name in keys}
+    payload = {}
+    for name in keys:
+        if hasattr(row, "get"):
+            val = row.get(name, "NORMAL" if name == "priority" else None)
+        elif hasattr(row, "__contains__") and name in row:
+            val = row[name]
+        else:
+            val = "NORMAL" if name == "priority" else None
+        payload[name] = val
     for name in ("created_at", "updated_at", "completed_at", "storage_deleted_at"):
         payload[name] = _iso(payload[name])
     return AnalysisRecord(**payload)

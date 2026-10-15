@@ -4,7 +4,6 @@ from collections import Counter
 from html import escape
 
 import api_client
-import matplotlib.pyplot as plt
 import streamlit as st
 from api_client import ApiError
 
@@ -133,6 +132,12 @@ def route_badge_markup(route):
     )
 
 
+def priority_badge_markup(priority):
+    if priority == "URGENT":
+        return '<span class="status-badge badge-danger">긴급 (URGENT)</span>'
+    return '<span class="status-badge badge-neutral">일반 (NORMAL)</span>'
+
+
 def pipeline_state_markup(status):
     if status in {"COMPLETED", "Completed"}:
         label = "✓ 완료"
@@ -257,59 +262,70 @@ def render_shap_chart(target, features):
     colors = ["#dc2626" if value >= 0 else "#2563eb" for value in values]
     limit = max((abs(value) for value in values), default=0.1) * 1.22
 
-    # Keep full-width labels; the tighter figure is ~230-255px in the wide panel.
-    figure, axis = plt.subplots(figsize=(6.2, 1.0))
-    positions = list(range(len(names)))
-    axis.barh(positions, values, color=colors, height=0.55)
-    axis.axvline(0, color="#64748b", linewidth=1.1, zorder=0)
-    axis.set_xlim(-limit, limit)
-    axis.set_yticks(positions, labels=names)
-    axis.invert_yaxis()
-    axis.xaxis.grid(True, color="#e2e8f0", linewidth=0.7)
-    axis.set_axisbelow(True)
-    axis.tick_params(axis="both", labelsize=6.5, colors="#475569", pad=1)
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
 
-    for position, value in zip(positions, values):
-        offset = limit * 0.025
+        figure, axis = plt.subplots(figsize=(6.2, 1.0))
+        positions = list(range(len(names)))
+        axis.barh(positions, values, color=colors, height=0.55)
+        axis.axvline(0, color="#64748b", linewidth=1.1, zorder=0)
+        axis.set_xlim(-limit, limit)
+        axis.set_yticks(positions, labels=names)
+        axis.invert_yaxis()
+        axis.xaxis.grid(True, color="#e2e8f0", linewidth=0.7)
+        axis.set_axisbelow(True)
+        axis.tick_params(axis="both", labelsize=6.5, colors="#475569", pad=1)
+
+        for position, value in zip(positions, values):
+            offset = limit * 0.025
+            axis.text(
+                value + (offset if value >= 0 else -offset),
+                position,
+                f"{value:+.2f}",
+                va="center",
+                ha="left" if value >= 0 else "right",
+                fontsize=6.5,
+                color="#334155",
+            )
+
         axis.text(
-            value + (offset if value >= 0 else -offset),
-            position,
-            f"{value:+.2f}",
-            va="center",
-            ha="left" if value >= 0 else "right",
+            0.01,
+            1.04,
+            "← Benign contribution",
+            transform=axis.transAxes,
+            color="#2563eb",
             fontsize=6.5,
-            color="#334155",
+            fontweight="bold",
+        )
+        axis.text(
+            0.99,
+            1.04,
+            "Malicious contribution →",
+            transform=axis.transAxes,
+            color="#dc2626",
+            fontsize=6.5,
+            fontweight="bold",
+            ha="right",
         )
 
-    axis.text(
-        0.01,
-        1.04,
-        "← Benign contribution",
-        transform=axis.transAxes,
-        color="#2563eb",
-        fontsize=6.5,
-        fontweight="bold",
-    )
-    axis.text(
-        0.99,
-        1.04,
-        "Malicious contribution →",
-        transform=axis.transAxes,
-        color="#dc2626",
-        fontsize=6.5,
-        fontweight="bold",
-        ha="right",
-    )
+        for spine in axis.spines.values():
+            spine.set_visible(False)
 
-    for spine in axis.spines.values():
-        spine.set_visible(False)
-
-    axis.set_xlabel("SHAP value", fontsize=6.5, color="#64748b", labelpad=1)
-    figure.patch.set_facecolor("#ffffff")
-    axis.set_facecolor("#ffffff")
-    figure.tight_layout(pad=0.35)
-    target.pyplot(figure, width="stretch")
-    plt.close(figure)
+        axis.set_xlabel("SHAP value", fontsize=6.5, color="#64748b", labelpad=1)
+        figure.patch.set_facecolor("#ffffff")
+        axis.set_facecolor("#ffffff")
+        figure.tight_layout(pad=0.35)
+        target.pyplot(figure, width="stretch")
+        plt.close(figure)
+    except Exception:
+        target.caption("주요 특성 영향도 (SHAP)")
+        target.dataframe(
+            [{"특성": n, "영향도": f"{v:+.3f}"} for n, v in zip(names, values)],
+            hide_index=True,
+            width="stretch",
+        )
 
 
 def derive_batch_summary(analyses):
@@ -343,6 +359,7 @@ def entry_view(entry, status):
         "analysis_id": entry.get("analysis_id"),
         "sha256": entry.get("sha256") or "",
         "status": status,
+        "priority": entry.get("priority", "NORMAL"),
         "filename": entry.get("filename") or "(이름 없음)",
         "file_size": entry.get("size_bytes") or 0,
         "initial_verdict": None,
@@ -405,7 +422,7 @@ def receipt_views(receipt, source):
     return analyses, skipped
 
 
-def submit_batch(file_descriptors, on_progress=None):
+def submit_batch(file_descriptors, on_progress=None, priority="NORMAL"):
     """업로드를 백엔드에 접수하고, 결과가 아직 비어 있는 batch_data를 만든다.
 
     PE/DLL은 /batches 한 번으로, ZIP은 파일당 /batches/zip 한 번으로 보낸다.
@@ -463,14 +480,16 @@ def submit_batch(file_descriptors, on_progress=None):
     if pe_files:
         payload = [(d["filename"], d["content"]) for d in pe_files]
         collect(
-            lambda: api_client.upload_batch(payload),
+            lambda: api_client.upload_batch(payload, priority=priority),
             None,
             f"PE/DLL {len(pe_files)}건",
         )
 
     for descriptor in zip_files:
         collect(
-            lambda d=descriptor: api_client.upload_zip(d["filename"], d["content"]),
+            lambda d=descriptor: api_client.upload_zip(
+                d["filename"], d["content"], priority=priority
+            ),
             descriptor["filename"],
             descriptor["filename"],
         )
@@ -534,6 +553,7 @@ def to_view(full, previous):
     return {
         **previous,
         "status": full.get("status") or previous.get("status"),
+        "priority": full.get("priority") or previous.get("priority", "NORMAL"),
         "current_stage": full.get("current_stage", previous.get("current_stage")),
         "initial_verdict": full.get("initial_verdict"),
         "route": full.get("route"),
@@ -994,6 +1014,7 @@ def render_result_detail(analysis, target=st):
         ("Initial Verdict", verdict_badge_markup(analysis.get("initial_verdict") or "Pending")),
         ("Final Verdict", verdict_badge_markup(analysis.get("final_verdict") or "Pending")),
         ("Route", route_badge_markup(analysis.get("route") or "-")),
+        ("Priority", priority_badge_markup(analysis.get("priority") or "NORMAL")),
     ]
     metrics = [
         ("Raw Probability", "raw_probability", "{:.1%}"),
@@ -1612,15 +1633,27 @@ def render_input_view():
     if blocking:
         input_panel.error(blocking)
 
-    if input_panel.button(
-        "분석 시작",
-        type="primary",
+    btn_col1, btn_col2 = input_panel.columns([1, 1])
+    normal_clicked = btn_col1.button(
+        "일반 분석 시작",
+        use_container_width=True,
         disabled=not file_descriptors or bool(blocking),
-    ):
+    )
+    urgent_clicked = btn_col2.button(
+        "긴급 우선 분석",
+        type="primary",
+        use_container_width=True,
+        disabled=not file_descriptors or bool(blocking),
+    )
+
+    if normal_clicked or urgent_clicked:
+        priority = "URGENT" if urgent_clicked else "NORMAL"
         # 새 접수는 이전 접수 결과를 비우고 처음부터 누적한다
         reset_analysis_result()
         try:
-            receipt = submit_batch(file_descriptors, on_progress=commit_receipt)
+            receipt = submit_batch(
+                file_descriptors, on_progress=commit_receipt, priority=priority
+            )
         except ApiError as e:
             input_panel.error(f"접수 실패: {e.message}")
         else:

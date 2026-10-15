@@ -338,7 +338,10 @@ class DeepAnalysisService:
                 # 기한이 지난 체크포인트를 복구할 때 새 Worker 작업을 보내지 않는다.
                 try:
                     if worker is None or worker.dispatch_pending:
-                        worker = self.publisher.submit(request.worker_job)
+                        worker = self.publisher.submit(
+                            request.worker_job,
+                            urgent=(getattr(request, "priority", "NORMAL") == "URGENT"),
+                        )
                 except JobConflict as exc:
                     raise PermanentError(
                         "WORKER_JOB_CONFLICT",

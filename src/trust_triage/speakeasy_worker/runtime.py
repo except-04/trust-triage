@@ -36,10 +36,16 @@ def _sqs_client(config: WorkerConfig):
 
 def create_publisher(config: WorkerConfig) -> JobPublisher:
     """Backend에서 사용할 전송기. Speakeasy 실행은 하지 않는다."""
-
+    client = _sqs_client(config)
+    urgent_queue = (
+        SqsQueue(client, config.urgent_queue_url)
+        if config.urgent_queue_url
+        else None
+    )
     return JobPublisher(
         PostgresJobRepository(config.database_url),
-        SqsQueue(_sqs_client(config), config.queue_url),
+        SqsQueue(client, config.queue_url),
+        urgent_queue=urgent_queue,
     )
 
 
