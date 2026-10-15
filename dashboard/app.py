@@ -2270,7 +2270,7 @@ def render_recent_analyses(limit=5):
     )
 
     rows = []
-    for idx, item in enumerate(analyses, 1):
+    for item in analyses:
         created_raw = item.get("created_at") or "-"
         try:
             created = (
@@ -2287,12 +2287,11 @@ def render_recent_analyses(limit=5):
 
         rows.append(
             {
-                "No": idx,
+                "등록 시각": created,
                 "파일명": item.get("filename") or "(이름 없음)",
                 "최종 판정": verdict,
                 "상태": status_label,
                 "우선순위": priority_label,
-                "등록 시각": created,
                 "SHA-256": item.get("sha256") or "-",
             }
         )
