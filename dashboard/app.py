@@ -1510,7 +1510,6 @@ def render_result_detail(analysis, target=st):
         ),
         (final_label, final_badge),
         ("Route", route_badge_markup(analysis.get("route") or "-")),
-        ("Priority", priority_badge_markup(analysis.get("priority") or "NORMAL")),
     ]
     # (이름, 키, 서식, 이름에 마우스를 올리면 뜨는 설명)
     metrics = [
