@@ -2250,8 +2250,8 @@ def render_hash_search_results(target):
         st.rerun()
 
 
-def render_recent_analyses(limit=10):
-    """업로드 패널 바로 아래의 최근 분석 이력(최신 10건) 퀵뷰 패널."""
+def render_recent_analyses(limit=5):
+    """업로드 패널 바로 아래의 최근 분석 이력(최신 5건) 퀵뷰 패널."""
     try:
         res = api_client.search_analyses(limit=limit, sort="newest")
         analyses = res.get("analyses", []) if res else []
@@ -2264,14 +2264,14 @@ def render_recent_analyses(limit=10):
     panel = st.container(border=True, key="recent_analyses_panel")
     header_col, count_col = panel.columns([5, 1], vertical_alignment="center")
     header_col.markdown(
-        '<div class="batch-panel-title">최근 분석 이력 (최신 10건)</div>',
+        '<div class="batch-panel-title">최근 분석 이력 (최신 5건)</div>',
         unsafe_allow_html=True,
     )
     total_count = res.get("total_count", len(analyses))
     count_col.caption(f"총 {total_count}건 등록됨")
 
     panel.caption(
-        "최근 접수 및 분석된 파일 목록입니다. 행을 클릭하여 선택한 후 [상세 결과 보기]를 누르면 이전 분석 결과를 바로 다시 확인할 수 있습니다."
+        "최근 접수 및 분석된 5개 파일 목록입니다. 상세 결과가 필요한 경우 아래 '분석 이력 검색'에 SHA-256을 입력하여 확인하실 수 있습니다."
     )
 
     rows = []
@@ -2305,60 +2305,12 @@ def render_recent_analyses(limit=10):
     import pandas as pd
 
     df = pd.DataFrame(rows)
-    event = panel.dataframe(
+    panel.dataframe(
         df,
         use_container_width=True,
         hide_index=True,
-        selection_mode="single-row",
-        on_select="rerun",
         key="recent_analyses_table",
     )
-
-    selected_idx = 0
-    if (
-        event
-        and getattr(event, "selection", None)
-        and getattr(event.selection, "rows", None)
-        and event.selection.rows
-    ):
-        selected_idx = event.selection.rows[0]
-
-    selected_analysis = (
-        analyses[selected_idx] if selected_idx < len(analyses) else analyses[0]
-    )
-
-    action_col1, action_col2 = panel.columns([4, 1], vertical_alignment="center")
-    v_text = (
-        display_verdict(selected_analysis)
-        or selected_analysis.get("initial_verdict")
-        or "-"
-    )
-    action_col1.markdown(
-        f"**선택된 파일**: `{selected_analysis.get('filename', '-')}` "
-        f"· 판정: **{v_text}** "
-        f"· 상태: `{selected_analysis.get('status', '-')}`"
-    )
-
-    blocker = detail_blocker(selected_analysis)
-    if blocker:
-        action_col2.caption(f"상세보기 불가 ({selected_analysis.get('status')})")
-    elif action_col2.button(
-        "상세 결과 보기 ➔",
-        key="recent_open_btn",
-        type="primary",
-        use_container_width=True,
-    ):
-        try:
-            full_result = api_client.get_result(selected_analysis["analysis_id"])
-            view_data = search_result_view(full_result)
-            if view_data.get("initial_verdict") == "HIGH_RISK_UNCERTAIN":
-                view_data = load_deep_result_once(view_data)
-            reset_analysis_result()
-            clear_hash_search()
-            st.session_state.analysis_result = view_data
-            st.rerun()
-        except Exception as e:
-            panel.error(f"상세 결과 불러오기 실패: {e}")
 
 
 def render_hash_search():
@@ -4520,7 +4472,7 @@ result = st.session_state.analysis_result
 
 if result is None:
     render_input_view()
-    render_recent_analyses(limit=10)
+    render_recent_analyses(limit=5)
     render_hash_search()
     render_analyst_priority_queue()
 
