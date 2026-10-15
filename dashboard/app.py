@@ -2290,7 +2290,7 @@ def render_recent_analyses(limit=10):
                 "상태": status_label,
                 "우선순위": priority_label,
                 "등록 시각": created,
-                "SHA-256": truncate_hash(item.get("sha256") or "-"),
+                "SHA-256": item.get("sha256") or "-",
             }
         )
 
