@@ -2263,7 +2263,7 @@ def render_recent_analyses(limit=5):
 
     total_count = res.get("total_count", len(analyses))
     expander = st.expander(
-        f"🕒 최근 분석 이력 확인 (최신 5건 / 전체 {total_count}건)", expanded=False
+        f"최근 분석 이력 확인 (최신 5건 / 전체 {total_count}건)", expanded=False
     )
     expander.caption(
         "최근 접수 및 분석된 5개 파일 목록입니다. 상세 결과가 필요한 경우 위 '분석 이력 검색'에 SHA-256을 입력하여 조회하실 수 있습니다."
