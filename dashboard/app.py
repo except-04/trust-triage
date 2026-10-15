@@ -3,8 +3,10 @@ import math
 import re
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import escape
+
+KST = timezone(timedelta(hours=9))
 
 import api_client
 import pandas as pd
@@ -2274,9 +2276,15 @@ def render_recent_analyses(limit=10):
 
     rows = []
     for idx, item in enumerate(analyses, 1):
-        created = item.get("created_at") or "-"
-        if created != "-" and len(created) >= 19:
-            created = created[:19].replace("T", " ")
+        created_raw = item.get("created_at") or "-"
+        try:
+            created = (
+                datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+                .astimezone(KST)
+                .strftime("%Y-%m-%d %H:%M:%S")
+            )
+        except Exception:
+            created = str(created_raw)[:19].replace("T", " ")
 
         verdict = display_verdict(item) or item.get("initial_verdict") or "-"
         priority_label = "긴급" if item.get("priority") == "URGENT" else "일반"
