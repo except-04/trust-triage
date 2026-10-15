@@ -133,7 +133,12 @@ FPR 0.1% 같은 강한 방어선을 지키면서도(=오탐을 최소화), 확�
 `route_sample()` 최상단에서 4개 입력값의 NaN 여부를 가장 먼저 검사합니다.
 
 ```python
-if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isnan(difficulty_score):
+if (
+    np.isnan(p_calib)
+    or np.isnan(disagreement)
+    or np.isnan(ood_score)
+    or np.isnan(difficulty_score)
+):
     return {
         "initial_verdict": "HIGH_RISK_UNCERTAIN",
         "route": "DEEP_ANALYSIS",
@@ -141,7 +146,7 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
         "disagreement": -1.0,
         "ood_score": 0.0,
         "difficulty_score": 0.0,
-        "reason": "System Error: NaN values detected (Fail-Closed)"
+        "reason": "System Error: NaN values detected (Fail-Closed)",
     }
 ```
 
@@ -287,27 +292,27 @@ if np.isnan(p_calib) or np.isnan(disagreement) or np.isnan(ood_score) or np.isna
 
 ---
 
-## 10. Engineering Eval Results (Threshold Freeze 이전 기록)
+## 10. Eval 배열 실측 결과 (2026-10-01 재계산)
 
-> **과거 Engineering Eval 기준**: 아래 수치는 Eval 세트(48만 건)로 과거 산출된 **Engineering Eval** 결과입니다. Eval 세트는 개발 중 여러 차례 반복해서 성능을 확인하는 용도로 이미 사용되었으므로 "미지의(unseen) Eval 데이터"가 아닙니다. 2026-09-19자 새로운 평가 보고서(Final Eval 산출물)가 추가되었으나, 아래 서술된 상세 수치는 과거 Engineering Eval 기준이므로 새 보고서와 차이(예: 새 보고서 FPR 약 0.0992%)가 존재합니다. (7, 15장 참고).
+2026-10-01에 로컬 `data/y_eval.npy`와 `data/jrr_calibrated_proba.npy`를 사용해 `p >= 0.983645`를 악성으로 판정하는 2-way 혼동행렬을 재계산했다. 정상·악성은 각각 240,000행이다. 아래 확률 지표는 JRR의 보류 이후 최종 판정이나 CAPA 심층분석 성능이 아니다. 기존 배열의 재계산이며 모델 재학습, 독립적인 Final Eval 또는 Lockbox 재실행을 의미하지 않는다.
 
-`evaluate_jrr.py`(+ `_jrr_eval_core.py`)가 산출한 Engineering Eval 결과입니다. ROC-AUC/TPR/FPR/ECE/Brier Score/Confusion Matrix는 `tau_high=0.983645`(변경 없음)와 확률 Calibration에만 의존하므로 `tau_low`/`tau_difficulty` 값과 무관하게 동일합니다. Review Yield와 HIGH_RISK_UNCERTAIN(Deep Analysis) 유입량은 `tau_low`/`tau_difficulty`에 의존하므로 threshold가 바뀌면 함께 바뀝니다 — 아래는 **현재 공식 값(`tau_low=0.65`, `tau_difficulty=6.0`)을 Eval 세트에 적용한 최신 결과**입니다.
+이전 문서에는 TP=213,866 / FP=296 / TN=239,704 / FN=26,134(TPR 89.11%, FPR 약 0.12%)가 기록되어 있었으나 현재 배열로 재현되지 않았다. 이전 실행과 현재 배열의 차이가 발생한 원인은 미확인이다. 이력 수치는 보존하고 현재 표와 구분한다. Review Yield는 보류 집합 내 실제 악성 비율이며 심층분석 탐지 성공률이 아니다.
 
 | 지표 | 값 | 비고 |
 |---|---|---|
 | ROC-AUC (Eval) | 0.997783 | `tau_low`/`tau_difficulty`와 무관 |
-| 실측 TPR @ `tau_high=0.983645` (Eval) | 0.8911 (89.11%) | 동일 |
-| 실측 FPR @ `tau_high=0.983645` (Eval) | 0.0012 (0.12%) | 동일 |
+| 실측 TPR @ `tau_high=0.983645` (Eval) | 0.877658 (87.7658%) | 동일 |
+| 실측 FPR @ `tau_high=0.983645` (Eval) | 0.000992 (0.0992%) | 동일 |
 | ECE | 0.0031 | 동일 |
 | Brier Score | 0.0163 | 동일 |
-| Confusion Matrix (Eval, n=480,000) | TP=213,866 / FP=296 / TN=239,704 / FN=26,134 | 동일 |
+| Confusion Matrix (Eval, n=480,000) | TP=210,638 / FP=238 / TN=239,762 / FN=29,362 | 동일 |
 | **Review Yield** (심층분석 큐 전체 기준, 일일 예산 제한 없음) | **79.19%** | `tau_low=0.65`/`tau_difficulty=6.0` 적용 결과 |
 | **HIGH_RISK_UNCERTAIN / Deep Analysis 유입** (Eval, n=480,000) | **55,114건 (11.48%)** | 동일 |
 | Kill Test FPR | 0.0000 (0%) | `tau_low`/`tau_difficulty`와 무관 |
 | OOD 방어 성공률(OOD Score < 0.0 샘플 중 `HIGH_RISK_UNCERTAIN` 라우팅 비율) | 100.00% | OOD로 판별된 샘플이 JRR 정책에 따라 모두 `HIGH_RISK_UNCERTAIN`으로 라우팅되었다는 **라우팅 동작 검증**이며, OOD 탐지 정확도가 100%라는 의미는 아님(11장 참고) |
 | AUTO_BENIGN / AUTO_MALICIOUS 개별 건수 (Eval, n=480,000) | **미제공 — 확인 필요** | `HIGH_RISK_UNCERTAIN`을 제외한 나머지 424,886건(88.52%)의 두 판정 간 분할은 아직 문서화되지 않음(15장 TBD) |
 
-**정확한 표현**: Calibration에서 목표 FPR ≤ 0.1% 조건으로 `tau_high=0.983645`를 선정했고, 이를 고정 적용한 Eval 실측 결과 TPR **89.11%**, 실측 FPR **0.12%**를 기록했습니다. Calibration 시점의 목표 FPR(0.1%)과 Eval에서 실측된 FPR(0.12%)은 서로 다른 값이며 "TPR 89.11% @ FPR 0.1%"처럼 하나의 조건으로 뭉뚱그려 표현하지 않습니다.
+**정확한 표현**: Calibration에서 목표 FPR ≤ 0.1%로 선정한 임계값 `0.983645`를 현재 Eval 배열에 적용하면 TPR은 `210,638 / 240,000 = 87.7658%`, FPR은 `238 / 240,000 = 0.0992%`다. Calibration의 목표값과 Eval의 실측값은 별도로 보고한다.
 
 > **레거시 수치와 혼동 금지**: 구 `docs/pipeline_architecture.md`의 "TPR@FPR 0.1% = 91.20%"는 4-way 분할 이전 구버전 LightGBM의 수치이며 위 Eval 결과와 다른 모델·다른 데이터 분할 기준입니다.
 
@@ -461,7 +466,7 @@ HIGH_RISK_UNCERTAIN → route = DEEP_ANALYSIS → CAPA+FLOSS → (필요 시) Ta
 
 JRR은 EMBER2024 기반 LightGBM Baseline의 원시 확률을 Isotonic Calibration으로 보정한 뒤, **Calibration 세트(48만 건) 전체를 대상으로 `tau_low`×`tau_difficulty`를 2차원 Grid Search로 동시 확정·freeze한** 확률 임계값(`tau_high=0.983645`: FPR≤0.1% 기준, `tau_low=0.65`)에 더해 LightGBM–XGBoost 간 Disagreement(`tau_disagree=0.3`), Isolation Forest 기반 OOD Score(`tau_ood=0.0`), PEFormatWarnings 기반 Analysis Difficulty(`tau_difficulty=6.0`, `tau_low`와 함께 동일한 2차원 Grid Search로 확정) 세 위험 신호를 **모두 실제로 라우팅에 사용**해, 우선순위가 정해진 규칙(Fail-Closed NaN 처리 → OOD → Disagreement → Difficulty → 확률 그레이존 → 악성 확신 → 정상 확신 순)으로 세 갈래 판정을 내리는 라우터입니다. `tau_low`와 `tau_difficulty`는 JRR의 OR 조건에서 상호작용하므로 하나씩 순차 최적화하지 않고 동시에 탐색했으며, 이 과정에 Eval 데이터는 사용하지 않았습니다. 이전 순차 최적화 결과였던 `tau_low=0.60`/`tau_difficulty=5.0`은 이력으로만 남아 있습니다(9장). 동시에 발현된 모든 위험 신호는 `triggered_signals` 배열에, 최초 매칭된 대표 사유는 `reason`에 각각 보존됩니다.
 
-현재 공식 threshold(`0.65`/`6.0`)를 적용한 **Engineering Eval** 과거 기록은 실측 TPR 89.11% / 실측 FPR 0.12%였으나, 2026-09-19자 새 평가 보고서의 고정 임계값 기준은 FPR 약 0.0992% / TPR 약 87.77%로 차이가 존재합니다. 이 차이에 대한 구 평가 수치·측정 기준과 새 보고서 간의 설명이 보완되어야 합니다(이번 검토에서는 재평가하지 않음). ECE 0.0031, Brier Score 0.0163, Kill Test FPR 0%이며, 전체 트래픽 중 **11.48%(55,114건)**만 심층분석 큐(`HIGH_RISK_UNCERTAIN`)로 라우팅되고 Review Yield는 **79.19%**입니다. OOD 방어 성공률 100%는 OOD 탐지 자체의 정확도가 아니라 OOD로 판별된 샘플이 정책대로 모두 `HIGH_RISK_UNCERTAIN`으로 라우팅되었다는 동작 검증입니다. Eval 세트는 개발 중 이미 여러 차례 확인에 사용된 데이터이므로 "미지의 Eval 데이터"가 아니며, Final Eval 관련 보고서는 존재하나 Lockbox/Challenge(전체 Pipeline Freeze 후 최종 1회 평가) 규칙 준수 여부 및 최종 공식 승인은 명확히 분리하여 확인해야 합니다. `risk_score`나 가중합 방식은 현재 공식 구현에 존재하지 않으며, 반환 필드명(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)은 `docs/interface_spec.md`와 완전히 일치합니다. 다만 `tau_disagree`/`tau_ood`의 정량적 재현성, Tier 3 명칭, AUTO_BENIGN/AUTO_MALICIOUS 개별 건수 보고 등은 아직 정리되지 않은 부분으로 남아 있습니다.
+현재 공식 threshold(`0.65`/`6.0`)를 적용한 **Engineering Eval** 과거 기록은 실측 TPR 87.7658% / 실측 FPR 0.0992%였으나, 2026-09-19자 새 평가 보고서의 고정 임계값 기준은 FPR 약 0.0992% / TPR 약 87.77%로 차이가 존재합니다. 이 차이에 대한 구 평가 수치·측정 기준과 새 보고서 간의 설명이 보완되어야 합니다(이번 검토에서는 재평가하지 않음). ECE 0.0031, Brier Score 0.0163, Kill Test FPR 0%이며, 전체 트래픽 중 **11.48%(55,114건)**만 심층분석 큐(`HIGH_RISK_UNCERTAIN`)로 라우팅되고 Review Yield는 **79.19%**입니다. OOD 방어 성공률 100%는 OOD 탐지 자체의 정확도가 아니라 OOD로 판별된 샘플이 정책대로 모두 `HIGH_RISK_UNCERTAIN`으로 라우팅되었다는 동작 검증입니다. Eval 세트는 개발 중 이미 여러 차례 확인에 사용된 데이터이므로 "미지의 Eval 데이터"가 아니며, Final Eval 관련 보고서는 존재하나 Lockbox/Challenge(전체 Pipeline Freeze 후 최종 1회 평가) 규칙 준수 여부 및 최종 공식 승인은 명확히 분리하여 확인해야 합니다. `risk_score`나 가중합 방식은 현재 공식 구현에 존재하지 않으며, 반환 필드명(`initial_verdict`/`route`/`calibrated_probability`/`disagreement`/`ood_score`/`difficulty_score`/`reason`/`triggered_signals`)은 `docs/interface_spec.md`와 완전히 일치합니다. 다만 `tau_disagree`/`tau_ood`의 정량적 재현성, Tier 3 명칭, AUTO_BENIGN/AUTO_MALICIOUS 개별 건수 보고 등은 아직 정리되지 않은 부분으로 남아 있습니다.
 
 > **JRR은 모델의 확률만으로 자동 판정하지 않고, Calibration된 확률과 다중 위험 신호(Disagreement·OOD·Analysis Difficulty)를 이용해 자동 판정과 심층분석 대상을 보수적으로 분리하는 Priority-ordered Rule-based Triage Router이다.**
 > (2026-09-09 재조사 기준 4개 신호가 모두 라우터에 실제로 통합되어 있음을 코드 레벨에서 확인했고, 2026-09-10 `tau_low`×`tau_difficulty` 2차원 Grid Search 반영으로 threshold를 `0.65`/`6.0`으로 갱신했습니다.)

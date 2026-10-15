@@ -109,6 +109,7 @@ def create_deep_analysis_runtime(
             CapaConfig(
                 executable=capa_executable,
                 timeout_seconds=capa_timeout,
+                memory_limit_mb=_integer("DEEP_CAPA_MEMORY_LIMIT_MB", 6144),
                 rules_path=_optional_path("CAPA_RULES_PATH"),
                 signatures_path=_optional_path("CAPA_SIGNATURES_PATH"),
                 rules_version=os.getenv("CAPA_RULES_VERSION") or None,

@@ -110,7 +110,9 @@ def test_large_duplicate_event_copy_keeps_success_and_full_nested_observations(
     assert result["event_counts"]["api_calls"] == 100
     assert result["behavior_truncated"] is True
     assert result["analysis"]["metadata"]["event_counts"]["api_calls"] == 100
-    assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_RESULT_BYTES
+    assert (
+        len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_RESULT_BYTES
+    )
 
 
 def test_oversized_nested_events_keep_status_counts_and_bounded_prefix(job, tmp_path):
@@ -133,7 +135,9 @@ def test_oversized_nested_events_keep_status_counts_and_bounded_prefix(job, tmp_
     assert result["events_truncated"] is True
     assert result["analysis"]["metadata"]["events_truncated"] is True
     assert 0 < len(result["analysis"]["events"]["api_calls"]) < 100
-    assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_RESULT_BYTES
+    assert (
+        len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_RESULT_BYTES
+    )
 
 
 @pytest.mark.parametrize("failed_index", [0, 50, 90])
@@ -144,7 +148,11 @@ def test_event_compaction_cannot_turn_failed_service_creation_into_attack(
     path.write_bytes(SAMPLE)
     filler = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
     calls = [dict(filler) for _ in range(100)]
-    calls[failed_index] = {**filler, "api_name": "CreateServiceW", "ret_val": "0x00000000"}
+    calls[failed_index] = {
+        **filler,
+        "api_name": "CreateServiceW",
+        "ret_val": "0x00000000",
+    }
     analysis = replace(
         FakeAnalyzer().analyze(path),
         observed_apis=("CreateServiceW",),

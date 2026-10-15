@@ -37,9 +37,7 @@ def _attack_ids(payload):
 
 def test_two_allocation_apis_do_not_imply_process_injection():
     assert _attack_ids(_payload(["VirtualAllocEx", "NtAllocateVirtualMemory"])) == set()
-    assert _attack_ids(_payload(["VirtualAllocEx", "WriteProcessMemory"])) == {
-        "T1055"
-    }
+    assert _attack_ids(_payload(["VirtualAllocEx", "WriteProcessMemory"])) == {"T1055"}
 
 
 def test_zero_padded_failed_service_creation_is_not_attack_evidence():
@@ -91,29 +89,44 @@ def test_different_observed_paths_and_destinations_reach_llm_context():
 
 def test_speakeasy_1511_report_fields_survive_worker_and_llm_boundaries():
     request = DeepAnalysisRequest(
-        "v1511-observations", "a" * 64,
-        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+        "v1511-observations",
+        "a" * 64,
+        "s3://worker-test-bucket/raw/fixture.bin",
+        "DEEP_ANALYSIS",
     )
 
     def context(domain, command, operation):
-        summary = _summarize_report({
-            "entry_points": [{
-                "apis": [{
-                    "api_name": "kernel32.CreateProcessW",
-                    "args": ["0x0", command, "0x0"],
-                    "ret_val": "0x1",
-                }],
-                "network_events": {
-                    "dns": [{"query": domain, "response": "192.0.2.1"}],
-                    "traffic": [{"server": domain, "port": 443, "proto": "tcp.https"}],
-                },
-                "file_access": [{"event": operation, "path": "C:\\temp\\fixture.bin"}],
-            }]
-        })
+        summary = _summarize_report(
+            {
+                "entry_points": [
+                    {
+                        "apis": [
+                            {
+                                "api_name": "kernel32.CreateProcessW",
+                                "args": ["0x0", command, "0x0"],
+                                "ret_val": "0x1",
+                            }
+                        ],
+                        "network_events": {
+                            "dns": [{"query": domain, "response": "192.0.2.1"}],
+                            "traffic": [
+                                {"server": domain, "port": 443, "proto": "tcp.https"}
+                            ],
+                        },
+                        "file_access": [
+                            {"event": operation, "path": "C:\\temp\\fixture.bin"}
+                        ],
+                    }
+                ]
+            }
+        )
         analysis = DynamicAnalysisResult(
-            evidence_id="v1511-evidence", sha256=request.sha256,
-            source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
-            status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
+            evidence_id="v1511-evidence",
+            sha256=request.sha256,
+            source="SPEAKEASY",
+            category="DYNAMIC_ANALYSIS",
+            status=DynamicAnalysisStatus.SUCCESS,
+            summary="synthetic observations",
             observed_apis=summary.observed_apis,
             behaviors=summary.behaviors,
             events=summary.events,
@@ -129,7 +142,9 @@ def test_speakeasy_1511_report_fields_survive_worker_and_llm_boundaries():
     assert first != second
     assert any(item.get("query") == "first.invalid" for item in first)
     assert any(item.get("server") == "first.invalid" for item in first)
-    assert any("arg[1]=tool.exe --mode=one" in item.get("arguments", "") for item in first)
+    assert any(
+        "arg[1]=tool.exe --mode=one" in item.get("arguments", "") for item in first
+    )
     assert any(item.get("event") == "read" for item in first)
     assert any(item.get("event") == "write" for item in second)
 
@@ -142,18 +157,24 @@ def test_adapter_cap_preserves_service_creation_meaning_below_worker_limit(
     count: int, service_index: int, return_value: str, expected: bool
 ) -> None:
     request = DeepAnalysisRequest(
-        "adapter-boundary", "a" * 64,
-        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+        "adapter-boundary",
+        "a" * 64,
+        "s3://worker-test-bucket/raw/fixture.bin",
+        "DEEP_ANALYSIS",
     )
     calls = [{"api_name": "CreateFileW", "pc": index} for index in range(count)]
     calls[service_index] = {
-        "api_name": "advapi32.CreateServiceW", "ret_val": return_value,
+        "api_name": "advapi32.CreateServiceW",
+        "ret_val": return_value,
     }
     summary = _summarize_report({"entry_points": [{"apis": calls}]})
     analysis = DynamicAnalysisResult(
-        evidence_id="adapter-boundary", sha256=request.sha256,
-        source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
-        status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
+        evidence_id="adapter-boundary",
+        sha256=request.sha256,
+        source="SPEAKEASY",
+        category="DYNAMIC_ANALYSIS",
+        status=DynamicAnalysisStatus.SUCCESS,
+        summary="synthetic observations",
         observed_apis=summary.observed_apis,
         events=summary.events,
         metadata={
@@ -172,16 +193,21 @@ def test_adapter_cap_preserves_service_creation_meaning_below_worker_limit(
     assert len(worker["analysis"]["events"]["api_calls"]) == min(count, 100)
     assert worker.get("adapter_events_truncated") is (True if count > 100 else None)
     assert worker.get("events_truncated") is (True if count > 100 else None)
-    assert worker["analysis"]["metadata"]["service_creation_calls"]["calls"][0][
-        "event_index"
-    ] == service_index
+    assert (
+        worker["analysis"]["metadata"]["service_creation_calls"]["calls"][0][
+            "event_index"
+        ]
+        == service_index
+    )
     assert "original_result_bytes" not in worker
 
 
 def test_adapter_and_worker_compaction_keep_original_count_and_return() -> None:
     request = DeepAnalysisRequest(
-        "double-boundary", "a" * 64,
-        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+        "double-boundary",
+        "a" * 64,
+        "s3://worker-test-bucket/raw/fixture.bin",
+        "DEEP_ANALYSIS",
     )
     calls = [
         {"api_name": "CreateFileW", "args": ["x" * 4096] * 6, "pc": index}
@@ -189,15 +215,25 @@ def test_adapter_and_worker_compaction_keep_original_count_and_return() -> None:
     ]
     calls[105] = {"api_name": "advapi32.CreateServiceW", "ret_val": "0x0"}
     file_event = {f"field_{index}": "y" * 4096 for index in range(10)}
-    summary = _summarize_report({"entry_points": [{
-        "apis": calls,
-        "file_access": [file_event for _ in range(100)],
-    }]})
+    summary = _summarize_report(
+        {
+            "entry_points": [
+                {
+                    "apis": calls,
+                    "file_access": [file_event for _ in range(100)],
+                }
+            ]
+        }
+    )
     analysis = DynamicAnalysisResult(
-        evidence_id="double-boundary", sha256=request.sha256,
-        source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
-        status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
-        observed_apis=summary.observed_apis, events=summary.events,
+        evidence_id="double-boundary",
+        sha256=request.sha256,
+        source="SPEAKEASY",
+        category="DYNAMIC_ANALYSIS",
+        status=DynamicAnalysisStatus.SUCCESS,
+        summary="synthetic observations",
+        observed_apis=summary.observed_apis,
+        events=summary.events,
         metadata={
             "event_counts": summary.event_counts,
             "events_truncated": summary.events_truncated,
@@ -215,5 +251,7 @@ def test_adapter_and_worker_compaction_keep_original_count_and_return() -> None:
     assert worker["behavior_truncated"] is True
     assert len(worker["behavior"]["api_calls"]) < 100
     assert len(worker["analysis"]["events"]["api_calls"]) < 100
-    assert restored["metadata"]["service_creation_calls"]["calls"][0]["event_index"] == 105
+    assert (
+        restored["metadata"]["service_creation_calls"]["calls"][0]["event_index"] == 105
+    )
     assert "T1543.003" not in _attack_ids(restored)

@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -62,13 +61,13 @@ LABEL_MALICIOUS = 1
 # 폭이 같아야 "val→calib 6주 이동", "calib→eval 6주 이동"에서 관측한 성능 저하를
 # 서로 비교할 수 있고, eval의 저하폭이 test에서 겪을 저하의 대리 지표가 된다.
 # 비율은 경계의 결과로 받아들이고, 6:2:2를 맞추려 주차를 쪼개지 않는다.
-WEEK_TRAIN_END = 33     # idx_tr    = week <= 33
-WEEK_VAL_START = 34     # idx_val   = 34 <= week <= 39
+WEEK_TRAIN_END = 33  # idx_tr    = week <= 33
+WEEK_VAL_START = 34  # idx_val   = 34 <= week <= 39
 WEEK_VAL_END = 39
-WEEK_CALIB_START = 40   # idx_calib = 40 <= week <= 45
+WEEK_CALIB_START = 40  # idx_calib = 40 <= week <= 45
 WEEK_CALIB_END = 45
-WEEK_EVAL_START = 46    # idx_eval  = week >= 46
-WEEK_MAX = 51           # train 원본의 마지막 주차 (사전 검증용)
+WEEK_EVAL_START = 46  # idx_eval  = week >= 46
+WEEK_MAX = 51  # train 원본의 마지막 주차 (사전 검증용)
 
 # 개발용 분할 이름. 시간 순서대로 나열한다 (04/05/06단계가 이 순서로 순회한다).
 DEV_SPLITS = ("tr", "val", "calib", "eval")
@@ -128,6 +127,7 @@ def split_contract() -> dict:
     각 분할의 용도/허용/금지를 기계가 읽을 수 있는 형태로 돌려준다.
     06단계가 manifest.json의 "split_contract" 항목으로 기록한다.
     """
+
     def weeks(name: str) -> str:
         lo, hi = SPLIT_WEEKS[name]
         return f"{lo} <= week <= {hi}"
@@ -139,8 +139,11 @@ def split_contract() -> dict:
             "tr": {
                 "weeks": list(SPLIT_WEEKS["tr"]),
                 "week_rule": weeks("tr"),
-                "files": ["out/dev/X_tr.npy", "out/dev/y_tr.npy",
-                          "out/dev/arch_tr.npy"],
+                "files": [
+                    "out/dev/X_tr.npy",
+                    "out/dev/y_tr.npy",
+                    "out/dev/arch_tr.npy",
+                ],
                 "role": "모델 파라미터 적합(fit) 전용",
                 "allowed": [
                     "model.fit() / booster 학습",
@@ -155,8 +158,11 @@ def split_contract() -> dict:
             "val": {
                 "weeks": list(SPLIT_WEEKS["val"]),
                 "week_rule": weeks("val"),
-                "files": ["out/dev/X_val.npy", "out/dev/y_val.npy",
-                          "out/dev/arch_val.npy"],
+                "files": [
+                    "out/dev/X_val.npy",
+                    "out/dev/y_val.npy",
+                    "out/dev/arch_val.npy",
+                ],
                 "role": "하이퍼파라미터 탐색 / early stopping / 모델 선택 전용",
                 "allowed": [
                     "하이퍼파라미터 탐색과 비교",
@@ -174,8 +180,11 @@ def split_contract() -> dict:
             "calib": {
                 "weeks": list(SPLIT_WEEKS["calib"]),
                 "week_rule": weeks("calib"),
-                "files": ["out/dev/X_calib.npy", "out/dev/y_calib.npy",
-                          "out/dev/arch_calib.npy"],
+                "files": [
+                    "out/dev/X_calib.npy",
+                    "out/dev/y_calib.npy",
+                    "out/dev/arch_calib.npy",
+                ],
                 "role": "확정된 단일 모델의 임계값·확률 보정 전용",
                 "allowed": [
                     "목표 FPR(예: 1e-3)에서의 임계값 산출",
@@ -191,8 +200,11 @@ def split_contract() -> dict:
             "eval": {
                 "weeks": list(SPLIT_WEEKS["eval"]),
                 "week_rule": weeks("eval"),
-                "files": ["out/dev/X_eval.npy", "out/dev/y_eval.npy",
-                          "out/dev/arch_eval.npy"],
+                "files": [
+                    "out/dev/X_eval.npy",
+                    "out/dev/y_eval.npy",
+                    "out/dev/arch_eval.npy",
+                ],
                 "role": "시간 이동 후 성능 확인 (읽기 전용 진단)",
                 "allowed": [
                     "calib에서 정한 임계값이 6주 뒤에도 유지되는지 확인",
@@ -227,6 +239,7 @@ def split_contract() -> dict:
 # --------------------------------------------------------------------------
 # 로깅
 # --------------------------------------------------------------------------
+
 
 def enable_utf8_console() -> None:
     """
@@ -295,7 +308,7 @@ class Timer:
         self.t0: float | None = None
         self.elapsed: float = 0.0
 
-    def __enter__(self) -> "Timer":
+    def __enter__(self) -> Timer:
         self.t0 = time.monotonic()
         self.elapsed = 0.0
         self.logger.info("▶ %s 시작", self.label)
@@ -315,7 +328,10 @@ class Timer:
         else:
             self.logger.error(
                 "✖ %s 실패 (%s) — %s: %s",
-                self.label, fmt_duration(self.elapsed), exc_type.__name__, exc,
+                self.label,
+                fmt_duration(self.elapsed),
+                exc_type.__name__,
+                exc,
             )
         return False  # 예외는 그대로 위로 전파시킨다
 
@@ -361,6 +377,7 @@ def fmt_bytes(n: int) -> str:
 # 디렉터리 레이아웃
 # --------------------------------------------------------------------------
 
+
 class Layout:
     """
     작업 루트 아래의 표준 디렉터리 구조.
@@ -389,8 +406,14 @@ class Layout:
 
     def mkdirs(self) -> None:
         for d in (
-            self.dataset, self.out, self.dev, self.lockbox,
-            self.index, self.reports, self.state, self.logs,
+            self.dataset,
+            self.out,
+            self.dev,
+            self.lockbox,
+            self.index,
+            self.reports,
+            self.state,
+            self.logs,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -461,6 +484,7 @@ def get_dim() -> int:
     global _DIM_CACHE
     if _DIM_CACHE is None:
         from thrember.features import PEFeatureExtractor
+
         _DIM_CACHE = int(PEFeatureExtractor().dim)
     return _DIM_CACHE
 
@@ -474,12 +498,14 @@ def gather_paths(dataset_dir: Path, subset: str) -> list[Path]:
     반환 순서 x 각 파일의 줄 순서로 결정되기 때문이다.
     """
     from thrember.model import gather_feature_paths
+
     return list(gather_feature_paths(dataset_dir, subset))
 
 
 # --------------------------------------------------------------------------
 # memmap 헬퍼
 # --------------------------------------------------------------------------
+
 
 def open_dat(layout: Layout, subset: str, dim: int | None = None):
     """
@@ -556,6 +582,7 @@ def load_meta(layout: Layout, subset: str):
 # 해시 / JSON
 # --------------------------------------------------------------------------
 
+
 def sha256_file(path: Path, buf_size: int = 8 << 20) -> str:
     """대용량 파일도 안전하게 스트리밍 해시."""
     h = hashlib.sha256()
@@ -596,6 +623,7 @@ def _json_default(o):
 # 통계 헬퍼
 # --------------------------------------------------------------------------
 
+
 def label_stats(y: np.ndarray, arch: np.ndarray | None = None) -> dict:
     """
     라벨 분포를 집계한다.
@@ -614,9 +642,7 @@ def label_stats(y: np.ndarray, arch: np.ndarray | None = None) -> dict:
         "n_labeled": int(labeled.size),
         "n_benign(0)": int(counts[0]),
         "n_malicious(1)": int(counts[1]),
-        "malicious_ratio": (
-            float(counts[1] / labeled.size) if labeled.size else None
-        ),
+        "malicious_ratio": (float(counts[1] / labeled.size) if labeled.size else None),
         "unique_label_values": sorted(int(v) for v in np.unique(y)),
     }
 
@@ -643,6 +669,7 @@ def label_stats(y: np.ndarray, arch: np.ndarray | None = None) -> dict:
 def env_versions() -> dict:
     """재현성을 위해 기록해 둘 버전 정보."""
     import platform
+
     info = {
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -662,10 +689,13 @@ def thrember_commit(repo_dir: str | Path | None) -> str | None:
     if repo_dir is None:
         return None
     import subprocess
+
     try:
         out = subprocess.run(
             ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         return out.stdout.strip() or None
     except Exception:

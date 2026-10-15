@@ -7,12 +7,10 @@ actual tracking setup AST against a mock, never MLflow or training/data I/O.
 from __future__ import annotations
 
 import ast
-import os
 from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = [
@@ -31,7 +29,8 @@ SCRIPTS = [
 def tracking_setup(relative_path):
     tree = ast.parse((ROOT / "src" / relative_path).read_text(encoding="utf-8"))
     os_import = next(
-        node for node in tree.body
+        node
+        for node in tree.body
         if isinstance(node, ast.Import)
         and any(alias.name == "os" and alias.asname is None for alias in node.names)
     )
@@ -111,4 +110,3 @@ def test_all_existing_mlflow_call_sites_are_covered():
             ):
                 active_scripts.add(path.relative_to(ROOT / "src").as_posix())
     assert active_scripts == {path for path, _ in SCRIPTS}
-

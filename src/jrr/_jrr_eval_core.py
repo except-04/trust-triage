@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def calculate_ece(y_true, y_prob, n_bins=10):
     """
     [평가 지표 1] ECE (Expected Calibration Error) 계산
@@ -13,7 +14,7 @@ def calculate_ece(y_true, y_prob, n_bins=10):
 
     for i in range(n_bins):
         bin_lower = bin_boundaries[i]
-        bin_upper = bin_boundaries[i+1]
+        bin_upper = bin_boundaries[i + 1]
 
         if i == 0:
             in_bin = np.where((y_prob >= bin_lower) & (y_prob <= bin_upper))[0]
@@ -28,13 +29,14 @@ def calculate_ece(y_true, y_prob, n_bins=10):
 
     return ece_score
 
+
 def calculate_review_yield(y_true, routes):
     """
     [평가 지표 2] Review Yield (심층분석 큐 가성비) 계산
     심층분석 큐로 빠진 전체 파일들 중 악성코드의 비율을 측정하여 큐의 효율성을 평가합니다.
     (현재 예산 제한 정책 유보에 따라, 예산 제약 없이 큐 전체를 대상으로 계산합니다)
     """
-    print(f"\n[진행] Review Yield (심층분석 큐 전체) 시뮬레이션 중...")
+    print("\n[진행] Review Yield (심층분석 큐 전체) 시뮬레이션 중...")
 
     routes = np.array(routes)
     deep_analysis_idx = np.where(routes == "HIGH_RISK_UNCERTAIN")[0]
@@ -50,16 +52,21 @@ def calculate_review_yield(y_true, routes):
     caught_malware_count = np.sum(y_true[reviewed_idx] == 1)
     yield_score = (caught_malware_count / total_routed) * 100
 
-    print(f"  [결과] 심층분석 결과: 총 {total_routed:,}개 검토 중 {caught_malware_count:,}개의 숨은 악성코드 방어 성공! (Yield: {yield_score:.2f}%)")
+    print(
+        f"  [결과] 심층분석 결과: 총 {total_routed:,}개 검토 중 {caught_malware_count:,}개의 숨은 악성코드 방어 성공! (Yield: {yield_score:.2f}%)"
+    )
 
     return yield_score
+
 
 def calculate_true_tpr(y_true, y_prob, threshold):
     """
     [평가 지표 3] Eval 데이터 기준 실측 TPR 및 FPR 계산
     데이터 누수를 방지하기 위해, Calibration에서 결정하고 Eval에서 검증합니다.
     """
-    print(f"\n[진행] Eval 데이터 기반 실측 TPR/FPR 검증 중... (임계값: {threshold:.4f})")
+    print(
+        f"\n[진행] Eval 데이터 기반 실측 TPR/FPR 검증 중... (임계값: {threshold:.4f})"
+    )
 
     predictions = (y_prob >= threshold).astype(int)
 
@@ -73,6 +80,7 @@ def calculate_true_tpr(y_true, y_prob, threshold):
 
     return actual_fpr, actual_tpr
 
+
 def run_ood_and_kill_test(y_true, routes, ood_scores, threshold=0.0):
     """
     [평가 지표 4, 5 통합] OOD 시뮬레이션 및 Kill Test
@@ -80,7 +88,9 @@ def run_ood_and_kill_test(y_true, routes, ood_scores, threshold=0.0):
     1. 이들이 안전하게 HIGH_RISK_UNCERTAIN으로 라우팅되는지(방어율) 확인하고,
     2. 그 중 '정상 파일'들이 'AUTO_MALICIOUS'로 잘못 판정(Kill Test FPR)되지 않았는지 검증합니다.
     """
-    print(f"\n[진행] OOD 시뮬레이션 및 Kill Test 가동 중... (OOD Score < {threshold} 기준)")
+    print(
+        f"\n[진행] OOD 시뮬레이션 및 Kill Test 가동 중... (OOD Score < {threshold} 기준)"
+    )
 
     ood_indices = np.where(ood_scores < threshold)[0]
     n_ood = len(ood_indices)
@@ -96,27 +106,35 @@ def run_ood_and_kill_test(y_true, routes, ood_scores, threshold=0.0):
     n_uncertain = np.sum(ood_routes == "HIGH_RISK_UNCERTAIN")
     defense_rate = (n_uncertain / n_ood) * 100
 
-    print(f"  [OOD 방어율] 총 OOD {n_ood}개 중 {n_uncertain}개 심층분석 격리 성공 ({defense_rate:.2f}%)")
+    print(
+        f"  [OOD 방어율] 총 OOD {n_ood}개 중 {n_uncertain}개 심층분석 격리 성공 ({defense_rate:.2f}%)"
+    )
 
     # 2. Kill Test (OOD 정상 파일 중 악성 오탐율)
     benign_ood_indices = np.where(ood_y_true == 0)[0]
     total_benign_kill_test = len(benign_ood_indices)
 
     if total_benign_kill_test == 0:
-         print("  [경고] OOD 데이터 중 정상 파일이 없어 Kill Test FPR을 계산할 수 없습니다.")
-         return defense_rate, -1.0
+        print(
+            "  [경고] OOD 데이터 중 정상 파일이 없어 Kill Test FPR을 계산할 수 없습니다."
+        )
+        return defense_rate, -1.0
 
     benign_ood_routes = ood_routes[benign_ood_indices]
     false_positives = np.sum(benign_ood_routes == "AUTO_MALICIOUS")
     kill_test_fpr = false_positives / total_benign_kill_test
 
     print(f"  [Kill Test] 극한의 OOD 정상 파일 {total_benign_kill_test}개 주입 완료")
-    print(f"  [Kill Test] 오탐(False Positive) 발생 건수: {false_positives}건 / 총 {total_benign_kill_test}개 중")
+    print(
+        f"  [Kill Test] 오탐(False Positive) 발생 건수: {false_positives}건 / 총 {total_benign_kill_test}개 중"
+    )
     print(f"  [Kill Test] 실측 Kill Test FPR: {kill_test_fpr:.4f}")
 
     if kill_test_fpr <= 0.001:
         print("  [방어 성공] Kill Test FPR 0.1% 이하 방어선이 유지되었습니다.")
     else:
-        print("  [방어 실패] Kill Test FPR 방어선이 붕괴되었습니다. 임계값 재조정이 필요합니다.")
+        print(
+            "  [방어 실패] Kill Test FPR 방어선이 붕괴되었습니다. 임계값 재조정이 필요합니다."
+        )
 
     return defense_rate, kill_test_fpr

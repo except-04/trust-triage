@@ -7,11 +7,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Iterable, Mapping
 
 import pefile
-
 
 API_GROUPS_SCHEMA_VERSION = "api-groups-mvp-v2"
 
@@ -138,9 +137,7 @@ class ApiGroupReport:
             "ordinal_imports": [
                 ordinal_import.to_dict() for ordinal_import in self.ordinal_imports
             ],
-            "groups": {
-                name: match.to_dict() for name, match in self.groups.items()
-            },
+            "groups": {name: match.to_dict() for name, match in self.groups.items()},
         }
 
 
@@ -199,9 +196,7 @@ def classify_imports(
                     ordinal = int(raw_ordinal) if raw_ordinal is not None else None
                 except (TypeError, ValueError):
                     ordinal = None
-                ordinal_imports.append(
-                    OrdinalImport(dll=dll_name, ordinal=ordinal)
-                )
+                ordinal_imports.append(OrdinalImport(dll=dll_name, ordinal=ordinal))
                 continue
 
             named_import_count += 1

@@ -1,7 +1,6 @@
-import os
 import joblib
 import numpy as np
-import xgboost as xgb
+
 
 def main():
     print("Loading data...")
@@ -32,6 +31,7 @@ def main():
     print("Saved XGBoost probabilities to data/y_pred_proba.npy")
 
     print("Done! Raw probabilities saved.")
+
 
 if __name__ == "__main__":
     main()

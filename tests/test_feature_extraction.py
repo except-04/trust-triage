@@ -4,25 +4,25 @@ import json
 import os
 import shutil
 import sys
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 import trust_triage.feature_extraction.ember_v3 as ember_v3_module
-from trust_triage.feature_extraction.cli import main as cli_main
 from trust_triage.feature_extraction import (
     ApiImportMatch,
     EmberV3Extractor,
     ExtractionStatus,
     FeatureExtractionResult,
-    FeatureSelectionError,
     FeatureSchema,
+    FeatureSelectionError,
     FeatureSelector,
     classify_imports,
     extract_file,
 )
+from trust_triage.feature_extraction.cli import main as cli_main
 
 
 @pytest.fixture
@@ -237,9 +237,7 @@ def test_classifies_pe_without_import_table() -> None:
 
 
 def test_detects_dotnet_com_descriptor_directory() -> None:
-    directories = [
-        SimpleNamespace(VirtualAddress=0, Size=0) for _ in range(15)
-    ]
+    directories = [SimpleNamespace(VirtualAddress=0, Size=0) for _ in range(15)]
     directories[14] = SimpleNamespace(VirtualAddress=0x2000, Size=72)
     dotnet_pe = SimpleNamespace(
         OPTIONAL_HEADER=SimpleNamespace(DATA_DIRECTORY=directories)
@@ -267,7 +265,9 @@ def test_documented_ember_schema_matches_runtime_schema() -> None:
     assert manifest["schema_version"] == runtime_schema["schema_version"]
     assert manifest["feature_count"] == runtime_schema["feature_count"]
     assert manifest["source"]["package"] == ember_v3_module.EMBER_V3_SOURCE_PACKAGE
-    assert manifest["source"]["repository"] == ember_v3_module.EMBER_V3_SOURCE_REPOSITORY
+    assert (
+        manifest["source"]["repository"] == ember_v3_module.EMBER_V3_SOURCE_REPOSITORY
+    )
     assert manifest["source"]["commit"] == ember_v3_module.EMBER_V3_SOURCE_COMMIT
     assert [
         {

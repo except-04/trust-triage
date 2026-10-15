@@ -1,10 +1,17 @@
 import os
-import numpy as np
-import mlflow
-from sklearn.metrics import roc_auc_score, confusion_matrix, brier_score_loss
 
-#핵심 포인트: 공용 도구함에서 평가 함수들을 정석대로 빌려오기
-from _jrr_eval_core import calculate_ece, calculate_review_yield, calculate_true_tpr, run_ood_and_kill_test
+import mlflow
+import numpy as np
+
+# 핵심 포인트: 공용 도구함에서 평가 함수들을 정석대로 빌려오기
+from _jrr_eval_core import (
+    calculate_ece,
+    calculate_review_yield,
+    calculate_true_tpr,
+    run_ood_and_kill_test,
+)
+from sklearn.metrics import brier_score_loss, confusion_matrix, roc_auc_score
+
 
 def main():
     print("[JRR Evaluation] 라우터 평가 및 검증 파이프라인 시작!\n")
@@ -28,20 +35,25 @@ def main():
 
             # (옵션) 07번에서 산출된 최적 임계값 로드 (TPR 검증용)
             import joblib
+
             calib_path = "data/jrr_calibrator_4way.pkl"
             calibrator_pack = joblib.load(calib_path)
-            fixed_upper_bound = float(calibrator_pack.get('threshold', 0.983645))
+            fixed_upper_bound = float(calibrator_pack.get("threshold", 0.983645))
 
         except FileNotFoundError as e:
             print(f"[에러] 평가에 필요한 데이터를 찾을 수 없습니다: {e}")
-            print("[안내] 라우터(jrr_router.py)를 먼저 실행하여 결과 파일(.npy)을 생성해주세요.")
+            print(
+                "[안내] 라우터(jrr_router.py)를 먼저 실행하여 결과 파일(.npy)을 생성해주세요."
+            )
             return
 
         # 2. 공용 도구함에서 빌려온 4대 핵심 지표 계산 함수 실행
         ece = calculate_ece(y_true, y_prob)
         r_yield = calculate_review_yield(y_true, routes)
         actual_fpr, actual_tpr = calculate_true_tpr(y_true, y_prob, fixed_upper_bound)
-        ood_defense_rate, kill_test_fpr = run_ood_and_kill_test(y_true, routes, ood_scores, threshold=0.0)
+        ood_defense_rate, kill_test_fpr = run_ood_and_kill_test(
+            y_true, routes, ood_scores, threshold=0.0
+        )
 
         # --- [final_eval 기능 통합] 모델 관점의 최종 검증 지표 추가 ---
         auc = roc_auc_score(y_true, y_prob)
@@ -77,6 +89,7 @@ def main():
         print(f" - 실측 FPR: {actual_fpr:.4f}")
         print(f" - Confusion Matrix: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
         print("==================================================")
+
 
 if __name__ == "__main__":
     main()

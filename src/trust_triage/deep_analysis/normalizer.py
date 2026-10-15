@@ -30,14 +30,37 @@ _INJECTION_WRITE_APIS = {
 }
 _SERVICE_CREATION_APIS = {"createservicea", "createservicew"}
 _OBSERVATION_FIELDS = (
-    "api_name", "path", "file_path", "src_path", "dst_path", "destination",
-    "host", "ip", "port", "url", "key", "ret_val", "retval", "return_value",
-    "event", "query", "response", "server", "proto", "method", "type",
-    "pid", "entry_point",
+    "api_name",
+    "path",
+    "file_path",
+    "src_path",
+    "dst_path",
+    "destination",
+    "host",
+    "ip",
+    "port",
+    "url",
+    "key",
+    "ret_val",
+    "retval",
+    "return_value",
+    "event",
+    "query",
+    "response",
+    "server",
+    "proto",
+    "method",
+    "type",
+    "pid",
+    "entry_point",
 )
 _OBSERVATION_CATEGORIES = (
-    "network_events", "file_access", "dropped_files", "registry_access",
-    "api_calls", "process_events",
+    "network_events",
+    "file_access",
+    "dropped_files",
+    "registry_access",
+    "api_calls",
+    "process_events",
 )
 
 
@@ -109,7 +132,9 @@ def normalize_speakeasy_result(
     behaviors = _strings(payload.get("behaviors"))
     events = payload.get("events")
     metadata = payload.get("metadata")
-    event_counts = metadata.get("event_counts") if isinstance(metadata, Mapping) else None
+    event_counts = (
+        metadata.get("event_counts") if isinstance(metadata, Mapping) else None
+    )
     events_truncated = (
         metadata.get("events_truncated") is True
         if isinstance(metadata, Mapping)
@@ -140,7 +165,9 @@ def normalize_speakeasy_result(
                     "behaviors": list(behaviors),
                     "event_categories": _event_categories(events),
                     "observations": _bounded_observations(events),
-                    "event_counts": event_counts if isinstance(event_counts, Mapping) else {},
+                    "event_counts": event_counts
+                    if isinstance(event_counts, Mapping)
+                    else {},
                     "events_truncated": events_truncated,
                     "attack_techniques": [technique.to_dict()],
                 },
@@ -172,7 +199,9 @@ def normalize_speakeasy_result(
                     "behaviors": list(behaviors),
                     "event_categories": _event_categories(events),
                     "observations": _bounded_observations(events),
-                    "event_counts": event_counts if isinstance(event_counts, Mapping) else {},
+                    "event_counts": event_counts
+                    if isinstance(event_counts, Mapping)
+                    else {},
                     "events_truncated": events_truncated,
                 },
             )
@@ -193,18 +222,179 @@ def _observed_techniques(
     # creation API is a strong direct signal; memory allocation plus writing
     # into another process is treated as a candidate combination.
     if api_names & _INJECTION_APIS or (
-        api_names & _INJECTION_ALLOCATION_APIS
-        and api_names & _INJECTION_WRITE_APIS
+        api_names & _INJECTION_ALLOCATION_APIS and api_names & _INJECTION_WRITE_APIS
     ):
         labels.append("Process Injection")
     if _successful_service_creation(api_names, events, metadata):
         labels.append("Create Service")
+
+    if _is_inhibit_recovery(events):
+        labels.append("T1490: Inhibit System Recovery")
+    if _is_service_stop(events):
+        labels.append("T1489: Service Stop")
+    if _is_data_destruction(events):
+        labels.append("T1485: Data Destruction")
+    if _is_ransomware(events):
+        labels.append("T1486: Data Encrypted for Impact")
 
     return tuple(
         technique
         for technique in normalize_attack_labels(labels)
         if technique.technique_id is not None
     )
+
+
+def _get_event_items(events: Any, category: str) -> list[Mapping[str, Any]]:
+    if not isinstance(events, Mapping):
+        return []
+    items = events.get(category)
+    if isinstance(items, list) or isinstance(items, tuple):
+        return [i for i in items if isinstance(i, Mapping)]
+    return []
+
+
+def _is_inhibit_recovery(events: Any) -> bool:
+    for proc in _get_event_items(events, "process_events"):
+        cmdline = (
+            str(proc.get("args") or "").casefold()
+            + " "
+            + str(proc.get("path") or "").casefold()
+        )
+        if "vssadmin" in cmdline and "delete" in cmdline and "shadows" in cmdline:
+            return True
+        if "wbadmin" in cmdline and "delete" in cmdline and "catalog" in cmdline:
+            return True
+        if "bcdedit" in cmdline and "recoveryenabled" in cmdline and "no" in cmdline:
+            return True
+    return False
+
+
+def _is_service_stop(events: Any) -> bool:
+    for proc in _get_event_items(events, "process_events"):
+        cmdline = (
+            str(proc.get("args") or "").casefold()
+            + " "
+            + str(proc.get("path") or "").casefold()
+        )
+        if "net " in cmdline and " stop " in cmdline:
+            return True
+    return False
+
+
+def _is_data_destruction(events: Any) -> bool:
+    for fa in _get_event_items(events, "file_access"):
+        path = str(fa.get("path") or "").casefold()
+        event_type = str(fa.get("event") or "").casefold()
+        if path.startswith("\\\\.\\physicaldrive") or path.startswith(
+            "//./physicaldrive"
+        ):
+            if event_type in {"write", "delete", "overwrite"}:
+                return True
+    return False
+
+
+def _is_crypto_api_successful(api_name: str, call: Mapping[str, Any]) -> bool | None:
+    ret_name = next(
+        (
+            name
+            for name in ("ret_val", "retval", "return_value", "return")
+            if name in call
+        ),
+        None,
+    )
+    if not ret_name:
+        return None
+
+    value = call[ret_name]
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        int_val = 1 if value else 0
+    elif isinstance(value, int):
+        int_val = value
+    elif isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"", "none", "null"}:
+            return None
+        if normalized == "false":
+            int_val = 0
+        elif normalized == "true":
+            int_val = 1
+        elif re.fullmatch(r"(?:0x[0-9a-f]+|[0-9]+)", normalized):
+            int_val = int(normalized, 16 if normalized.startswith("0x") else 10)
+        else:
+            return None
+    else:
+        return None
+
+    if api_name == "cryptencrypt":
+        return int_val != 0
+    elif api_name in {"bcryptencrypt", "rtlencryptmemory"}:
+        return int_val == 0
+    return None
+
+
+def _is_ransomware(events: Any) -> bool:
+    ransom_notes = {"readme", "how_to_decrypt", "decrypt", "ransom"}
+    ransom_exts = {".encrypted", ".locky", ".wannacry", ".crypt", ".locked"}
+
+    crypto_apis = {"cryptencrypt", "bcryptencrypt", "rtlencryptmemory"}
+
+    api_calls = _get_event_items(events, "api_calls")
+    crypto_contexts = []
+
+    for api in api_calls:
+        api_name = _api_basename(str(api.get("api_name") or ""))
+        if api_name in crypto_apis:
+            if _is_crypto_api_successful(api_name, api) is True:
+                pid = str(api.get("pid")) if api.get("pid") is not None else None
+                ep = (
+                    str(api.get("entry_point"))
+                    if api.get("entry_point") is not None
+                    else None
+                )
+                if pid or ep:
+                    crypto_contexts.append((pid, ep))
+
+    if not crypto_contexts:
+        return False
+
+    def _matches_context(pid: str | None, ep: str | None) -> bool:
+        for c_pid, c_ep in crypto_contexts:
+            if pid is not None and c_pid is not None:
+                if pid == c_pid:
+                    return True
+            else:
+                if ep is not None and c_ep is not None and ep == c_ep:
+                    return True
+        return False
+
+    for fa in _get_event_items(events, "file_access") + _get_event_items(
+        events, "dropped_files"
+    ):
+        path = str(fa.get("path") or fa.get("file_path") or "").casefold()
+        event_type = str(fa.get("event") or "").casefold()
+
+        pid = str(fa.get("pid")) if fa.get("pid") is not None else None
+        ep = str(fa.get("entry_point")) if fa.get("entry_point") is not None else None
+
+        if not _matches_context(pid, ep):
+            continue
+
+        if event_type not in {"write", "rename", "create", "drop"}:
+            continue
+
+        name = path.split("\\")[-1].split("/")[-1]
+
+        for ext in ransom_exts:
+            if name.endswith(ext):
+                return True
+
+        for note in ransom_notes:
+            if note in name and (name.endswith(".txt") or name.endswith(".html")):
+                return True
+    return False
 
 
 def _successful_service_creation(
@@ -218,8 +408,7 @@ def _successful_service_creation(
         summary = metadata.get("service_creation_calls")
         calls = summary.get("calls") if isinstance(summary, Mapping) else None
         return isinstance(calls, list) and any(
-            isinstance(call, Mapping) and _explicit_call_success(call)
-            for call in calls
+            isinstance(call, Mapping) and _explicit_call_success(call) for call in calls
         )
     if not isinstance(events, Mapping):
         return True
@@ -281,7 +470,9 @@ def _bounded_observations(events: Any) -> list[dict[str, Any]]:
     rows: dict[str, list[tuple[Mapping[str, Any], dict[str, Any]]]] = {}
     for category in _OBSERVATION_CATEGORIES:
         values = events.get(category)
-        if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        if not isinstance(values, Sequence) or isinstance(
+            values, (str, bytes, bytearray)
+        ):
             continue
         if category != "network_events":
             rows[category] = [
@@ -306,7 +497,9 @@ def _bounded_observations(events: Any) -> list[dict[str, Any]]:
                 entry_point = event.get("entry_point")
                 for item_index in range(8):
                     for kind, items in nested.items():
-                        if item_index < len(items) and isinstance(items[item_index], Mapping):
+                        if item_index < len(items) and isinstance(
+                            items[item_index], Mapping
+                        ):
                             location = {
                                 "event_index": event_index,
                                 "kind": kind,
@@ -348,7 +541,9 @@ def _bounded_observations(events: Any) -> list[dict[str, Any]]:
                 for arg_index, argument in enumerate(args[:4]):
                     if isinstance(argument, Mapping):
                         name, value = argument.get("name"), argument.get("value")
-                        if isinstance(name, str) and isinstance(value, (str, int, float, bool)):
+                        if isinstance(name, str) and isinstance(
+                            value, (str, int, float, bool)
+                        ):
                             pairs.append(f"{name[:40]}={str(value)[:120]}")
                     elif isinstance(argument, (str, int, float, bool)):
                         pairs.append(f"arg[{arg_index}]={str(argument)[:120]}")

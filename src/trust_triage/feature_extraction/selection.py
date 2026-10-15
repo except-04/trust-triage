@@ -13,7 +13,6 @@ import numpy as np
 
 from .schema import FeatureSchema
 
-
 FEATURE_SELECTION_SCHEMA_VERSION = "feature-selection-v1"
 
 
@@ -51,8 +50,7 @@ def _validate_model_dtype(dtype: str) -> str:
 
     if normalized != np.dtype("float32"):
         raise FeatureSelectionError(
-            "model input selection dtype must be float32, "
-            f"got {normalized}"
+            f"model input selection dtype must be float32, got {normalized}"
         )
     return "float32"
 
@@ -80,11 +78,12 @@ class FeatureSelector:
         model_dtype = _validate_model_dtype(self.dtype)
 
         if self.source_schema.feature_count == 0:
-            raise FeatureSelectionError("source schema must contain at least one feature")
+            raise FeatureSelectionError(
+                "source schema must contain at least one feature"
+            )
 
         source_positions = {
-            name: index
-            for index, name in enumerate(self.source_schema.feature_names)
+            name: index for index, name in enumerate(self.source_schema.feature_names)
         }
         unknown_names = [
             name for name in normalized_names if name not in source_positions
@@ -119,7 +118,7 @@ class FeatureSelector:
         source_schema: FeatureSchema,
         *,
         selection_id: str = "all",
-    ) -> "FeatureSelector":
+    ) -> FeatureSelector:
         """원본 Schema의 모든 Feature를 같은 순서로 선택한다."""
 
         return cls(
@@ -136,7 +135,7 @@ class FeatureSelector:
         *,
         selection_id: str = "custom",
         dtype: str = "float32",
-    ) -> "FeatureSelector":
+    ) -> FeatureSelector:
         """모델 manifest에 적은 순서 그대로 Feature 부분집합을 만든다."""
 
         return cls(
@@ -151,7 +150,7 @@ class FeatureSelector:
         cls,
         source_schema: FeatureSchema,
         manifest: Mapping[str, Any],
-    ) -> "FeatureSelector":
+    ) -> FeatureSelector:
         """JSON manifest 내용을 검사한 뒤 FeatureSelector를 만든다."""
 
         if not isinstance(manifest, Mapping):
@@ -198,10 +197,9 @@ class FeatureSelector:
                     )
         else:
             selected_names = _normalize_manifest_names(feature_names_value)
-            if (
-                len(selected_names) == source_schema.feature_count
-                and set(selected_names) == set(source_schema.feature_names)
-            ):
+            if len(selected_names) == source_schema.feature_count and set(
+                selected_names
+            ) == set(source_schema.feature_names):
                 raise FeatureSelectionError(
                     "mode='subset' must select fewer than all source features"
                 )
@@ -259,7 +257,7 @@ class FeatureSelector:
         cls,
         source_schema: FeatureSchema,
         path: str | Path,
-    ) -> "FeatureSelector":
+    ) -> FeatureSelector:
         """UTF-8 JSON manifest 파일에서 Feature 선택을 읽는다."""
 
         manifest_path = Path(path)

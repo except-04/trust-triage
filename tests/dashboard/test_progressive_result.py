@@ -237,9 +237,7 @@ def test_terminal_transition_loads_deep_detail_once(app, monkeypatch):
     monkeypatch.setattr(
         app.api_client,
         "get_batch",
-        lambda _batch_id: {
-            "analyses": [combined_response(status="COMPLETED")]
-        },
+        lambda _batch_id: {"analyses": [combined_response(status="COMPLETED")]},
     )
     monkeypatch.setattr(
         app.api_client,

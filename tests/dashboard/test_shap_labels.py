@@ -28,7 +28,10 @@ def feature(name, label=None, value=0.3):
     "item,expected",
     [
         (feature("header[9]", "Major Linker Version"), "Major Linker Version"),
-        (feature("imports[300]", "Import API hash bucket #42"), "Import API hash bucket #42"),
+        (
+            feature("imports[300]", "Import API hash bucket #42"),
+            "Import API hash bucket #42",
+        ),
         # 라벨을 못 붙이면 백엔드가 raw 이름을 그대로 넣는다
         (feature("f[2]", "f[2]"), "f[2]"),
         # 도입 이전 기록: 필드 자체가 없거나 null
@@ -54,7 +57,9 @@ def test_chart_uses_display_names_and_keeps_raw_names_untouched(app):
 
     features = [
         feature("header[9]", "Major Linker Version", 0.4),
-        feature("pefilewarnings[67]", "PE Warning: Suspicious flags set for section", 0.2),
+        feature(
+            "pefilewarnings[67]", "PE Warning: Suspicious flags set for section", 0.2
+        ),
         feature("section[3]", "Read/Execute Section Count", -0.1),
         feature("header[43]"),  # 라벨 없는 구형 기록이 섞여도 된다
     ]
@@ -88,7 +93,9 @@ def test_compact_chart_preserves_top_five_values_order_and_label_space(app):
 
     features = [
         feature("header[9]", "Major Linker Version", 0.4),
-        feature("pefilewarnings[67]", "PE Warning: Suspicious flags set for section", 0.2),
+        feature(
+            "pefilewarnings[67]", "PE Warning: Suspicious flags set for section", 0.2
+        ),
         feature("section[3]", "Read/Execute Section Count", -0.1),
         feature("imports[300]", "Import API hash bucket #42", -0.3),
         feature("header[43]", value=0.05),
@@ -101,7 +108,7 @@ def test_compact_chart_preserves_top_five_values_order_and_label_space(app):
     figure = target.figure
     axis = figure.axes[0]
     assert target.options == {"width": "stretch"}
-    assert tuple(figure.get_size_inches()) == pytest.approx((6.2, 1.0))
+    assert tuple(figure.get_size_inches()) == pytest.approx((6.2, 1.6))
     assert [bar.get_width() for bar in axis.patches] == pytest.approx(
         [0.4, 0.2, -0.1, -0.3, 0.05]
     )
@@ -125,11 +132,14 @@ def test_compact_chart_preserves_top_five_values_order_and_label_space(app):
         assert upper.y0 > lower.y1
 
     benign, malicious = axis.texts[-2:]
-    assert benign.get_window_extent(renderer).x1 < malicious.get_window_extent(renderer).x0
+    assert (
+        benign.get_window_extent(renderer).x1 < malicious.get_window_extent(renderer).x0
+    )
 
     # Streamlit saves with bbox_inches="tight" and Matplotlib's default padding.
     bounds = figure.get_tightbbox(renderer)
     padding = app.plt.rcParams["savefig.pad_inches"] * 2
     aspect_ratio = (bounds.height + padding) / (bounds.width + padding)
-    for container_width in (1320, 1450):
-        assert 225 <= container_width * aspect_ratio <= 260
+    # 설명 가능성은 결과 화면 폭의 약 70% 칸에 놓인다(옆은 분석 파이프라인).
+    for container_width in (820, 890):
+        assert 210 <= container_width * aspect_ratio <= 250

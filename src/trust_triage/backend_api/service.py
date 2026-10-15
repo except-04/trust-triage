@@ -48,6 +48,46 @@ def _validate_idempotency_key(key):
 
 
 class BackendService:
+    def get_budget_config(self) -> dict[str, Any]:
+        return self.repository.get_budget_config()
+
+    def set_budget(self, config: dict[str, int]) -> None:
+        self.repository.set_budget_config(config)
+
+    def get_priority_recommendations(self) -> dict[str, Any]:
+        candidates = self.repository.get_priority_recommendations()
+        budget_info = self.repository.get_budget_config()
+
+        queues = {
+            "EMERGENCY": {"recs": [], "waiting": []},
+            "DEEP": {"recs": [], "waiting": []},
+            "FP": {"recs": [], "waiting": []},
+            "AUTO": {"recs": [], "waiting": []},
+            "ERROR": {"recs": [], "waiting": []},
+        }
+
+        # Separate into queues without budget restrictions
+        for c in candidates:
+            q_name = c.get("queue_name", "UNKNOWN")
+            if q_name not in queues:
+                continue
+
+            idx = len(queues[q_name]["recs"]) + len(queues[q_name]["waiting"]) + 1
+            c["rank"] = idx
+            queues[q_name]["recs"].append(c)
+
+        return {
+            "emergency_recommendations": queues["EMERGENCY"]["recs"],
+            "emergency_waiting": queues["EMERGENCY"]["waiting"],
+            "deep_recommendations": queues["DEEP"]["recs"],
+            "deep_waiting": queues["DEEP"]["waiting"],
+            "fp_recommendations": queues["FP"]["recs"],
+            "fp_waiting": queues["FP"]["waiting"],
+            "auto_queue": queues["AUTO"]["recs"],
+            "error_queue": queues["ERROR"]["recs"],
+            "budget_info": budget_info,
+        }
+
     def __init__(
         self,
         repository: AnalysisRepository,
@@ -213,9 +253,19 @@ class BackendService:
         batch_id=None,
         verdict=None,
         sort="high_risk_first",
+        overturned_only=False,
+        reviewed_only=False,
     ) -> AnalysisListResponse:
         rows, total = self.repository.list_analyses(
-            limit, offset, status, sha256, batch_id=batch_id, verdict=verdict, sort=sort
+            limit,
+            offset,
+            status,
+            sha256,
+            batch_id=batch_id,
+            verdict=verdict,
+            sort=sort,
+            overturned_only=overturned_only,
+            reviewed_only=reviewed_only,
         )
         return AnalysisListResponse(
             total_count=total,

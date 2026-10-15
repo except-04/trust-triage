@@ -29,9 +29,17 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (  # noqa: E402
-    DEFAULT_CHUNK, Layout, Timer, add_root_arg, fmt_bytes, get_dim,
-    iter_chunks, open_dat, setup_logging, write_json,
+from common import (
+    DEFAULT_CHUNK,
+    Layout,
+    Timer,
+    add_root_arg,
+    fmt_bytes,
+    get_dim,
+    iter_chunks,
+    open_dat,
+    setup_logging,
+    write_json,
 )
 
 
@@ -51,11 +59,20 @@ def scan_zero_rows(X, n: int, chunk: int, log) -> np.ndarray:
 def main() -> int:
     ap = argparse.ArgumentParser(description="EMBER2024 벡터화 + 무결성 검증")
     add_root_arg(ap)
-    ap.add_argument("--force", action="store_true", help="이미 .dat이 있어도 다시 벡터화")
-    ap.add_argument("--chunk", type=int, default=DEFAULT_CHUNK,
-                    help=f"검증 시 청크 행 수 (기본 {DEFAULT_CHUNK})")
-    ap.add_argument("--skip-zero-check", action="store_true",
-                    help="0행 검사를 건너뜀 (약 26GB 순차 읽기를 절약)")
+    ap.add_argument(
+        "--force", action="store_true", help="이미 .dat이 있어도 다시 벡터화"
+    )
+    ap.add_argument(
+        "--chunk",
+        type=int,
+        default=DEFAULT_CHUNK,
+        help=f"검증 시 청크 행 수 (기본 {DEFAULT_CHUNK})",
+    )
+    ap.add_argument(
+        "--skip-zero-check",
+        action="store_true",
+        help="0행 검사를 건너뜀 (약 26GB 순차 읽기를 절약)",
+    )
     args = ap.parse_args()
 
     layout = Layout(args.root)
@@ -71,19 +88,24 @@ def main() -> int:
 
     jsonl = sorted(layout.dataset.glob("*.jsonl"))
     if not jsonl:
-        log.error("%s 안에 .jsonl이 없습니다. download.py를 먼저 실행하세요.",
-                  layout.dataset)
+        log.error(
+            "%s 안에 .jsonl이 없습니다. download.py를 먼저 실행하세요.", layout.dataset
+        )
         return 1
     log.info("입력 .jsonl 파일 %d개", len(jsonl))
 
     # --- 벡터화 ----------------------------------------------------------
-    already = all((layout.dataset / f"X_{s}.dat").is_file()
-                  for s in ("train", "test", "challenge"))
+    already = all(
+        (layout.dataset / f"X_{s}.dat").is_file()
+        for s in ("train", "test", "challenge")
+    )
 
     if already and not args.force:
         log.info("이미 .dat 파일이 존재합니다. 벡터화를 건너뜁니다 (--force로 재실행).")
     else:
-        log.warning("벡터화는 수 시간이 걸립니다. 중단 시 --force로 처음부터 다시 해야 합니다.")
+        log.warning(
+            "벡터화는 수 시간이 걸립니다. 중단 시 --force로 처음부터 다시 해야 합니다."
+        )
         with Timer(log, "create_vectorized_features (label_type='label')"):
             # label_type="label" = 악성/정상 이진 라벨. 라벨 없는 샘플은 -1이 된다.
             create_vectorized_features(str(layout.dataset), label_type="label")
@@ -117,8 +139,13 @@ def main() -> int:
             "X_size_human": fmt_bytes(x_path.stat().st_size),
             "unique_labels": sorted(int(v) for v in np.unique(y_arr)),
         }
-        log.info("%-10s %9d행  %10s  라벨값=%s",
-                 subset, n, fmt_bytes(info["X_bytes"]), info["unique_labels"])
+        log.info(
+            "%-10s %9d행  %10s  라벨값=%s",
+            subset,
+            n,
+            fmt_bytes(info["X_bytes"]),
+            info["unique_labels"],
+        )
 
         if not args.skip_zero_check:
             with Timer(log, f"0행 검사 ({subset})"):
@@ -129,7 +156,8 @@ def main() -> int:
                 log.error(
                     "%s: 전부 0인 행이 %d개 있습니다. 벡터화가 완료되지 않았을 "
                     "가능성이 높습니다. --force로 재실행하세요.",
-                    subset, zero_idx.size,
+                    subset,
+                    zero_idx.size,
                 )
                 np.save(layout.reports / f"zero_rows_{subset}.npy", zero_idx)
             else:

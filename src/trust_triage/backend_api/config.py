@@ -35,6 +35,7 @@ class BackendConfig:
     s3_prefix: str = "raw/"
     api_token: str = field(default="", repr=False)
     reviewer_token: str = field(default="", repr=False)
+    discord_webhook_url: str = field(default="", repr=False)
     host: str = "127.0.0.1"
     port: int = 8000
     max_file_bytes: int = 50 * 1024 * 1024
@@ -137,6 +138,7 @@ class BackendConfig:
             max_artifact_bytes=_integer("BACKEND_MAX_ARTIFACT_BYTES", 64 * 1024 * 1024),
             api_token=os.getenv("BACKEND_API_TOKEN", ""),
             reviewer_token=os.getenv("BACKEND_REVIEWER_TOKEN", ""),
+            discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
             host=os.getenv("BACKEND_HOST", "127.0.0.1"),
             port=_integer("BACKEND_PORT", 8000),
             max_file_bytes=_integer("BACKEND_MAX_FILE_BYTES", 50 * 1024 * 1024),

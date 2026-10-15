@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import numpy as np
 
@@ -123,9 +123,7 @@ class FeatureSchema:
                 f"got {len(actual_names)}"
             )
 
-        for index, (expected, actual) in enumerate(
-            zip(expected_names, actual_names)
-        ):
+        for index, (expected, actual) in enumerate(zip(expected_names, actual_names)):
             if expected != actual:
                 raise ValueError(
                     f"feature name/order mismatch at index {index}: "

@@ -1,9 +1,13 @@
+import inspect
+import math
 import re
 import time
 from collections import Counter
+from datetime import datetime
 from html import escape
 
 import api_client
+import pandas as pd
 import streamlit as st
 from api_client import ApiError
 
@@ -39,6 +43,28 @@ HASH_SEARCH_KEYS = ("hash_search", "hash_search_error", "hash_search_selector")
 DETAIL_COLUMN_GAP = "medium"
 DETAIL_CARD_GAP = "small"
 SPEAKEASY_PREVIEW_LIMIT = 10
+# Deep Analysis 검색에서 일치한 칸의 색. 다크 모드에서는 표 전체에 색 반전 필터
+# (invert + hue-rotate)가 걸리므로, 반전된 뒤 남색 배경(#21458f 근처)과 밝은 파란
+# 글자(#dbeaff)가 되도록 고른 원래 색이다. 라이트 모드에서는 연한 파랑으로 보인다.
+DEEP_SEARCH_HIGHLIGHT = "background-color: #9cc0ff; color: #000f63; font-weight: 600"
+# 분석가가 판정을 옮길 수 있는 그룹과, 그룹별로 백엔드에 저장하는 analyst_final_verdict.
+# 보류(null)는 검토 상태만 바꾸며 시스템 판정은 유지한다.
+REVIEW_GROUPS = ("needs_review", "inconclusive", "auto_malicious", "auto_benign")
+REVIEW_VERDICT_BY_GROUP = {
+    "needs_review": None,
+    "auto_malicious": "MALICIOUS",
+    "auto_benign": "BENIGN",
+}
+REVIEW_GROUP_BY_VERDICT = {
+    verdict: group
+    for group, verdict in REVIEW_VERDICT_BY_GROUP.items()
+    if verdict is not None
+}
+# 백엔드 ReviewRequest 와 같은 제한. 어긋나면 422를 받기 전에 프론트에서 막는다.
+REVIEWER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
+REVIEW_NOTES_MAX = 4000
+# 세 그룹 표에 공통으로 붙는 수정 여부 열 이름.
+REVIEW_COLUMN = "Analyst Review"
 
 
 def reset_analysis_result():
@@ -55,6 +81,8 @@ def reset_analysis_result():
     st.session_state.pop("poll_timed_out", None)
     st.session_state.pop("intake_receipt", None)
     st.session_state.pop("batch_filter_query", None)
+    st.session_state.pop("deep_filter_query", None)
+    st.session_state.pop("pending_batch_group", None)
 
 
 def reset_analysis_session():
@@ -74,14 +102,17 @@ def select_analysis_result(widget_key="selected_analysis_id"):
 
 def verdict_badge_markup(verdict):
     labels = {
-        "MALICIOUS": "악성 (Malicious)",
-        "BENIGN": "정상 (Benign)",
-        "UNCERTAIN": "판정 보류 (Uncertain)",
+        "MALICIOUS": "MALICIOUS",
+        "BENIGN": "BENIGN",
+        "SUSPICIOUS": "SUSPICIOUS",
+        "INCONCLUSIVE": "INCONCLUSIVE",
+        "UNCERTAIN": "INCONCLUSIVE",
+        "UNKNOWN": "INCONCLUSIVE",
         "AUTO_MALICIOUS": "AUTO MALICIOUS",
         "AUTO_BENIGN": "AUTO BENIGN",
         "HIGH_RISK_UNCERTAIN": "HIGH-RISK UNCERTAIN",
-        "Malicious": "악성 (Malicious)",
-        "Benign": "정상 (Benign)",
+        "Malicious": "MALICIOUS",
+        "Benign": "BENIGN",
         "Analyst Review": "분석가 검토 (Analyst Review)",
         "High-Risk Uncertain": "HIGH-RISK UNCERTAIN",
         "Pending": "분석 진행 중 (Pending)",
@@ -93,7 +124,7 @@ def verdict_badge_markup(verdict):
     elif verdict in {"BENIGN", "AUTO_BENIGN", "Benign"}:
         badge_class = "badge-success"
     elif verdict in {
-        "UNCERTAIN",
+        "SUSPICIOUS",
         "HIGH_RISK_UNCERTAIN",
         "Analyst Review",
         "High-Risk Uncertain",
@@ -102,10 +133,7 @@ def verdict_badge_markup(verdict):
     else:
         badge_class = "badge-neutral"
 
-    return (
-        f'<span class="status-badge {badge_class}">'
-        f"{escape(label)}</span>"
-    )
+    return f'<span class="status-badge {badge_class}">{escape(label)}</span>'
 
 
 def route_display_name(route):
@@ -126,10 +154,7 @@ def route_badge_markup(route):
     else:
         badge_class = "badge-neutral"
 
-    return (
-        f'<span class="status-badge {badge_class}">'
-        f"{escape(label)}</span>"
-    )
+    return f'<span class="status-badge {badge_class}">{escape(label)}</span>'
 
 
 def priority_badge_markup(priority):
@@ -158,10 +183,7 @@ def pipeline_state_markup(status):
         label = escape(status)
         status_class = "badge-info"
 
-    return (
-        f'<span class="pipeline-state {status_class}">'
-        f"{label}</span>"
-    )
+    return f'<span class="pipeline-state {status_class}">{label}</span>'
 
 
 def truncate_hash(value, prefix=12, suffix=8):
@@ -225,14 +247,16 @@ def deep_analysis_status_markup(statuses):
         ("FLOSS", "floss"),
         ("Speakeasy", "speakeasy"),
     )
-    return "".join(
+    # 알약들을 한 묶음으로 감싸야 어디에 놓이든 사이 간격(gap)이 생긴다.
+    items = "".join(
         (
             '<span class="deep-status-item">'
-            f'<strong>{tool_name}</strong> · {escape(statuses.get(key, "NOT_REQUIRED"))}'
+            f"<strong>{tool_name}</strong> · {escape(statuses.get(key, 'NOT_REQUIRED'))}"
             "</span>"
         )
         for tool_name, key in tools
     )
+    return f'<span class="deep-status-list">{items}</span>'
 
 
 def shap_feature_label(feature):
@@ -259,7 +283,11 @@ def render_shap_chart(target, features):
         )
         for feature in chart_features
     ]
-    colors = ["#dc2626" if value >= 0 else "#2563eb" for value in values]
+    theme = DARK_THEME if st.session_state.get("dark_mode") else LIGHT_THEME
+    colors = [
+        theme["chart-malicious"] if value >= 0 else theme["chart-benign"]
+        for value in values
+    ]
     limit = max((abs(value) for value in values), default=0.1) * 1.22
 
     try:
@@ -267,16 +295,17 @@ def render_shap_chart(target, features):
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        figure, axis = plt.subplots(figsize=(6.2, 1.0))
+        # 설명 가능성 칸(약 70%)에서 옆 분석 파이프라인 카드와 높이가 비슷해지는 비율.
+        figure, axis = plt.subplots(figsize=(6.2, 1.6))
         positions = list(range(len(names)))
         axis.barh(positions, values, color=colors, height=0.55)
-        axis.axvline(0, color="#64748b", linewidth=1.1, zorder=0)
+        axis.axvline(0, color=theme["text-muted"], linewidth=1.1, zorder=0)
         axis.set_xlim(-limit, limit)
         axis.set_yticks(positions, labels=names)
         axis.invert_yaxis()
-        axis.xaxis.grid(True, color="#e2e8f0", linewidth=0.7)
+        axis.xaxis.grid(True, color=theme["border"], linewidth=0.7)
         axis.set_axisbelow(True)
-        axis.tick_params(axis="both", labelsize=6.5, colors="#475569", pad=1)
+        axis.tick_params(axis="both", labelsize=6.5, colors=theme["text-3"], pad=1)
 
         for position, value in zip(positions, values):
             offset = limit * 0.025
@@ -287,7 +316,7 @@ def render_shap_chart(target, features):
                 va="center",
                 ha="left" if value >= 0 else "right",
                 fontsize=6.5,
-                color="#334155",
+                color=theme["text-2"],
             )
 
         axis.text(
@@ -295,7 +324,7 @@ def render_shap_chart(target, features):
             1.04,
             "← Benign contribution",
             transform=axis.transAxes,
-            color="#2563eb",
+            color=theme["chart-benign"],
             fontsize=6.5,
             fontweight="bold",
         )
@@ -304,7 +333,7 @@ def render_shap_chart(target, features):
             1.04,
             "Malicious contribution →",
             transform=axis.transAxes,
-            color="#dc2626",
+            color=theme["chart-malicious"],
             fontsize=6.5,
             fontweight="bold",
             ha="right",
@@ -313,9 +342,9 @@ def render_shap_chart(target, features):
         for spine in axis.spines.values():
             spine.set_visible(False)
 
-        axis.set_xlabel("SHAP value", fontsize=6.5, color="#64748b", labelpad=1)
-        figure.patch.set_facecolor("#ffffff")
-        axis.set_facecolor("#ffffff")
+        axis.set_xlabel("SHAP value", fontsize=6.5, color=theme["text-muted"], labelpad=1)
+        figure.patch.set_alpha(0)
+        axis.set_facecolor("none")
         figure.tight_layout(pad=0.35)
         target.pyplot(figure, width="stretch")
         plt.close(figure)
@@ -335,17 +364,21 @@ def derive_batch_summary(analyses):
         "high_risk_uncertain": 0,
         "auto_malicious": 0,
         "auto_benign": 0,
+        "inconclusive": 0,
         "failed": 0,
     }
+    # 분석가가 판정을 수정한 건은 수정된 그룹으로 센다. 그룹 타일과 같은 기준이다.
+    summary_key = {
+        "failed": "failed",
+        "needs_review": "high_risk_uncertain",
+        "auto_malicious": "auto_malicious",
+        "auto_benign": "auto_benign",
+        "inconclusive": "inconclusive",
+    }
     for analysis in analyses:
-        if analysis["status"] == "FAILED":
-            summary["failed"] += 1
-        elif analysis["initial_verdict"] == "HIGH_RISK_UNCERTAIN":
-            summary["high_risk_uncertain"] += 1
-        elif analysis["initial_verdict"] == "AUTO_MALICIOUS":
-            summary["auto_malicious"] += 1
-        elif analysis["initial_verdict"] == "AUTO_BENIGN":
-            summary["auto_benign"] += 1
+        key = summary_key.get(triage_group_key(analysis))
+        if key is not None:
+            summary[key] += 1
     return summary
 
 
@@ -387,6 +420,9 @@ def entry_view(entry, status):
         "tool_details": {},
         "deep_error": None,
         "error": None,
+        "analyst_final_verdict": None,
+        "approval_status": None,
+        "review_revision": 0,
     }
 
 
@@ -500,6 +536,7 @@ def submit_batch(file_descriptors, on_progress=None, priority="NORMAL"):
 
     return receipt
 
+
 def refresh_pending(batch_data):
     """끝나지 않은 분석들의 상태를 백엔드에 다시 묻고 갱신한다.
 
@@ -517,7 +554,9 @@ def refresh_pending(batch_data):
         except ApiError as e:
             analysis["status"] = "FAILED"
             analysis["error"] = {
-                "code": e.code, "message": e.message, "stage": e.stage,
+                "code": e.code,
+                "message": e.message,
+                "stage": e.stage,
             }
             continue
 
@@ -537,13 +576,16 @@ def refresh_pending(batch_data):
             analysis = updated
         except ApiError as e:
             analysis["error"] = {
-                "code": e.code, "message": e.message, "stage": e.stage,
+                "code": e.code,
+                "message": e.message,
+                "stage": e.stage,
             }
 
         if analysis.get("status") not in TERMINAL_STATUSES:
             still_running = True
 
     return still_running
+
 
 def to_view(full, previous):
     """API 응답을 대시보드가 읽는 평면 키로 옮긴다."""
@@ -571,6 +613,16 @@ def to_view(full, previous):
         "evidence": full.get("evidence", []),
         "llm_summary": full.get("llm_summary"),
         "error": full.get("error"),
+        **review_fields(full),
+    }
+
+
+def review_fields(full):
+    """종합 결과 중 분석가 판정 관련 값. 저장 직후 이 값만 따로 갱신할 때도 쓴다."""
+    return {
+        "analyst_final_verdict": full.get("analyst_final_verdict"),
+        "approval_status": full.get("approval_status"),
+        "review_revision": full.get("review_revision") or 0,
     }
 
 
@@ -608,9 +660,8 @@ def deep_result_ready(analysis):
 
 def load_deep_result_once(analysis):
     """HIGH_RISK_UNCERTAIN의 완료된 Deep 상세를 한 번만 보강한다."""
-    if (
-        analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN"
-        or analysis.get("deep_detail_loaded")
+    if analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN" or analysis.get(
+        "deep_detail_loaded"
     ):
         return analysis
     try:
@@ -640,7 +691,8 @@ def pending_analyses(batch_data):
 def poll_status_counts(analyses):
     """진행 상황 패널용 상태별 건수.
 
-    완료 화면의 derive_batch_summary()는 초기 판정을 세고, 이쪽은 작업 상태를 센다.
+    완료 화면의 derive_batch_summary()는 판정 그룹(분석가 수정 반영)을 세고, 이쪽은
+    작업 상태를 센다.
     서로 다른 집계이므로 합치지 않는다.
     """
     counts = {"QUEUED": 0, "RUNNING": 0, "COMPLETED": 0, "FAILED": 0}
@@ -781,28 +833,105 @@ def filter_batch_analyses(analyses, query):
     ]
 
 
+BATCH_GROUP_LABELS = {
+    "total": "Total",
+    "auto_malicious": "MALICIOUS",
+    "needs_review": "SUSPICIOUS",
+    "auto_benign": "BENIGN",
+    "inconclusive": "INCONCLUSIVE",
+    "failed": "FAILED",
+}
+
+
+def is_reviewed(analysis):
+    """분석가가 한 번이라도 판정을 저장했는지. 보류(null) 저장도 포함한다."""
+    return (analysis.get("review_revision") or 0) > 0
+
+
+def initial_group_key(analysis):
+    """시스템 초기 판정 기준 그룹. 분석가 수정과 무관한 '원래' 그룹이다."""
+    return {
+        "HIGH_RISK_UNCERTAIN": "inconclusive",
+        "AUTO_MALICIOUS": "auto_malicious",
+        "AUTO_BENIGN": "auto_benign",
+    }.get(analysis.get("initial_verdict"))
+
+
+def display_verdict(analysis):
+    """확정한 분석가 판정을 우선하며 검토 보류는 시스템 판정을 유지한다."""
+    verdict = analysis.get("analyst_final_verdict") or analysis.get("final_verdict")
+    if verdict in {"UNCERTAIN", "UNKNOWN"}:
+        verdict = "INCONCLUSIVE"
+    if analysis.get("status") == "FAILED" and verdict == "INCONCLUSIVE":
+        return None
+    return verdict
+
+
+def system_group_key(analysis):
+    """완료된 시스템 판정을 사용하고 이전 결과만 초기 판정으로 보완한다."""
+    if analysis.get("status") != "COMPLETED":
+        return None
+    return {
+        "MALICIOUS": "auto_malicious",
+        "SUSPICIOUS": "needs_review",
+        "BENIGN": "auto_benign",
+        "INCONCLUSIVE": "inconclusive",
+        "UNCERTAIN": "inconclusive",
+        "UNKNOWN": "inconclusive",
+    }.get(analysis.get("final_verdict")) or initial_group_key(analysis)
+
+
+def triage_group_key(analysis):
+    """목록과 상세는 최신 판정을 사용하며 실패·진행 상태는 별도로 다룬다."""
+    if analysis["status"] == "FAILED":
+        return "failed"
+    return REVIEW_GROUP_BY_VERDICT.get(
+        analysis.get("analyst_final_verdict")
+    ) or system_group_key(analysis)
+
+
+def review_mark(analysis):
+    """세 그룹 표의 수정 여부 열 글자."""
+    if not is_reviewed(analysis):
+        if (analysis.get("final_assessment") or {}).get("requires_human_review"):
+            return "REVIEW PENDING"
+        return "-"
+    if analysis.get("analyst_final_verdict") is None:
+        return "REVIEW PENDING"
+    original = system_group_key(analysis)
+    if original is not None and original != triage_group_key(analysis):
+        return f"수정됨 · 원래 {BATCH_GROUP_LABELS[original].upper()}"
+    # 저장은 했지만 원래 그룹과 같다(시스템 판정을 확인했거나 되돌린 경우)
+    return "확인됨"
+
+
+def triage_group_label(analysis):
+    """Total 표의 Group 열 글자. 판정 전 항목은 PENDING."""
+    key = triage_group_key(analysis)
+    return BATCH_GROUP_LABELS[key].upper() if key else "PENDING"
+
+
 def group_batch_analyses(analyses):
     """Partition results by analyst workflow priority."""
     groups = {
         "needs_review": [],
         "auto_malicious": [],
         "auto_benign": [],
+        "inconclusive": [],
         "failed": [],
     }
     for analysis in analyses:
-        if analysis["status"] == "FAILED":
-            groups["failed"].append(analysis)
-        elif analysis["initial_verdict"] == "HIGH_RISK_UNCERTAIN":
-            groups["needs_review"].append(analysis)
-        elif analysis["initial_verdict"] == "AUTO_MALICIOUS":
-            groups["auto_malicious"].append(analysis)
-        elif analysis["initial_verdict"] == "AUTO_BENIGN":
-            groups["auto_benign"].append(analysis)
+        key = triage_group_key(analysis)
+        if key is not None:
+            groups[key].append(analysis)
     return groups
 
 
 def deep_analysis_status_text(analysis):
     """Summarize tool states for the Needs Review result table."""
+    # 자동 판정에서 분석가가 옮겨 온 건은 심층 분석을 거치지 않았다
+    if analysis.get("initial_verdict") != "HIGH_RISK_UNCERTAIN":
+        return "NOT RUN"
     statuses = analysis.get("deep_analysis_status") or {}
     for tool_name, key in (
         ("Speakeasy", "speakeasy"),
@@ -859,11 +988,11 @@ def evidence_card_markup(evidence, capa_behaviors):
     """
     mitre_items = "".join(
         '<div class="evidence-item"><span class="technique-id">'
-        f'{escape(technique.get("technique_id", technique.get("id", "")))}'
+        f"{escape(technique.get('technique_id', technique.get('id', '')))}"
         "</span> "
-        f'{escape(technique.get("technique_name", technique.get("name", "")))}'
+        f"{escape(technique.get('technique_name', technique.get('name', '')))}"
         " · "
-        f'{escape(technique.get("tactic", ", ".join(technique.get("sources", []))))}'
+        f"{escape(technique.get('tactic', ', '.join(technique.get('sources', []))))}"
         "</div>"
         for technique in evidence
     )
@@ -881,7 +1010,9 @@ def evidence_card_markup(evidence, capa_behaviors):
 
     return (
         '<div class="evidence-grid">'
-        + section("MITRE ATT&amp;CK", mitre_items, "표시할 MITRE ATT&CK 근거가 없습니다.")
+        + section(
+            "MITRE ATT&amp;CK", mitre_items, "표시할 MITRE ATT&CK 근거가 없습니다."
+        )
         + section("CAPA Behavior", capa_items, "표시할 CAPA 행위가 없습니다.")
         + "</div>"
     )
@@ -939,9 +1070,7 @@ def deep_analysis_state(analysis):
     if "RUNNING" in selected:
         return "RUNNING"
     if "QUEUED" in selected:
-        has_finished_tool = any(
-            value in {"COMPLETED", "FAILED"} for value in selected
-        )
+        has_finished_tool = any(value in {"COMPLETED", "FAILED"} for value in selected)
         return "RUNNING" if has_finished_tool else "QUEUED"
     if selected and all(value in {"COMPLETED", "FAILED"} for value in selected):
         return "FAILED" if "FAILED" in selected else "COMPLETED"
@@ -959,14 +1088,21 @@ def _metric_text(value, pattern):
         return str(value)
 
 
+def tooltip_attr(text):
+    """설명 문구를 data-tip 속성값으로 바꾼다. 줄바꿈(\n)은 &#10; 으로 넣어야
+    마크다운 처리를 거쳐도 살아남고, CSS white-space: pre-line 이 줄을 바꾼다."""
+    return escape(text).replace("\n", "&#10;")
+
+
 def result_detail_state(analysis):
     """Batch 상태가 아닌 현재 파일의 확보된 결과로 표시 여부를 결정한다."""
     return {
         "available": initial_detail_available(analysis),
         "deep": deep_analysis_state(analysis),
         "tools": {
-            tool: "NOT_REQUIRED" if analysis.get("route") == "FINAL" else
-            (analysis.get("deep_analysis_status") or {}).get(tool)
+            tool: "NOT_REQUIRED"
+            if analysis.get("route") == "FINAL"
+            else (analysis.get("deep_analysis_status") or {}).get(tool)
             or ("NOT_REQUIRED" if tool == "cape" else "QUEUED")
             for tool in ("capa", "floss", "speakeasy", "cape")
         },
@@ -984,76 +1120,475 @@ def detail_section(target, title, key):
     )
 
 
+def final_verdict_cell(analysis):
+    """분석 요약의 Final Verdict 칸 (라벨, 배지).
+
+    분석가가 판정을 저장했으면 시스템 판정 대신 분석가 판정을 보여 주고,
+    라벨에 수정/승인/보류 여부를 붙인다. 시스템 판정은 백엔드에 그대로 남아 있다.
+    """
+    verdict = display_verdict(analysis)
+    if analysis.get("status") == "FAILED":
+        return "Final Verdict · FAILED", verdict_badge_markup(verdict or "-")
+    if not is_reviewed(analysis):
+        pending = (analysis.get("final_assessment") or {}).get("requires_human_review")
+        label = "Final Verdict · REVIEW PENDING" if pending else "Final Verdict"
+        return label, verdict_badge_markup(verdict or "Pending")
+    verdict = analysis.get("analyst_final_verdict")
+    if verdict is None:
+        return "Final Verdict · REVIEW PENDING", verdict_badge_markup(
+            display_verdict(analysis) or "Pending"
+        )
+    note = "분석가 승인" if analysis.get("approval_status") == "APPROVED" else "수정됨"
+    return f"Final Verdict · {note}", verdict_badge_markup(verdict)
+
+
+def review_blocker(analysis):
+    """판정 수정 버튼을 막는 이유. 수정할 수 있으면 None."""
+    if analysis.get("status") != "COMPLETED":
+        return "분석이 완료된 파일만 판정을 수정할 수 있습니다."
+    if triage_group_key(analysis) not in REVIEW_GROUPS:
+        return "완료된 시스템 판정만 검토할 수 있습니다."
+    batch_data = st.session_state.get("batch_data")
+    if batch_data and pending_analyses(batch_data):
+        # 진행 화면은 2초마다 다시 그려져서 열어 둔 팝업이 닫힌다
+        return "배치의 모든 분석이 끝난 뒤 수정할 수 있습니다."
+    return None
+
+
+def render_summary_section(target, analysis):
+    """'분석 요약' 제목 줄 맨 오른쪽에 판정 수정 버튼을 둔 카드. 카드 컨테이너를 돌려준다."""
+    section = target.container(
+        key="detail_summary_section", height="stretch", gap=DETAIL_CARD_GAP
+    )
+    title, action = section.columns([6, 1], vertical_alignment="bottom")
+    title.subheader("분석 요약")
+    blocker = review_blocker(analysis)
+    if action.button(
+        "판정 검토",
+        key="open_review_dialog",
+        width="stretch",
+        disabled=blocker is not None,
+        help=blocker,
+    ):
+        open_review_dialog(analysis["analysis_id"])
+    return section.container(
+        border=True, key="detail_summary_card", height="stretch", gap=DETAIL_CARD_GAP
+    )
+
+
+def review_target(analysis_id):
+    """팝업이 다룰 분석 건의 최신 뷰. 저장·충돌 뒤 갱신된 값을 다시 읽기 위해 매번 찾는다."""
+    current = st.session_state.get("analysis_result") or {}
+    if current.get("analysis_id") == analysis_id:
+        return current
+    return find_batch_analysis(analysis_id)
+
+
+def refresh_review_fields(analysis_id):
+    """저장 뒤 해당 건의 판정 관련 값만 백엔드에서 다시 받아 화면 상태에 반영한다.
+
+    종료된 건은 폴링이 다시 조회하지 않으므로 여기서 직접 갱신해야 한다. 그러지
+    않으면 review_revision이 옛 값으로 남아 다음 저장이 409로 실패한다.
+    심층 분석 상세 등 이미 받아 둔 값은 건드리지 않는다.
+    """
+    full = api_client.get_result(analysis_id)
+    return apply_review_patch(
+        analysis_id,
+        {
+            **review_fields(full),
+            "final_verdict": full.get("final_verdict"),
+            "final_assessment": full.get("final_assessment"),
+        },
+    )
+
+
+def apply_saved_review(analysis_id, saved):
+    """PATCH 응답만으로 화면 상태를 먼저 갱신한다.
+
+    저장 직후 재조회(get_result)가 실패해도 서버에 저장된 판정과 새 revision이
+    화면에 남도록, 재조회보다 먼저 호출한다. approval_status 계산은 백엔드
+    views.analysis 와 같다.
+    """
+    target = review_target(analysis_id) or {}
+    verdict = saved.get("analyst_final_verdict")
+    if verdict is None:
+        approval = "PENDING"
+    elif verdict == target.get("final_verdict"):
+        approval = "APPROVED"
+    else:
+        approval = "MODIFIED"
+    return apply_review_patch(
+        analysis_id,
+        {
+            "analyst_final_verdict": verdict,
+            "approval_status": approval,
+            "review_revision": saved["revision"],
+        },
+    )
+
+
+def apply_review_patch(analysis_id, patch):
+    """배치 목록과 현재 상세 결과 양쪽에서 해당 건에 patch를 덮어쓴다."""
+    updated = None
+    batch_data = st.session_state.get("batch_data")
+    if batch_data:
+        for index, analysis in enumerate(batch_data["analyses"]):
+            if analysis["analysis_id"] == analysis_id:
+                updated = {**analysis, **patch}
+                batch_data["analyses"][index] = updated
+                break
+        st.session_state.batch_results = batch_data["analyses"]
+
+    current = st.session_state.get("analysis_result") or {}
+    if current.get("analysis_id") == analysis_id:
+        updated = {**current, **patch}
+        st.session_state.analysis_result = updated
+    return updated
+
+
+def format_review_time(value):
+    """백엔드의 ISO 시각을 대시보드가 도는 서버의 현지 시각으로 짧게 바꾼다."""
+    if not value:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def review_history_rows(items, analysis):
+    """수정 이력 표. 최신 저장이 위로 오고, 각 줄은 직전 그룹 → 저장한 그룹으로 보여 준다."""
+    system_group = system_group_key(analysis)
+    previous = system_group
+    rows = []
+    for item in items:
+        group = REVIEW_GROUP_BY_VERDICT.get(item.get("analyst_final_verdict"))
+        before = BATCH_GROUP_LABELS[previous].upper() if previous else "-"
+        after = BATCH_GROUP_LABELS[group].upper() if group else "REVIEW PENDING"
+        rows.append(
+            {
+                "Reviewed At": format_review_time(item.get("reviewed_at")),
+                "Reviewer": item.get("reviewer_id") or "-",
+                "Change": f"{before} → {after}",
+                "Notes": item.get("analyst_notes") or "",
+            }
+        )
+        previous = group or system_group
+    return list(reversed(rows))
+
+
+def open_review_dialog(analysis_id):
+    """판정 수정 팝업을 연다. 열기 직전에 판정 관련 값을 한 번 새로 받아 온다.
+
+    완료된 건은 폴링이 다시 조회하지 않아서, 다른 검토자가 그사이 바꾼 판정이 화면에
+    없을 수 있다. 그대로 열면 '현재 판정'은 옛 값인데 아래 수정 이력(매번 서버에서
+    읽음)에는 새 저장이 보여 서로 어긋난다. 팝업 안에서 다시 그릴 때마다 받아 오면
+    고르던 중에 선택이 바뀔 수 있으므로, 여는 순간 한 번만 받는다. 실패하면 화면에
+    있던 값으로 열고, 저장 시 revision 확인(409)이 마지막 안전장치가 된다.
+    """
+    st.session_state.get("review_conflict", {}).pop(analysis_id, None)
+    try:
+        refresh_review_fields(analysis_id)
+    except ApiError:
+        pass
+    review_dialog(analysis_id)
+
+
+def handle_review_conflict(analysis_id):
+    """다른 검토자가 먼저 저장한 경우. 최신 판정을 불러온 뒤 팝업을 다시 그린다.
+
+    팝업을 다시 그리지 않으면 화면에는 이전 판정이 남은 채 내부 revision만 새 값이
+    되어, 다시 저장하면 다른 검토자의 변경을 확인 없이 덮어쓰게 된다.
+    """
+    try:
+        latest = refresh_review_fields(analysis_id) or review_target(analysis_id) or {}
+    except ApiError as e:
+        # 최신 값을 모르면 revision도 옛 값 그대로이므로 다시 저장해도 409로 막힌다
+        message = (
+            "그사이 판정이 먼저 수정되었지만 최신 판정을 불러오지 못했습니다. "
+            f"팝업을 닫았다가 다시 열어 주세요. ({e.message})"
+        )
+    else:
+        who = ""
+        try:
+            items = (api_client.list_reviews(analysis_id) or {}).get("items") or []
+            if items:
+                who = f"{items[-1].get('reviewer_id')}님이 "
+        except ApiError:
+            pass
+        group = BATCH_GROUP_LABELS[triage_group_key(latest) or "needs_review"].upper()
+        # 저장 버튼을 두 번 눌렀거나 응답 전에 연결이 끊겨 내 저장이 먼저 반영된
+        # 경우에도 409가 나므로 '다른 검토자'라고 단정하지 않는다.
+        message = (
+            f"그사이 판정이 먼저 수정되었습니다. {who}{group}(으)로 저장한 상태입니다. "
+            "최신 판정을 확인한 뒤 다시 선택해 저장하세요."
+        )
+    st.session_state.setdefault("review_conflict", {})[analysis_id] = message
+    st.rerun(scope="fragment")
+
+
+@st.dialog("판정 검토", width="large")
+def review_dialog(analysis_id):
+    """분석가 판정 수정 팝업. 저장에 성공하면 앱 전체를 다시 그려 팝업을 닫는다."""
+    analysis = review_target(analysis_id)
+    if analysis is None:
+        st.error("선택한 분석을 찾을 수 없습니다. 화면을 새로 고친 뒤 다시 시도하세요.")
+        return
+
+    conflict = st.session_state.get("review_conflict", {}).get(analysis_id)
+    if conflict:
+        st.warning(conflict)
+    current = triage_group_key(analysis)
+    original = initial_group_key(analysis)
+    st.caption(
+        f"{analysis.get('filename') or '(이름 없음)'} · "
+        f"SHA-256 {truncate_hash(analysis.get('sha256') or '-')}"
+    )
+    st.markdown(
+        f"현재 판정 **{BATCH_GROUP_LABELS[current].upper()}**"
+        + (
+            f" · 시스템 초기 판정 {BATCH_GROUP_LABELS[original].upper()}"
+            if original and original != current
+            else ""
+        )
+    )
+
+    default_choice = (
+        "needs_review"
+        if is_reviewed(analysis) and analysis.get("analyst_final_verdict") is None
+        else current
+    )
+    choice = st.radio(
+        "수정할 판정",
+        options=tuple(REVIEW_VERDICT_BY_GROUP),
+        index=(
+            tuple(REVIEW_VERDICT_BY_GROUP).index(default_choice)
+            if default_choice in REVIEW_VERDICT_BY_GROUP
+            else 0
+        ),
+        format_func=lambda key: (
+            "REVIEW PENDING"
+            if REVIEW_VERDICT_BY_GROUP[key] is None
+            else BATCH_GROUP_LABELS[key].upper()
+        ),
+        horizontal=True,
+        # revision을 key에 넣어, 충돌로 최신 판정을 받아 오면 이전 선택이 남지 않고
+        # 최신 판정이 선택된 새 위젯으로 다시 만들어지게 한다. (key가 같으면 브라우저가
+        # 이전 선택을 계속 보여 줘서 화면과 실제 선택값이 어긋난다)
+        key=f"review_choice_{analysis_id}_{analysis.get('review_revision') or 0}",
+    )
+    notes = st.text_area(
+        "메모 (선택)",
+        max_chars=REVIEW_NOTES_MAX,
+        key=f"review_notes_{analysis_id}",
+    )
+    reviewer = st.text_input(
+        "검토자명",
+        value=st.session_state.get("reviewer_id", ""),
+        placeholder="예: HongGildong",
+        help="수정 이력에 남는 이름입니다. 영문, 숫자, _ . @ - 만 쓸 수 있습니다(최대 128자).",
+        key=f"review_reviewer_{analysis_id}",
+    ).strip()
+
+    # 현재 판정에 동의하는 검토도 저장할 수 있다. 같은 판정과 메모만 저장하는
+    # 경우에도 현재 revision으로 요청하여 다른 검토자의 변경과 충돌을 검사한다.
+    if st.button(
+        "저장", type="primary", key=f"review_save_{analysis_id}"
+    ):
+        if not REVIEWER_ID_PATTERN.fullmatch(reviewer):
+            st.error("검토자명은 영문, 숫자, _ . @ - 로 1~128자여야 합니다.")
+        else:
+            try:
+                saved = api_client.save_review(
+                    analysis_id,
+                    REVIEW_VERDICT_BY_GROUP[choice],
+                    reviewer,
+                    analysis.get("review_revision") or 0,
+                    notes.strip(),
+                )
+            except ApiError as e:
+                if e.code == "REVIEW_CONFLICT":
+                    handle_review_conflict(analysis_id)
+                elif e.code == "REVIEW_FORBIDDEN":
+                    st.error(
+                        "판정 수정 권한이 없습니다. 대시보드의 "
+                        "TRUST_TRIAGE_REVIEWER_TOKEN 설정을 확인하세요."
+                    )
+                else:
+                    st.error(f"저장 실패: {e.message} (코드 {e.code})")
+            else:
+                st.session_state.reviewer_id = reviewer
+                st.session_state.get("review_conflict", {}).pop(analysis_id, None)
+                # 재조회가 실패해도 저장된 판정·revision이 화면에 남도록 응답부터 반영한다
+                apply_saved_review(analysis_id, saved)
+                notice = (
+                    "검토를 보류했습니다. 시스템 판정은 유지됩니다."
+                    if REVIEW_VERDICT_BY_GROUP[choice] is None
+                    else f"판정을 {BATCH_GROUP_LABELS[choice].upper()}(으)로 저장했습니다."
+                )
+                try:
+                    refresh_review_fields(analysis_id)
+                except ApiError as e:
+                    st.session_state.review_notice = (
+                        f"{notice} "
+                        f"(다른 결과 항목은 새로 불러오지 못했습니다: {e.message})"
+                    )
+                else:
+                    st.session_state.review_notice = notice
+                # 특정 그룹을 보고 있었다면 옮겨 간 그룹으로 따라간다. 그룹 위젯은
+                # 다음 실행에서 만들어지기 전에 이 값으로 바꾼다.
+                if st.session_state.get("batch_group") not in (None, "total"):
+                    st.session_state.pending_batch_group = triage_group_key(
+                        review_target(analysis_id) or analysis
+                    )
+                st.rerun()
+
+    st.markdown("**수정 이력**")
+    try:
+        items = (api_client.list_reviews(analysis_id) or {}).get("items") or []
+    except ApiError as e:
+        st.caption(f"이력을 불러오지 못했습니다: {e.message}")
+        return
+    if not items:
+        st.caption("아직 수정 이력이 없습니다.")
+        return
+    rows = review_history_rows(items, analysis)
+    st.dataframe(
+        rows,
+        hide_index=True,
+        width="stretch",
+        height=min(35 * (len(rows) + 1) + 3, 250),
+    )
+
+
 def render_result_detail(analysis, target=st):
     """완료/진행/실패 결과가 공유하는 상세 shell. API 호출이나 polling은 하지 않는다."""
     state = result_detail_state(analysis)
     if not state["available"]:
         if analysis.get("status") == "FAILED":
             error = analysis.get("error") or {}
-            target.error("분석 실패: " + (error.get("message") or "원인을 확인할 수 없습니다."))
+            target.error(
+                "분석 실패: " + (error.get("message") or "원인을 확인할 수 없습니다.")
+            )
             if error.get("code"):
-                target.caption(f"코드 {error['code']} · 단계 {error.get('stage') or '-'}")
+                target.caption(
+                    f"코드 {error['code']} · 단계 {error.get('stage') or '-'}"
+                )
         else:
-            target.info(f"Initial Analysis 결과를 기다리고 있습니다. (상태: {analysis.get('status') or 'QUEUED'})")
+            target.info(
+                f"Initial Analysis 결과를 기다리고 있습니다. (상태: {analysis.get('status') or 'QUEUED'})"
+            )
         return
 
     shell = target.container(key="result_detail_shell", gap=DETAIL_COLUMN_GAP)
-    context, action = shell.columns([6, 1], gap=DETAIL_COLUMN_GAP)
+    # 배치 화면에서는 Batch Summary 머리글에 같은 버튼이 있으므로 여기서는 숨긴다.
+    if not st.session_state.get("batch_data"):
+        context, action = shell.columns([6, 1], gap=DETAIL_COLUMN_GAP)
+    else:
+        context, action = shell, None
     context.caption(
         f"{analysis.get('filename') or '(이름 없음)'} · "
-        f"SHA-256 {truncate_hash(analysis.get('sha256') or '-')}"
+        f"SHA-256 {analysis.get('sha256') or '-'}"
     )
-    if action.button(
+    if action is not None and action.button(
         "새 파일 분석", key="progressive_new_file_analysis", width="stretch"
     ):
         reset_analysis_session()
         st.rerun()
 
-    initial = detail_section(shell, "분석 요약", "summary")
+    notice = st.session_state.pop("review_notice", None)
+    if notice:
+        st.toast(notice)
+
+    initial = render_summary_section(shell, analysis)
+    final_label, final_badge = final_verdict_cell(analysis)
     verdicts = [
-        ("Initial Verdict", verdict_badge_markup(analysis.get("initial_verdict") or "Pending")),
-        ("Final Verdict", verdict_badge_markup(analysis.get("final_verdict") or "Pending")),
+        (
+            "Initial Verdict",
+            verdict_badge_markup(analysis.get("initial_verdict") or "Pending"),
+        ),
+        (final_label, final_badge),
         ("Route", route_badge_markup(analysis.get("route") or "-")),
         ("Priority", priority_badge_markup(analysis.get("priority") or "NORMAL")),
     ]
+    # (이름, 키, 서식, 이름에 마우스를 올리면 뜨는 설명)
     metrics = [
-        ("Raw Probability", "raw_probability", "{:.1%}"),
-        ("Calibrated Probability", "calibrated_probability", "{:.1%}"),
-        ("OOD Score", "ood_score", "{:.3f}"),
-        ("Disagreement", "disagreement", "{:.3f}"),
-        ("Difficulty", "difficulty_score", "{:.1f}"),
+        (
+            "Raw Probability",
+            "raw_probability",
+            "{:.1%}",
+            "모델이 처음 예측한 악성일 확률",
+        ),
+        (
+            "Calibrated Probability",
+            "calibrated_probability",
+            "{:.1%}",
+            "실제 확률에 가깝도록 보정한 악성 확률\n0.65 초과 0.983645 미만일 때 보류",
+        ),
+        (
+            "OOD Score",
+            "ood_score",
+            "{:.3f}",
+            "학습 데이터와 얼마나 다른 샘플인지 나타내는 점수\n0 미만 때 보류",
+        ),
+        (
+            "Disagreement",
+            "disagreement",
+            "{:.3f}",
+            "두 모델의 예측이 얼마나 다른지 나타내는 값\n0.3 이상일 때 보류",
+        ),
+        (
+            "Difficulty",
+            "difficulty_score",
+            "{:.1f}",
+            "PE 구조 이상 등 분석이 얼마나 어려운지 나타내는 점수\n6 이상일 때 보류",
+        ),
     ]
+    signals = analysis.get("triggered_signals") or []
+    # 예전 '라우팅 결정' 카드의 내용은 Route 오른쪽에 붙인다.
+    route_detail_html = (
+        '<div class="detail-route-detail">'
+        '<div class="summary-label">Reason</div>'
+        f'<div class="route-detail-value">{escape(analysis.get("reason") or "-")}</div>'
+        '<div class="summary-label">Triggered Signals</div>'
+        f'<div class="route-detail-value">{escape(", ".join(signals) if signals else "None")}</div>'
+        "</div>"
+    )
+
+    if "queue_name" in analysis:
+        queue_html = (
+            '<div class="detail-route-detail" style="margin-left: 20px; padding-left: 20px; border-left: 1px solid var(--border-light);">'
+            '<div class="summary-label">Queue</div>'
+            f'<div class="route-detail-value">{escape(analysis.get("queue_name") or "-")}</div>'
+            '<div class="summary-label">검토 유형</div>'
+            f'<div class="route-detail-value">{escape(analysis.get("priority_reason") or "-")}</div>'
+            '<div class="summary-label">분류 이유</div>'
+            f'<div class="route-detail-value">{escape(analysis.get("queue_reason") or "-")}</div>'
+            "</div>"
+        )
+        route_detail_html += queue_html
     initial.markdown(
-        '<div class="detail-verdicts">' + "".join(
+        '<div class="detail-top"><div class="detail-verdicts">'
+        + "".join(
             f'<div><div class="summary-label">{label}</div>{badge}</div>'
             for label, badge in verdicts
-        ) + '</div><div class="summary-divider"></div><div class="detail-metrics">'
+        )
+        + "</div>"
+        + route_detail_html
+        + '</div><div class="summary-divider"></div><div class="detail-metrics">'
         + "".join(
-            f'<div><div class="summary-label">{label}</div>'
+            f'<div><div class="summary-label">'
+            f'<span class="metric-tip" tabindex="0" data-tip="{tooltip_attr(tip)}">{label}</span></div>'
             f'<div class="summary-value">{escape(_metric_text(analysis.get(key), pattern))}</div></div>'
-            for label, key, pattern in metrics
-        ) + '</div>',
+            for label, key, pattern, tip in metrics
+        )
+        + "</div>",
         unsafe_allow_html=True,
     )
 
-    decision_col, pipeline_col = shell.columns(2, gap=DETAIL_COLUMN_GAP)
-    routing = detail_section(decision_col, "라우팅 결정", "routing")
-    routing.markdown(route_badge_markup(analysis.get("route") or "-"), unsafe_allow_html=True)
-    routing.write(f"**Reason**  \n{analysis.get('reason') or '-'}")
-    signals = analysis.get("triggered_signals") or []
-    routing.write("**Triggered Signals**  \n" + (", ".join(signals) if signals else "None"))
-    pipeline = detail_section(pipeline_col, "분석 파이프라인", "pipeline")
-    steps = [("ML Triage", "COMPLETED")]
-    steps.extend((label, state["tools"][key]) for label, key in (
-        ("CAPA", "capa"), ("FLOSS", "floss"), ("Speakeasy", "speakeasy"), ("CAPE", "cape")
-    ))
-    steps.append(("Final", analysis.get("status") or "QUEUED"))
-    pipeline.markdown('<div class="detail-pipeline">' + "".join(
-        f'<div class="pipeline-node"><div class="pipeline-name">{label}</div>'
-        f'{pipeline_state_markup(status)}</div>' for label, status in steps
-    ) + '</div>', unsafe_allow_html=True)
-
-    explanation = detail_section(shell, "설명 가능성", "shap")
+    explain_col, pipeline_col = shell.columns([7, 3], gap=DETAIL_COLUMN_GAP)
+    explanation = detail_section(explain_col, "설명 가능성", "shap")
     explanation.markdown("**SHAP 주요 특성 Top 5**")
     features = analysis.get("top_features") or analysis.get("shap_features") or []
     if features:
@@ -1061,13 +1596,30 @@ def render_result_detail(analysis, target=st):
     else:
         explanation.info("표시할 SHAP 특성이 없습니다.")
 
-    deep = detail_section(shell, "Deep Analysis", "deep")
+    pipeline = detail_section(pipeline_col, "분석 파이프라인", "pipeline")
+    steps = [("ML Triage", "COMPLETED")]
+    steps.extend(
+        (label, state["tools"][key])
+        for label, key in (
+            ("CAPA", "capa"),
+            ("FLOSS", "floss"),
+            ("Speakeasy", "speakeasy"),
+        )
+    )
+    steps.append(("Final", analysis.get("status") or "QUEUED"))
+    pipeline.markdown(
+        '<div class="detail-pipeline">'
+        + "".join(
+            f'<div class="pipeline-node"><div class="pipeline-name">{label}</div>'
+            f"{pipeline_state_markup(status)}</div>"
+            for label, status in steps
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    deep = detail_section(shell, "심층 분석", "deep")
     render_deep_analysis(analysis, deep, state)
-    technical = shell.expander("기술 세부 정보", expanded=False)
-    technical.write(f"**파일명:** {analysis.get('filename') or '-'}")
-    technical.write(f"**SHA256:** `{analysis.get('sha256') or '-'}`")
-    if analysis.get("analyzed_at"):
-        technical.write(f"**분석 시각:** {analysis['analyzed_at']}")
 
 
 def render_progressive_result(analysis, target=st):
@@ -1075,7 +1627,65 @@ def render_progressive_result(analysis, target=st):
     render_result_detail(analysis, target)
 
 
-def render_speakeasy(target, speakeasy):
+def deep_search_needle(query):
+    """검색어를 비교용으로 정리한다. 비어 있으면 None(=검색하지 않음)."""
+    needle = (query or "").strip().lower()
+    return needle or None
+
+
+def _cell_text(value):
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(str(item) for item in value).lower()
+    return str(value).lower()
+
+
+def deep_search_rows(rows, needle):
+    """어느 칸이든 검색어를 포함한 행만 남긴다. needle이 없으면 그대로."""
+    if not needle:
+        return rows
+    return [
+        row
+        for row in rows
+        if any(needle in _cell_text(value) for value in row.values())
+    ]
+
+
+def deep_search_table(target, rows, needle, **kwargs):
+    """표를 그린다. 검색 중이면 일치한 칸을 파란색으로 칠한다."""
+    if not needle:
+        target.dataframe(rows, **kwargs)
+        return
+    if not rows:
+        target.caption("검색어와 일치하는 항목이 없습니다.")
+        return
+    styled = pd.DataFrame(rows).style.map(
+        lambda value: DEEP_SEARCH_HIGHLIGHT if needle in _cell_text(value) else ""
+    )
+    target.dataframe(styled, **kwargs)
+
+
+def deep_search_label(title, shown, total, needle):
+    """검색 중에는 표 제목 옆에 '일치 / 전체' 건수를 붙인다."""
+    return f"{title} · {len(shown)} / {len(total)}건" if needle else title
+
+
+def speakeasy_tables(speakeasy):
+    """Speakeasy 결과를 화면에 그릴 표 단위로 나눈다. (API 표, 이벤트 표 3개)"""
+    behavior = speakeasy.get("behavior") or {}
+    calls = behavior.get("api_calls") or []
+    counts = Counter(str(event["api_name"]) for event in calls if event.get("api_name"))
+    tables = {
+        "api": [{"API": name, "Calls": count} for name, count in counts.most_common()]
+    }
+    for key in ("files", "network", "registry"):
+        tables[key] = [
+            {str(field): str(value)[:200] for field, value in event.items()}
+            for event in (behavior.get(key) or [])
+        ]
+    return tables
+
+
+def render_speakeasy(target, speakeasy, needle=None):
     """실제 반환된 이벤트만 요약하며 행위 의미나 MITRE 매핑은 추측하지 않는다."""
     behavior = speakeasy.get("behavior") or {}
     original_counts = speakeasy.get("event_counts")
@@ -1086,10 +1696,7 @@ def render_speakeasy(target, speakeasy):
     total, unique = target.columns(2, gap=DETAIL_COLUMN_GAP)
     total.metric("API Calls", len(calls))
     unique.metric("Unique APIs", len(counts))
-    target.caption(
-        "표시된 이벤트 기준 · "
-        "unique 수는 api_name이 있는 호출 기준입니다."
-    )
+    target.caption("표시된 이벤트 기준 · unique 수는 api_name이 있는 호출 기준입니다.")
     if speakeasy.get("behavior_truncated"):
         original_calls = original_counts.get("api_calls")
         if isinstance(original_calls, int) and original_calls > len(calls):
@@ -1097,20 +1704,40 @@ def render_speakeasy(target, speakeasy):
         else:
             target.caption("행동 이벤트는 일부만 미리보기로 표시됩니다.")
     if speakeasy.get("adapter_events_truncated"):
-        target.caption("Speakeasy 결과 수집 시 카테고리별 100개를 넘는 상세 이벤트가 생략됐습니다.")
+        target.caption(
+            "Speakeasy 결과 수집 시 카테고리별 100개를 넘는 상세 이벤트가 생략됐습니다."
+        )
     if speakeasy.get("worker_events_truncated") or speakeasy.get("details_omitted"):
         target.caption("결과 크기 제한으로 일부 상세 이벤트가 저장되지 않았습니다.")
-    elif speakeasy.get("events_truncated") and not speakeasy.get("adapter_events_truncated"):
+    elif speakeasy.get("events_truncated") and not speakeasy.get(
+        "adapter_events_truncated"
+    ):
         target.caption("일부 상세 이벤트가 저장되지 않았습니다.")
-    if counts:
+    tables = speakeasy_tables(speakeasy)
+    if counts and needle:
+        # 검색 중에는 미리보기 개수 제한 없이 일치한 API를 모두 보여 준다
+        deep_search_table(
+            target,
+            deep_search_rows(tables["api"], needle),
+            needle,
+            hide_index=True,
+            width="stretch",
+        )
+    elif counts:
         target.dataframe(
-            [{"API": name, "Calls": count} for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)],
-            hide_index=True, width="stretch",
+            [
+                {"API": name, "Calls": count}
+                for name, count in counts.most_common(SPEAKEASY_PREVIEW_LIMIT)
+            ],
+            hide_index=True,
+            width="stretch",
         )
         if len(counts) > SPEAKEASY_PREVIEW_LIMIT:
             target.caption(f"호출 수 기준 상위 {SPEAKEASY_PREVIEW_LIMIT}개 API 표시")
     else:
-        target.caption("No API calls detected" if not calls else "API names unavailable")
+        target.caption(
+            "No API calls detected" if not calls else "API names unavailable"
+        )
 
     for key, title, empty in (
         ("files", "Files", "No file activity detected"),
@@ -1124,7 +1751,8 @@ def render_speakeasy(target, speakeasy):
             "registry": ("registry_access",),
         }[key]
         original_total = sum(
-            count for name in source_names
+            count
+            for name in source_names
             if isinstance((count := original_counts.get(name)), int)
         )
         suffix = (
@@ -1136,6 +1764,15 @@ def render_speakeasy(target, speakeasy):
         if not events:
             target.caption(empty)
             continue
+        if needle:
+            deep_search_table(
+                target,
+                deep_search_rows(tables[key], needle),
+                needle,
+                hide_index=True,
+                width="stretch",
+            )
+            continue
         # 키를 그대로 유지하고 중첩 값은 길이를 제한한 텍스트로 표시한다.
         rows = [
             {str(field): str(value)[:200] for field, value in event.items()}
@@ -1143,7 +1780,9 @@ def render_speakeasy(target, speakeasy):
         ]
         target.dataframe(rows, hide_index=True, width="stretch")
         if len(events) > SPEAKEASY_PREVIEW_LIMIT:
-            target.caption(f"처음 {SPEAKEASY_PREVIEW_LIMIT}개 이벤트 표시 · 전체는 Raw details에서 확인")
+            target.caption(
+                f"처음 {SPEAKEASY_PREVIEW_LIMIT}개 이벤트 표시 · 전체는 Raw details에서 확인"
+            )
     if speakeasy.get("error"):
         target.warning(speakeasy["error"].get("message") or "Speakeasy 실행 오류")
     target.expander("Raw details", expanded=False).json(speakeasy)
@@ -1155,8 +1794,14 @@ def render_static_detail_notice(target, tool):
     diagnostic = tool.get("details_error") or {}
     if status == "OMITTED_TOO_LARGE":
         actual, limit = diagnostic.get("actual_bytes"), diagnostic.get("limit_bytes")
-        size = f" ({actual:,} / {limit:,} bytes)" if isinstance(actual, int) and isinstance(limit, int) else ""
-        target.caption(f"분석은 완료됐지만 상세 결과가 저장 상한을 넘어 생략됐습니다{size}.")
+        size = (
+            f" ({actual:,} / {limit:,} bytes)"
+            if isinstance(actual, int) and isinstance(limit, int)
+            else ""
+        )
+        target.caption(
+            f"분석은 완료됐지만 상세 결과가 저장 상한을 넘어 생략됐습니다{size}."
+        )
     elif status == "ARCHIVE_FAILED":
         code = diagnostic.get("code")
         suffix = f" ({code})" if isinstance(code, str) else ""
@@ -1165,7 +1810,9 @@ def render_static_detail_notice(target, tool):
 
 def render_deep_analysis(analysis, deep, state):
     status = state["deep"]
-    deep.markdown(f"**Status: {status}**")
+    deep.markdown(
+        f"**{ {'QUEUED': '대기', 'RUNNING': '진행 중', 'COMPLETED': '완료', 'FAILED': '실패', 'NOT_REQUIRED': '미실행'}.get(status, status) }**"
+    )
     if status == "QUEUED":
         deep.info("심층 분석 대기 중입니다. 완료되면 결과가 자동으로 갱신됩니다.")
     elif status == "RUNNING":
@@ -1202,47 +1849,96 @@ def render_deep_analysis(analysis, deep, state):
     # 완료·실패 시점에 존재하는 결과만 보여 준다. 일부 필드가 없어도 나머지
     # 결과와 Initial Analysis는 계속 렌더링한다.
     capa = analysis.get("capa") or {}
-    capa_box = deep.expander("CAPA", expanded=bool(capa))
     capabilities = capa.get("capabilities") or []
-    if capabilities:
-        capa_box.dataframe(capabilities, hide_index=True, width="stretch")
-    else:
-        capa_box.caption(f"Status: {statuses.get('capa', 'NOT_REQUIRED')}")
-    render_static_detail_notice(capa_box, capa)
-
     floss = analysis.get("floss") or {}
-    floss_box = deep.expander("FLOSS", expanded=bool(floss))
     strings = floss.get("strings") or {}
     string_rows = [
         {"Type": kind, "String": value}
         for kind, values in strings.items()
         for value in (values or [])
     ]
+    speakeasy = analysis.get("speakeasy") or {}
+    speakeasy_rows = [
+        row
+        for rows in (speakeasy_tables(speakeasy).values() if speakeasy else ())
+        for row in rows
+    ]
+    show_evidence = evidence_visible(analysis)
+    evidence = (analysis.get("evidence") or []) if show_evidence else []
+
+    # 검색창 하나로 아래 표들을 한꺼번에 거른다.
+    needle = deep_search_needle(
+        deep.text_input(
+            "Deep Analysis 결과에서 찾기",
+            key="deep_filter_query",
+            placeholder="문자열, API, 기술 ID, 규칙 이름 등의 일부",
+        )
+    )
+    capa_hits = deep_search_rows(capabilities, needle)
+    floss_hits = deep_search_rows(string_rows, needle)
+    speakeasy_hits = deep_search_rows(speakeasy_rows, needle)
+    evidence_hits = deep_search_rows(evidence, needle)
+    if needle:
+        hit_counts = [
+            ("CAPA", capa_hits),
+            ("FLOSS", floss_hits),
+            ("Speakeasy", speakeasy_hits),
+        ]
+        if show_evidence:
+            hit_counts.append(("MITRE", evidence_hits))
+        deep.caption(" · ".join(f"{name} {len(hits)}" for name, hits in hit_counts))
+
+    capa_box = deep.expander(
+        deep_search_label("CAPA", capa_hits, capabilities, needle),
+        expanded=bool(capa_hits) if needle else bool(capa),
+    )
+    if capabilities:
+        deep_search_table(capa_box, capa_hits, needle, hide_index=True, width="stretch")
+    else:
+        capa_box.caption(f"Status: {statuses.get('capa', 'NOT_REQUIRED')}")
+    render_static_detail_notice(capa_box, capa)
+
+    floss_box = deep.expander(
+        deep_search_label("FLOSS", floss_hits, string_rows, needle),
+        expanded=bool(floss_hits) if needle else bool(floss),
+    )
     if string_rows:
-        floss_box.dataframe(string_rows, hide_index=True, width="stretch")
+        deep_search_table(
+            floss_box, floss_hits, needle, hide_index=True, width="stretch"
+        )
     else:
         floss_box.caption(f"Status: {statuses.get('floss', 'NOT_REQUIRED')}")
     if floss.get("limited_mode"):
-        action = "분석했습니다" if floss.get("status") == "COMPLETED" else "분석을 시도했습니다"
-        floss_box.caption(f"FLOSS 제한 모드: 정적 문자열 중심으로 {action}. stack·tight·decoded·언어별 추가 문자열은 분석하지 않았습니다.")
+        action = (
+            "분석했습니다"
+            if floss.get("status") == "COMPLETED"
+            else "분석을 시도했습니다"
+        )
+        floss_box.caption(
+            f"FLOSS 제한 모드: 정적 문자열 중심으로 {action}. stack·tight·decoded·언어별 추가 문자열은 분석하지 않았습니다."
+        )
     render_static_detail_notice(floss_box, floss)
 
-    speakeasy = analysis.get("speakeasy") or {}
-    speakeasy_box = deep.expander("Speakeasy", expanded=bool(speakeasy))
+    speakeasy_box = deep.expander(
+        deep_search_label("Speakeasy", speakeasy_hits, speakeasy_rows, needle),
+        expanded=bool(speakeasy_hits) if needle else bool(speakeasy),
+    )
     if speakeasy:
-        render_speakeasy(speakeasy_box, speakeasy)
+        render_speakeasy(speakeasy_box, speakeasy, needle)
     else:
-        speakeasy_box.caption(
-            f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}"
-        )
+        speakeasy_box.caption(f"Status: {statuses.get('speakeasy', 'NOT_REQUIRED')}")
 
     # 근거·해석·최종 평가는 심층 분석이 끝난 뒤에만 그린다. 대기·진행 중에는 위의
     # 상태 안내만 남긴다. 실패 시 MITRE는 확보된 부분 근거가 있을 때만 보여 준다.
-    if evidence_visible(analysis):
-        evidence = analysis.get("evidence") or []
-        evidence_box = deep.expander("MITRE Evidence", expanded=bool(evidence))
+    if show_evidence:
+        evidence_box = deep.expander(
+            deep_search_label("MITRE Evidence", evidence_hits, evidence, needle),
+            expanded=bool(evidence_hits) if needle else bool(evidence),
+        )
         if evidence:
-            evidence_box.dataframe(evidence, hide_index=True, width="stretch")
+            deep_search_table(
+                evidence_box, evidence_hits, needle, hide_index=True, width="stretch"
+            )
         else:
             evidence_box.caption("표시할 MITRE ATT&CK 근거가 없습니다.")
 
@@ -1263,12 +1959,22 @@ def render_deep_analysis(analysis, deep, state):
     if assessment:
         assessment_box = deep.expander("Final Assessment", expanded=True)
         assessment_box.write(
-            f"**Final Verdict:** {assessment.get('final_verdict') or analysis.get('final_verdict') or '-'}"
+            f"**Final Verdict:** {display_verdict(analysis) or '-'}"
         )
         assessment_box.write(
-            f"**Disposition:** {assessment.get('disposition') or '-'}"
+            f"**System Verdict:** {assessment.get('final_verdict') or analysis.get('final_verdict') or '-'}"
         )
-        assessment_box.write(assessment.get("reason") or "-")
+        assessment_box.write(f"**Analysis Status:** {analysis.get('status') or status}")
+        review = analysis.get("approval_status") or (
+            "PENDING" if assessment.get("requires_human_review") else "AUTO_POLICY"
+        )
+        assessment_box.write(
+            f"**Review Status:** {'REVIEW PENDING' if review == 'PENDING' else review}"
+        )
+        assessment_box.write(
+            f"**System Disposition:** {assessment.get('disposition') or '-'}"
+        )
+        assessment_box.write(f"**System Reason:** {assessment.get('reason') or '-'}")
 
 
 def commit_receipt(batch_data):
@@ -1320,8 +2026,7 @@ def render_intake_notice(target, receipt):
 
     for item in errors:
         target.error(
-            f"접수 실패 · {item['filename']} — {item['message']} "
-            f"(코드 {item['code']})"
+            f"접수 실패 · {item['filename']} — {item['message']} (코드 {item['code']})"
         )
 
     if skipped:
@@ -1391,9 +2096,8 @@ def detail_blocker(analysis):
 
     missing = [key for key in DETAIL_REQUIRED_FIELDS if analysis.get(key) is None]
     if missing:
-        return (
-            "상세 화면에 필요한 모델 결과가 이 이력에 없습니다: "
-            + ", ".join(missing)
+        return "상세 화면에 필요한 모델 결과가 이 이력에 없습니다: " + ", ".join(
+            missing
         )
     return None
 
@@ -1482,7 +2186,9 @@ def hash_search_rows(analyses):
             "File": analysis.get("filename") or "-",
             "Status": analysis.get("status") or "-",
             "Initial Verdict": analysis.get("initial_verdict") or "-",
-            "Final Verdict": analysis.get("final_verdict") or "-",
+            "Final Verdict": display_verdict(analysis) or "-",
+            # 분석가가 판정을 수정한 이력도 배치 표와 같은 글자로 보여 준다
+            REVIEW_COLUMN: review_mark(analysis),
         }
         for analysis in analyses
     ]
@@ -1537,7 +2243,9 @@ def render_hash_search_results(target):
         target.info(blocker)
         return
 
-    if target.button("상세 보기", key="hash_search_open", type="primary") and open_search_result(selected["analysis_id"]):
+    if target.button(
+        "상세 보기", key="hash_search_open", type="primary"
+    ) and open_search_result(selected["analysis_id"]):
         st.rerun()
 
 
@@ -1669,56 +2377,56 @@ def render_input_view():
 
 
 def render_batch_summary(batch_data):
-    """Render the analyst-priority summary derived from analysis records."""
+    """배치 화면 머리글: 제목, Batch ID, 새 파일 분석 버튼.
+
+    건수 타일과 분류 선택은 render_batch_triage()의 요약 카드가 그린다.
+    """
     summary = derive_batch_summary(batch_data["analyses"])
     batch_data["summary"] = summary
-    st.markdown(
+    heading, action = st.columns([6, 1], vertical_alignment="center")
+    heading.markdown(
         f"""
-        <div class="batch-section-heading batch-section-heading-first">
-            <span>Batch Summary</span>
+        <div class="batch-section-heading batch-section-heading-first batch-heading-inline">
+            <span class="batch-title-large">분석 결과 요약</span>
             <span class="batch-context">Batch ID · {escape(batch_id_label(batch_data))}</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    summary_card = st.container(border=True, key="batch_summary_card")
-    summary_card.markdown(
-        f"""
-        <div class="batch-summary-grid">
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Total</div>
-                <div class="batch-summary-value">{summary['total']}</div>
-            </div>
-            <div class="batch-summary-item batch-summary-priority">
-                <div class="batch-summary-label">Needs Review</div>
-                <div class="batch-summary-value">{summary['high_risk_uncertain']}</div>
-            </div>
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Auto Malicious</div>
-                <div class="batch-summary-value">{summary['auto_malicious']}</div>
-            </div>
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Auto Benign</div>
-                <div class="batch-summary-value">{summary['auto_benign']}</div>
-            </div>
-            <div class="batch-summary-item">
-                <div class="batch-summary-label">Failed</div>
-                <div class="batch-summary-value">{summary['failed']}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # 진행 중 화면에서는 이 버튼이 fragment 안에 있어서, 눌러도 fragment만 다시 그려진다.
+    # 입력 화면으로 돌아가려면 st.rerun()으로 앱 전체를 다시 실행해야 한다.
+    if action.button("새 파일 분석", key="batch_new_file_analysis", width="stretch"):
+        reset_analysis_session()
+        st.rerun()
 
 
 def batch_group_rows(group_key, analyses):
     """Build group-specific table rows without leaking mock generation into UI."""
-    if group_key == "needs_review":
+    if group_key == "total":
+        # Group 열을 File 보다 먼저 넣어야 표 맨 왼쪽에 보인다.
+        return [
+            {
+                "Group": triage_group_label(analysis),
+                "File": analysis["filename"],
+                "SHA-256": analysis.get("sha256") or "-",
+                "Status": analysis["status"],
+                "Initial Verdict": analysis.get("initial_verdict") or "-",
+                "Final Verdict": display_verdict(analysis) or "-",
+                "System Reason": (analysis.get("final_assessment") or {}).get("reason")
+                or analysis.get("reason") or "-",
+            }
+            for analysis in analyses
+        ]
+    if group_key in {"needs_review", "inconclusive"}:
         return [
             {
                 "File": analysis["filename"],
+                "SHA-256": analysis.get("sha256") or "-",
                 "Status": analysis["status"],
-                "JRR Reason": analysis["reason"],
+                REVIEW_COLUMN: review_mark(analysis),
+                "Final Verdict": display_verdict(analysis) or "-",
+                "System Reason": (analysis.get("final_assessment") or {}).get("reason")
+                or analysis.get("reason") or "-",
                 "Deep Analysis Status": deep_analysis_status_text(analysis),
             }
             for analysis in analyses
@@ -1727,18 +2435,21 @@ def batch_group_rows(group_key, analyses):
         return [
             {
                 "File": analysis["filename"],
+                "SHA-256": analysis.get("sha256") or "-",
                 "Status": analysis["status"],
-                "Calibrated Probability": (
-                    f"{analysis['calibrated_probability']:.4f}"
-                ),
-                "Reason": analysis["reason"],
+                REVIEW_COLUMN: review_mark(analysis),
+                "Calibrated Probability": (f"{analysis['calibrated_probability']:.4f}"),
+                "System Reason": (analysis.get("final_assessment") or {}).get("reason")
+                or analysis.get("reason") or "-",
             }
             for analysis in analyses
         ]
     return [
         {
             "File": analysis["filename"],
+            "SHA-256": analysis.get("sha256") or "-",
             "Status": analysis["status"],
+            "Final Verdict": display_verdict(analysis) or "-",
             "Initial Verdict": analysis["initial_verdict"],
             "Reason": analysis["reason"],
         }
@@ -1746,9 +2457,11 @@ def batch_group_rows(group_key, analyses):
     ]
 
 
-def render_batch_group_results(group_key, analyses):
-    """Render one triage group and bind its selection to the detail view."""
-    result_card = st.container(border=True, key="batch_group_results")
+def render_batch_group_results(group_key, analyses, result_card=st):
+    """Render one triage group and bind its selection to the detail view.
+
+    표와 파일 선택은 요약 카드 안(result_card)에 이어서 그린다.
+    """
     if not analyses:
         result_card.info("이 그룹에 해당하는 분석 결과가 없습니다.")
         return
@@ -1758,7 +2471,10 @@ def render_batch_group_results(group_key, analyses):
         rows,
         hide_index=True,
         width="stretch",
-        height=min(38 * (len(rows) + 1), 300),
+        # 한 줄 35px(머리글 포함) + 테두리 3px. 38px로 잡으면 맨 아래에 빈 줄이 생긴다.
+        height=min(35 * (len(rows) + 1) + 3, 300),
+        # 64자 전체를 넣되 열 폭은 줄여 둔다. 셀을 클릭하면 전체 값을 보고 복사할 수 있다.
+        column_config={"SHA-256": {"width": "medium"}},
     )
 
     analysis_by_id = {analysis["analysis_id"]: analysis for analysis in analyses}
@@ -1767,9 +2483,7 @@ def render_batch_group_results(group_key, analyses):
     if selected_id not in analysis_by_id:
         current_id = st.session_state.get("selected_analysis_id")
         selected_id = (
-            current_id
-            if current_id in analysis_by_id
-            else next(iter(analysis_by_id))
+            current_id if current_id in analysis_by_id else next(iter(analysis_by_id))
         )
         st.session_state[selector_key] = selected_id
         st.session_state.selected_analysis_id = selected_id
@@ -1788,12 +2502,12 @@ def render_batch_group_results(group_key, analyses):
     )
 
     selected = analysis_by_id.get(st.session_state.get(selector_key))
-    if group_key == "needs_review" and selected is not None:
+    if selected is not None and selected.get("initial_verdict") == "HIGH_RISK_UNCERTAIN":
         result_card.markdown(
             f"""
             <div class="deep-status-row">
                 <span class="deep-status-label">Deep Analysis</span>
-                {deep_analysis_status_markup(selected['deep_analysis_status'])}
+                {deep_analysis_status_markup(selected["deep_analysis_status"])}
             </div>
             """,
             unsafe_allow_html=True,
@@ -1810,19 +2524,20 @@ def render_batch_triage(batch_data):
     "없음" 안내와 어긋나기 때문이다. analysis_result는 비우지 않으므로
     검색어를 지우거나 결과가 다시 생기면 이전 화면으로 그대로 돌아온다.
     """
-    labels = {
-        "needs_review": "Needs Review",
-        "auto_malicious": "Auto Malicious",
-        "auto_benign": "Auto Benign",
-        "failed": "Failed",
-    }
+    labels = BATCH_GROUP_LABELS
     options = tuple(labels)
+    # 판정 수정 팝업이 남긴 '옮겨 간 그룹'. 그룹 위젯을 만들기 전에만 바꿀 수 있다.
+    pending_group = st.session_state.pop("pending_batch_group", None)
+    if pending_group in options:
+        st.session_state.batch_group = pending_group
 
     batch_area = st.container(key="batch_triage_area")
     with batch_area:
+        # 1. 머리글: Batch Summary, Batch ID, 새 파일 분석
         render_batch_summary(batch_data)
         render_intake_notice(st, batch_data)
 
+        # 2. 검색
         query = st.text_input(
             "파일명 또는 SHA-256으로 찾기",
             key="batch_filter_query",
@@ -1837,44 +2552,59 @@ def render_batch_triage(batch_data):
                 st.info("검색 조건에 맞는 파일이 없습니다.")
                 st.stop()
         groups = group_batch_analyses(matched)
+        totals = group_batch_analyses(analyses)
+        # Total 타일은 걸러진 목록 전체를 그대로 보여 준다.
+        groups["total"] = matched
+        totals["total"] = analyses
 
-        st.markdown(
-            '<div class="batch-section-heading">분석 결과 분류</div>',
-            unsafe_allow_html=True,
-        )
-        format_group = lambda key: f"{labels[key]} ({len(groups[key])})"
-        if hasattr(st, "segmented_control"):
-            group_key = st.segmented_control(
-                "분석 결과 분류",
-                options=options,
-                default="needs_review",
-                format_func=format_group,
-                key="batch_group",
-                label_visibility="collapsed",
+        def count_text(shown, total):
+            # 검색 중에는 "검색 결과 / 전체", 아닐 때는 숫자 하나만 보여 준다.
+            return f"{shown} / {total}" if searching else f"{total}"
+
+        # 3. 요약 + 분류 카드: 건수 타일을 눌러 분류를 고르고, 아래에 그 목록을 보여 준다.
+        summary_card = st.container(border=True, key="batch_summary_card")
+        with summary_card:
+            # 타일 모양은 CSS(.st-key-batch_group)가 만든다. 첫 줄은 분류 이름, 둘째 줄은 건수.
+            format_group = lambda key: (
+                f"{labels[key]}\n{count_text(len(groups[key]), len(totals[key]))}"
             )
-        else:
-            group_key = st.radio(
-                "분석 결과 분류",
-                options=options,
-                index=0,
-                format_func=format_group,
-                key="batch_group",
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-        group_key = group_key or "needs_review"
-        render_batch_group_results(group_key, groups[group_key])
-        if searching and not groups[group_key]:
-            # 매칭은 있지만 지금 보는 그룹에는 없다. render_batch_group_results()는
-            # 빈 그룹에서 선택을 건드리지 않고 돌아오므로, 그대로 두면 검색과
-            # 무관한 직전 파일의 상세가 아래에 남는다. 그룹 위젯은 이미 그려졌으니
-            # 사용자가 건수가 표시된 그룹을 고르면 기존 선택 로직이 상세를 잇는다.
-            # 그룹·선택·analysis_result는 바꾸지 않는다 — 검색어를 지우면 그대로 복귀.
-            st.info(
-                f"검색 결과 {len(matched)}건은 다른 그룹에 있습니다. "
-                "위 분류에서 건수가 표시된 그룹을 선택하세요."
-            )
-            st.stop()
+            if hasattr(st, "segmented_control"):
+                group_options = dict(
+                    options=options,
+                    default="total",
+                    format_func=format_group,
+                    key="batch_group",
+                    label_visibility="collapsed",
+                )
+                # Streamlit 1.50부터 생긴 width 옵션의 기본값("content")은 타일을 내용 크기로
+                # 줄인다. 지원하는 버전에서는 카드 폭을 채우도록 "stretch"를 준다.
+                if "width" in inspect.signature(st.segmented_control).parameters:
+                    group_options["width"] = "stretch"
+                group_key = st.segmented_control("분석 결과 분류", **group_options)
+            else:
+                group_key = st.radio(
+                    "분석 결과 분류",
+                    options=options,
+                    index=0,
+                    format_func=format_group,
+                    key="batch_group",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+            group_key = group_key or "total"
+            # 타일과 표 사이 구분선은 CSS(.st-key-batch_group의 border-bottom)가 그린다.
+            render_batch_group_results(group_key, groups[group_key], summary_card)
+            if searching and not groups[group_key]:
+                # 매칭은 있지만 지금 보는 그룹에는 없다. render_batch_group_results()는
+                # 빈 그룹에서 선택을 건드리지 않고 돌아오므로, 그대로 두면 검색과
+                # 무관한 직전 파일의 상세가 아래에 남는다. 그룹 위젯은 이미 그려졌으니
+                # 사용자가 건수가 표시된 그룹을 고르면 기존 선택 로직이 상세를 잇는다.
+                # 그룹·선택·analysis_result는 바꾸지 않는다 — 검색어를 지우면 그대로 복귀.
+                st.info(
+                    f"검색 결과 {len(matched)}건은 다른 그룹에 있습니다. "
+                    "위 분류에서 건수가 표시된 그룹을 선택하세요."
+                )
+                st.stop()
         if not groups[group_key]:
             # 빈 그룹에서 다른 그룹의 이전 상세 결과를 재사용하지 않는다.
             st.stop()
@@ -1897,7 +2627,7 @@ def render_polling_panel(batch_data, auto_refresh):
 
     st.markdown(
         f"""
-        <div class="batch-section-heading batch-section-heading-first">
+        <div class="batch-section-heading batch-section-heading-first batch-heading-left">
             <span>분석 진행 중</span>
             <span class="batch-context">
                 Batch ID · {escape(batch_id_label(batch_data))}
@@ -2023,12 +2753,193 @@ st.set_page_config(
     layout="wide",
 )
 
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+
+def flip_theme():
+    st.session_state.dark_mode = not st.session_state.dark_mode
+
+
+dark = st.session_state.dark_mode
+
+_, toggle_col = st.columns([12, 1])
+with toggle_col:
+    st.button(
+        "",
+        key="theme_toggle",
+        on_click=flip_theme,
+    )
+
+TOGGLE_ICON = "var(--toggle-track)"
+
+SUN_SHADOW = ", ".join(
+    [f"0 0 0 2px {TOGGLE_ICON}"]  # 가운데 원
+    + [
+        f"{x}px {y}px 0 -1px {TOGGLE_ICON}"
+        for x, y in [  # 햇살 8개
+            (7, 0),
+            (-7, 0),
+            (0, 7),
+            (0, -7),
+            (5, 5),
+            (-5, 5),
+            (5, -5),
+            (-5, -5),
+        ]
+    ]
+)
+
+LIGHT_THEME = {
+    "bg": "#f8fafc",
+    "surface": "#ffffff",
+    "text": "#0f172a",
+    "surface-muted": "#f8fafc",
+    "text-2": "#334155",
+    "text-3": "#475569",
+    "text-muted": "#64748b",
+    "text-faint": "#94a3b8",
+    "border": "#e2e8f0",
+    "border-strong": "#cbd5e1",
+    "neutral-bg": "#f1f5f9",
+    "danger-fg": "#991b1b",
+    "danger-bg": "#fee2e2",
+    "danger-border": "#fecaca",
+    "success-fg": "#166534",
+    "success-bg": "#dcfce7",
+    "success-border": "#bbf7d0",
+    "warning-fg": "#9a3412",
+    "warning-bg": "#ffedd5",
+    "warning-border": "#fed7aa",
+    "warning-soft": "#fff7ed",
+    "info-fg": "#1d4ed8",
+    "info-bg": "#dbeafe",
+    "info-border": "#bfdbfe",
+    "info-strong": "#1e40af",
+    "info-strong-border": "#93c5fd",
+    "chart-malicious": "#dc2626",
+    "chart-benign": "#2563eb",
+    "df-filter": "none",
+    # 토글
+    "toggle-track": "#0f172a",
+    "toggle-knob": "#ffffff",
+    "toggle-knob-x": "4px",  # 손잡이 왼쪽
+    "icon-size": "4px",
+    "icon-top": "12px",
+    "icon-offset": "10px",
+    "icon-bg": TOGGLE_ICON,
+    "icon-shadow": SUN_SHADOW,  # 해
+}
+
+DARK_THEME = {
+    "bg": "#020617",
+    "surface": "#0f172a",
+    "text": "#f1f5f9",
+    "surface-muted": "#1e293b",
+    "text-2": "#cbd5e1",
+    "text-3": "#a8b3c4",
+    "text-muted": "#94a3b8",
+    "text-faint": "#64748b",
+    "border": "#1e293b",
+    "border-strong": "#334155",
+    "neutral-bg": "#1e293b",
+    "danger-fg": "#fca5a5",
+    "danger-bg": "#450a0a",
+    "danger-border": "#7f1d1d",
+    "success-fg": "#86efac",
+    "success-bg": "#052e16",
+    "success-border": "#14532d",
+    "warning-fg": "#fdba74",
+    "warning-bg": "#431407",
+    "warning-border": "#7c2d12",
+    "warning-soft": "#2a1106",
+    "info-fg": "#93c5fd",
+    "info-bg": "#172554",
+    "info-border": "#1e3a8a",
+    "info-strong": "#bfdbfe",
+    "info-strong-border": "#1e40af",
+    "chart-malicious": "#f87171",
+    "chart-benign": "#60a5fa",
+    "df-filter": "invert(1) hue-rotate(180deg)",
+    # 토글
+    "toggle-track": "#f1f5f9",
+    "toggle-knob": "#0f172a",
+    "toggle-knob-x": "calc(100% - 28px)",  # 손잡이 오른쪽
+    "icon-size": "12px",
+    "icon-top": "7px",
+    "icon-offset": "6px",
+    "icon-bg": "transparent",
+    "icon-shadow": f"inset -4px -2px 0 0 {TOGGLE_ICON}",  # 달
+}
+
+
+def streamlit_theme_is_dark():
+    """Streamlit이 실제로 쓰는 테마가 다크인지. 표(st.dataframe)는 이 테마로 그려진다.
+
+    테마를 고정하지 않으면 Streamlit은 브라우저/OS 설정을 따른다. 그래서 Chrome이
+    다크 모드면 앱이 라이트여도 표는 검게 그려진다. 알 수 없으면 라이트로 본다.
+    """
+    theme = getattr(st.context, "theme", None)  # Streamlit 1.46+
+    return getattr(theme, "type", None) == "dark"
+
+
+palette = dict(DARK_THEME if dark else LIGHT_THEME)
+# 표는 CSS로 색을 바꿀 수 없어 필터로 뒤집는다. Streamlit 테마와 앱 테마가
+# 다를 때만 뒤집어야 시스템 다크 모드에서도 표 색이 앱과 맞는다.
+palette["df-filter"] = (
+    "invert(1) hue-rotate(180deg)" if dark != streamlit_theme_is_dark() else "none"
+)
+css_vars = "\n".join(f"--{name}: {value};" for name, value in palette.items())
+st.markdown(f"<style>:root {{ {css_vars} }}</style>", unsafe_allow_html=True)
+
 st.markdown(
     """
     <style>
         .stApp {
-            background: #f8fafc;
-            color: #0f172a;
+            background: var(--bg);
+            color: var(--text);
+        }
+        
+        /* 트랙 (알약 모양 바탕) */
+        .st-key-theme_toggle button {
+            position: relative;
+            width: 60px; height: 32px; min-height: 32px;
+            padding: 0;
+            border-radius: 999px;
+            border: 2px solid var(--toggle-track);
+            background: var(--toggle-track);
+            transition: background .25s, border-color .25s;
+        }
+        
+        .st-key-theme_toggle button:hover,
+        .st-key-theme_toggle button:focus,
+        .st-key-theme_toggle button:active {
+            background: var(--toggle-track) !important;
+        }
+        
+        /* 손잡이 */
+        .st-key-theme_toggle button::before {
+            content: "";
+            position: absolute; top: 2px;
+            left: var(--toggle-knob-x);
+            width: 24px; height: 24px;
+            border-radius: 50%;
+            background: var(--toggle-knob);
+            transition: left .25s;
+        }
+        
+        /* 아이콘 (해 또는 달) */
+        .st-key-theme_toggle button::after {
+            content: "";
+            position: absolute;
+            top: var(--icon-top);
+            left: calc(var(--toggle-knob-x) + var(--icon-offset));
+            width: var(--icon-size); height: var(--icon-size);
+            border-radius: 50%;
+            background: var(--icon-bg);
+            box-shadow: var(--icon-shadow);
+            transform: rotate(-20deg);
+            transition: left .25s;
         }
 
         header[data-testid="stHeader"],
@@ -2080,8 +2991,44 @@ st.markdown(
             gap: var(--detail-gap);
         }
 
-        .detail-verdicts, .detail-pipeline {
+        .detail-verdicts {
             grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        /* 분석 파이프라인은 좁은 오른쪽 칸에 들어가므로 2칸 x 3줄 */
+        .detail-pipeline {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        /* 단계가 홀수(5개)라 마지막 Final은 두 칸을 모두 쓴다 */
+        .detail-pipeline .pipeline-node:last-child:nth-child(odd) {
+            grid-column: 1 / -1;
+        }
+
+        /* 분석 요약 첫 줄: 왼쪽은 판정 3개, 오른쪽은 라우팅 사유 */
+        .detail-top {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            align-items: start;
+            gap: var(--detail-gap);
+        }
+
+        .detail-route-detail {
+            border-left: 1px solid var(--border);
+            padding-left: 1.25rem;
+            min-width: 0;
+        }
+
+        .route-detail-value {
+            color: var(--text);
+            font-size: 0.95rem;
+            line-height: 1.45;
+            margin-bottom: 0.5rem;
+            overflow-wrap: anywhere;
+        }
+
+        .route-detail-value:last-child {
+            margin-bottom: 0;
         }
 
         .detail-metrics {
@@ -2098,16 +3045,27 @@ st.markdown(
         }
 
         @media (max-width: 700px) {
-            .detail-verdicts, .detail-metrics, .detail-pipeline {
+            .detail-verdicts, .detail-metrics {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .detail-top {
+                grid-template-columns: 1fr;
+            }
+
+            .detail-route-detail {
+                border-left: 0;
+                border-top: 1px solid var(--border);
+                padding-left: 0;
+                padding-top: 0.75rem;
             }
         }
 
         div[data-testid="stVerticalBlockBorderWrapper"] {
-            background: #ffffff;
-            border-color: #e2e8f0;
+            background: var(--surface);
+            border-color: var(--border);
             box-sizing: border-box;
-            color: #0f172a;
+            color: var(--text);
         }
 
         hr {
@@ -2127,33 +3085,33 @@ st.markdown(
         }
 
         .badge-danger {
-            color: #991b1b;
-            background: #fee2e2;
-            border-color: #fecaca;
+            color: var(--danger-fg);
+            background: var(--danger-bg);
+            border-color: var(--danger-border);
         }
 
         .badge-success {
-            color: #166534;
-            background: #dcfce7;
-            border-color: #bbf7d0;
+            color: var(--success-fg);
+            background: var(--success-bg);
+            border-color: var(--success-border);
         }
 
         .badge-warning {
-            color: #9a3412;
-            background: #ffedd5;
-            border-color: #fed7aa;
+            color: var(--warning-fg);
+            background: var(--warning-bg);
+            border-color: var(--warning-border);
         }
 
         .badge-info {
-            color: #1d4ed8;
-            background: #dbeafe;
-            border-color: #bfdbfe;
+            color: var(--info-fg);
+            background: var(--info-bg);
+            border-color: var(--info-border);
         }
 
         .badge-neutral {
-            color: #475569;
-            background: #f1f5f9;
-            border-color: #e2e8f0;
+            color: var(--text-3);
+            background: var(--neutral-bg);
+            border-color: var(--border);
         }
 
         .route-focus {
@@ -2162,7 +3120,7 @@ st.markdown(
         }
 
         .route-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.75rem;
             font-weight: 600;
             letter-spacing: 0.08em;
@@ -2172,9 +3130,9 @@ st.markdown(
 
         .route-badge {
             display: inline-block;
-            color: #1e40af;
-            background: #dbeafe;
-            border: 1px solid #93c5fd;
+            color: var(--info-strong);
+            background: var(--info-bg);
+            border: 1px solid var(--info-strong-border);
             border-radius: 0.55rem;
             font-size: 1.05rem;
             font-weight: 750;
@@ -2191,16 +3149,16 @@ st.markdown(
         }
 
         .reason-chip {
-            color: #334155;
-            background: #f8fafc;
-            border: 1px solid #cbd5e1;
+            color: var(--text-2);
+            background: var(--surface-muted);
+            border: 1px solid var(--border-strong);
             border-radius: 999px;
             font-size: 0.78rem;
             padding: 0.5rem 1rem;
         }
 
         .secondary-text {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.85rem;
             overflow-wrap: anywhere;
         }
@@ -2214,7 +3172,7 @@ st.markdown(
 
         .batch-panel-title,
         .batch-section-heading {
-            color: #0f172a;
+            color: var(--text);
             font-size: 1.05rem;
             font-weight: 700;
             line-height: 1.35;
@@ -2237,8 +3195,25 @@ st.markdown(
             margin-top: 1.5rem;
         }
 
+        .batch-heading-left {
+            justify-content: flex-start;
+        }
+
+        .batch-heading-inline {
+            justify-content: flex-start;
+            margin-top: 0;
+            /* Streamlit 마크다운의 -1rem 여백을 상쇄해 버튼과 세로 가운데를 맞춘다 */
+            margin-bottom: 1rem;
+        }
+        
+        .batch-title-large {
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
         .batch-context {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.76rem;
             font-weight: 500;
         }
@@ -2261,18 +3236,18 @@ st.markdown(
         }
 
         .batch-summary-priority {
-            background: #fff7ed;
-            border: 1px solid #fed7aa;
+            background: var(--warning-soft);
+            border: 1px solid var(--warning-border);
             border-radius: 0.5rem;
         }
 
         .batch-summary-priority .batch-summary-label,
         .batch-summary-priority .batch-summary-value {
-            color: #9a3412;
+            color: var(--warning-fg);
         }
 
         .batch-summary-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.72rem;
             line-height: 1.2;
             margin-bottom: 0.5rem;
@@ -2280,7 +3255,7 @@ st.markdown(
         }
 
         .batch-summary-value {
-            color: #0f172a;
+            color: var(--text);
             font-size: 1.15rem;
             font-weight: 720;
             line-height: 1.2;
@@ -2295,24 +3270,31 @@ st.markdown(
         }
 
         .deep-status-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.76rem;
             font-weight: 650;
-            margin-right: 0.5rem;
+        }
+
+        .deep-status-list {
+            display: inline-flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
         }
 
         .deep-status-item {
-            color: #334155;
-            background: #f8fafc;
-            border: 1px solid #cbd5e1;
+            color: var(--text-2);
+            background: var(--surface-muted);
+            border: 1px solid var(--border-strong);
             border-radius: 999px;
             font-size: 0.72rem;
-            padding: 0.5rem 1rem;
+            line-height: 1.4;
+            padding: 0.2rem 0.7rem;
         }
 
         .detail-section-break {
-            color: #475569;
-            border-top: 1px solid #e2e8f0;
+            color: var(--text-3);
+            border-top: 1px solid var(--border);
             font-size: 0.82rem;
             font-weight: 650;
             margin-top: 2rem;
@@ -2324,12 +3306,12 @@ st.markdown(
             align-items: flex-end;
             justify-content: space-between;
             gap: 1rem;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid var(--border);
             padding: 0 0 1rem;
         }
 
         .file-title {
-            color: #0f172a;
+            color: var(--text);
             font-size: 1rem;
             font-weight: 700;
             line-height: 1.25;
@@ -2337,7 +3319,7 @@ st.markdown(
 
         .file-hash,
         .file-meta {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.76rem;
             line-height: 1.45;
         }
@@ -2351,7 +3333,7 @@ st.markdown(
         }
 
         .verdict-arrow {
-            color: #94a3b8;
+            color: var(--text-faint);
             font-size: 1rem;
             text-align: center;
         }
@@ -2372,19 +3354,58 @@ st.markdown(
         }
 
         .summary-divider {
-            border-top: 1px solid #e2e8f0;
+            border-top: 1px solid var(--border);
             margin: 0.5rem 0;
         }
 
         .summary-label {
-            color: #64748b;
+            color: var(--text-muted);
             font-size: 0.7rem;
             line-height: 1.2;
             margin-bottom: 0.5rem;
         }
 
+        /* 지표 이름 위에 마우스를 올리면(또는 Tab으로 이동하면) 설명을 띄운다 */
+        .metric-tip {
+            position: relative;
+            border-bottom: 1px dotted var(--text-faint);
+        }
+        .metric-tip::after {
+            content: attr(data-tip);
+            position: absolute;
+            left: 0;
+            bottom: calc(100% + 0.5rem);
+            z-index: 1000;
+            width: max-content;
+            max-width: 20rem;
+            word-break: keep-all;  /* 한국어를 단어 중간에서 끊지 않는다 */
+            padding: 0.45rem 0.65rem;
+            border-radius: 0.4rem;
+            background: var(--text);
+            color: var(--surface);
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+            font-size: 0.75rem;
+            font-weight: 500;
+            line-height: 1.45;
+            white-space: pre-line;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.12s ease-in-out;
+        }
+        .metric-tip:hover::after,
+        .metric-tip:focus-visible::after {
+            opacity: 1;
+            visibility: visible;
+        }
+        /* 맨 오른쪽 지표의 설명은 오른쪽 끝에 맞춰 화면 밖으로 넘치지 않게 한다 */
+        .detail-metrics > div:last-child .metric-tip::after {
+            left: auto;
+            right: 0;
+        }
+
         .summary-value {
-            color: #0f172a;
+            color: var(--text);
             font-size: 0.98rem;
             font-weight: 650;
             line-height: 1.25;
@@ -2403,26 +3424,26 @@ st.markdown(
         }
 
         .evidence-section + .evidence-section {
-            border-left: 1px solid #e2e8f0;
+            border-left: 1px solid var(--border);
             padding-left: 1rem;
         }
 
         .evidence-title {
-            color: #334155;
+            color: var(--text-2);
             font-size: 0.8rem;
             font-weight: 700;
             margin-bottom: 0.5rem;
         }
 
         .evidence-item {
-            color: #334155;
+            color: var(--text-2);
             font-size: 0.74rem;
             line-height: 1.35;
             margin-bottom: 0.5rem;
         }
 
         .technique-id {
-            color: #1d4ed8;
+            color: var(--info-fg);
             font-weight: 650;
         }
 
@@ -2437,15 +3458,15 @@ st.markdown(
         .pipeline-node {
             flex: 1 1 0;
             min-width: 0;
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
+            background: var(--surface);
+            border: 1px solid var(--border);
             border-radius: 0.45rem;
             padding: 0.5rem;
             text-align: center;
         }
 
         .pipeline-name {
-            color: #0f172a;
+            color: var(--text);
             font-size: 0.82rem;
             font-weight: 650;
             line-height: 1.2;
@@ -2462,33 +3483,339 @@ st.markdown(
         }
 
         .pipeline-complete {
-            color: #166534;
-            background: #dcfce7;
+            color: var(--success-fg);
+            background: var(--success-bg);
         }
 
         .pipeline-skipped {
-            color: #475569;
-            background: #f1f5f9;
+            color: var(--text-3);
+            background: var(--neutral-bg);
         }
 
         .pipeline-running {
-            color: #1d4ed8;
-            background: #dbeafe;
+            color: var(--info-fg);
+            background: var(--info-bg);
         }
 
         .pipeline-failed {
-            color: #991b1b;
-            background: #fee2e2;
+            color: var(--danger-fg);
+            background: var(--danger-bg);
         }
 
         .pipeline-arrow {
             flex: 0 0 auto;
-            color: #94a3b8;
+            color: var(--text-faint);
             font-size: 0.9rem;
         }
 
+        /* 카드 (border=True 컨테이너) */
+        div[data-testid="stVerticalBlock"]:is([class*="_card"], [class*="-card"], [class*="_panel"], .st-key-batch_group_results) {
+            background: var(--surface);
+            border-color: var(--border);
+        }
+        
+        /* 제목, 위젯 라벨, 캡션 */
+        h1, h2, h3, h4, h5, h6 { color: var(--text); }
+        [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] p { color: var(--text-2); }
+        [data-testid="stCaptionContainer"] { color: var(--text-muted); }
+        
+        /* 일반 버튼 (테마 토글 버튼은 제외) */
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"] {
+            background: var(--surface);
+            border-color: var(--border-strong);
+            color: var(--text);
+        }
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"]:hover {
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+        /* 비활성 버튼. Streamlit의 :disabled:hover 기본 스타일이 덮어쓰지 않도록 !important */
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"]:disabled,
+        .stElementContainer:not(.st-key-theme_toggle) button[data-testid="stBaseButton-secondary"]:disabled:hover,
+        button[data-testid="stBaseButton-primary"]:disabled,
+        button[data-testid="stBaseButton-primary"]:disabled:hover {
+            background: var(--surface-muted) !important;
+            border-color: var(--border) !important;
+            color: var(--text-muted) !important;
+        }
+        
+        /* 입력창 */
+        [data-testid="stTextInputRootElement"] {
+            background: var(--surface-muted);
+            border-color: var(--border-strong);
+        }
+        [data-testid="stTextInput"] input { color: var(--text); }
+        [data-testid="stTextInput"] input::placeholder {
+            color: var(--text-muted) !important;
+            opacity: 1;
+        }
+        
+        /* 여러 줄 입력창 (판정 수정 팝업의 메모) */
+        [data-testid="stTextAreaRootElement"] {
+            background: var(--surface-muted);
+            border-color: var(--border-strong);
+        }
+        [data-testid="stTextArea"] textarea {
+            background: transparent;
+            color: var(--text);
+            caret-color: var(--text);
+        }
+
+        /* 팝업(st.dialog): Streamlit 기본 테마로 그려지므로 앱 테마 색을 직접 입힌다 */
+        [data-testid="stDialog"] > div {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        [data-testid="stDialog"] [data-testid="stMarkdownContainer"],
+        [data-testid="stDialog"] [data-testid="stRadio"] label p {
+            color: var(--text);
+        }
+        [data-testid="stDialog"] button[aria-label="Close"] {
+            color: var(--text-muted);
+        }
+        [data-testid="stDialog"] button[aria-label="Close"]:hover {
+            color: var(--text);
+        }
+        /* 저장 후 뜨는 알림(st.toast)도 Streamlit 기본 테마로 그려진다 */
+        [data-testid="stToast"] {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        [data-testid="stToast"] [data-testid="stMarkdownContainer"],
+        [data-testid="stToast"] button {
+            color: var(--text);
+        }
+        [data-testid="stDialog"] [data-testid="stWidgetLabel"] svg {
+            color: var(--text-muted);
+            stroke: var(--text-muted);
+        }
+
+        /* 파일 업로더 */
+        [data-testid="stFileUploaderDropzone"] { background: var(--surface-muted); }
+        [data-testid="stFileUploaderDropzoneInstructions"] * { color: var(--text-muted); }
+
+        /* 업로더에 올린 파일 카드와 +(파일 추가), ×(삭제) 버튼 */
+        [data-testid="stFileChip"] {
+            background: var(--surface);
+            border-color: var(--border-strong);
+            color: var(--text-muted);
+        }
+        [data-testid="stFileChipName"] { color: var(--text); }
+        [data-testid="stFileChipName"] ~ div { color: var(--text-muted); }  /* 파일 크기 */
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-minimal"],
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-borderlessIcon"] {
+            color: var(--text-muted);
+        }
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-minimal"]:hover,
+        [data-testid="stFileUploader"] button[data-testid="stBaseButton-borderlessIcon"]:hover {
+            color: var(--text);
+        }
+        
+        /* Expander */
+        [data-testid="stExpander"] details { border-color: var(--border); }
+        [data-testid="stExpander"] summary {
+            background: var(--surface-muted);
+            color: var(--text);
+        }
+        [data-testid="stExpander"] summary:hover { color: var(--info-fg); }
+        
+        /* Metric */
+        [data-testid="stMetricLabel"], [data-testid="stMetricLabel"] p { color: var(--text-muted); }
+        [data-testid="stMetricValue"] { color: var(--text); }
+        
+        /* 알림 상자 */
+        [data-testid="stAlertContentSuccess"] { color: var(--success-fg); }
+        [data-testid="stAlertContentInfo"] { color: var(--info-fg); }
+        [data-testid="stAlertContentWarning"] { color: var(--warning-fg); }
+        [data-testid="stAlertContentError"] { color: var(--danger-fg); }
+        
+        /* 선택 상자 (버전에 따라 구조가 달라 두 경우 모두 지정) */
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+        [data-testid="stSelectbox"] div[role="group"] {
+            background: var(--surface-muted);
+            border-color: var(--border-strong);
+            color: var(--text);
+        }
+        [data-testid="stSelectbox"] input,
+        [data-testid="stSelectbox"] [data-baseweb="select"] * {
+            color: var(--text) !important;
+        }
+        [data-testid="stSelectbox"] svg { fill: var(--text-muted); color: var(--text-muted); }
+
+        /* 선택 상자를 펼쳤을 때 나오는 목록 */
+        [data-testid="stSelectboxVirtualDropdown"],
+        [data-baseweb="popover"] ul {
+            background: var(--surface) !important;
+        }
+        [role="listbox"] [role="option"],
+        [data-baseweb="popover"] li {
+            color: var(--text);
+        }
+        [role="listbox"] [role="option"]:hover,
+        [role="listbox"] [role="option"][aria-selected="true"],
+        [data-baseweb="popover"] li:hover {
+            background: var(--surface-muted) !important;
+        }
+
+        /* 분류 버튼 (segmented control): 선택되지 않은 버튼 */
+        [data-testid="stButtonGroup"] button[aria-checked="false"] {
+            background: var(--surface);
+            border-color: var(--border-strong);
+            color: var(--text-2);
+        }
+        [data-testid="stButtonGroup"] button[aria-checked="false"]:hover {
+            color: var(--text);
+            border-color: var(--text-muted);
+        }
+
+        /* 분석 요약, 분석 결과 분류 카드: Streamlit 마크다운의 음수 margin 때문에 아래 여백이 사라지는 문제 */
+        .st-key-detail_summary_card [data-testid="stMarkdownContainer"],
+        .st-key-batch_summary_card > [data-testid="stElementContainer"]:last-child [data-testid="stMarkdownContainer"] {
+            margin-bottom: 0;
+        }
+
+        /* 분석 파이프라인 카드: 옆의 라우팅 결정 카드 높이에 맞춰 늘어나므로 내용을 세로 가운데에 둔다 */
+        .st-key-detail_pipeline_card {
+            justify-content: center;
+        }
+        .st-key-detail_pipeline_card [data-testid="stMarkdownContainer"] {
+            margin-bottom: 0;
+        }
+
+        /* 진행률 막대: 바탕(트랙)은 테마 색, 채워지는 부분은 파란색 */
+        [data-testid="stProgress"] [role="progressbar"] > div {
+            background: var(--border) !important;
+        }
+        [data-testid="stProgress"] [role="progressbar"] > div > div {
+            background: var(--chart-benign) !important;
+        }
+
+        /* 배치 요약 카드: 안쪽 요소 사이 간격을 기본(24px)보다 좁힌다 */
+        .st-key-batch_summary_card {
+            gap: 1rem !important;
+        }
+        /* 타일 아래 구분선. 위아래 간격이 같도록 타일 묶음의 아래 테두리로 그린다 */
+        .st-key-batch_group {
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* 배치 요약 카드: 분류 타일 (segmented control을 타일 모양으로) */
+        /* 버전마다 버튼을 감싸는 상자 구조가 달라서, 버튼을 품은 상자 전체에 폭을 준다 */
+        .st-key-batch_group,
+        .st-key-batch_group *:has(button) {
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+        /* Total, 네 판정, 실패 상태를 6칸 격자로 */
+        .st-key-batch_group *:has(> button) {
+            display: grid !important;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 0.75rem;
+        }
+        .st-key-batch_group [data-testid="stButtonGroup"] button {
+            width: 100%;
+            min-height: 5rem;
+            margin: 0 !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 0.6rem !important;
+            background: var(--surface) !important;
+        }
+        .st-key-batch_group [data-testid="stButtonGroup"] button:hover {
+            border-color: var(--text-muted) !important;
+        }
+        /* 버튼 글자는 "분류 이름\n건수" 한 덩어리라, 줄바꿈을 살리고 첫 줄만 작게 꾸민다 */
+        .st-key-batch_group [data-testid="stButtonGroup"] button p {
+            white-space: pre-line;
+            text-align: center;
+            color: var(--text) !important;
+            font-size: 1.2rem;
+            font-weight: 700;
+            line-height: 1.7;
+        }
+        .st-key-batch_group [data-testid="stButtonGroup"] button p::first-line {
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            font-weight: 500;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        /* 선택된 타일: Total, Malicious, Suspicious, Benign, Inconclusive, Failed */
+        .st-key-batch_group button[aria-checked="true"] { border-width: 2px !important; }
+        .st-key-batch_group button[aria-checked="true"] p::first-line { color: inherit; font-weight: 700; }
+        .st-key-batch_group button:nth-of-type(1)[aria-checked="true"] {
+            background: var(--neutral-bg) !important;
+            border-color: var(--border-strong) !important;
+        }
+        .st-key-batch_group button:nth-of-type(1)[aria-checked="true"] p { color: var(--text) !important; }
+        .st-key-batch_group button:nth-of-type(2)[aria-checked="true"] {
+            background: var(--danger-bg) !important;
+            border-color: var(--danger-border) !important;
+        }
+        .st-key-batch_group button:nth-of-type(2)[aria-checked="true"] p { color: var(--danger-fg) !important; }
+        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] {
+            background: var(--warning-soft) !important;
+            border-color: var(--warning-border) !important;
+        }
+        .st-key-batch_group button:nth-of-type(3)[aria-checked="true"] p { color: var(--warning-fg) !important; }
+        .st-key-batch_group button:nth-of-type(4)[aria-checked="true"] {
+            background: var(--success-bg) !important;
+            border-color: var(--success-border) !important;
+        }
+        .st-key-batch_group button:nth-of-type(4)[aria-checked="true"] p { color: var(--success-fg) !important; }
+        .st-key-batch_group button:is(:nth-of-type(5), :nth-of-type(6))[aria-checked="true"] {
+            background: var(--neutral-bg) !important;
+            border-color: var(--border-strong) !important;
+        }
+        .st-key-batch_group button:is(:nth-of-type(5), :nth-of-type(6))[aria-checked="true"] p { color: var(--text-2) !important; }
+
+        /* 머리글 오른쪽 버튼(새 파일 분석, 판정 수정): 열 비율 대신 고정 폭을 써서
+           배치 화면·단건 화면 어디에 있든 같은 크기로 보이게 한다 */
+        [data-testid="stColumn"]:has(.st-key-batch_new_file_analysis),
+        [data-testid="stColumn"]:has(.st-key-progressive_new_file_analysis),
+        [data-testid="stColumn"]:has(.st-key-open_review_dialog) {
+            flex: 0 0 11rem !important;
+            width: 11rem !important;
+            min-width: 11rem !important;
+            max-width: 11rem !important;
+        }
+        /* 같은 줄의 나머지 열(제목)이 남은 폭을 나눠 쓰게 해서 버튼이 다음 줄로 밀리지 않게 한다 */
+        [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] :is(.st-key-batch_new_file_analysis, .st-key-progressive_new_file_analysis, .st-key-open_review_dialog)) {
+            flex-wrap: nowrap !important;
+        }
+        [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] :is(.st-key-batch_new_file_analysis, .st-key-progressive_new_file_analysis, .st-key-open_review_dialog))
+            > [data-testid="stColumn"]:not(:has(:is(.st-key-batch_new_file_analysis, .st-key-progressive_new_file_analysis, .st-key-open_review_dialog))) {
+            flex: 1 1 0 !important;
+            width: auto !important;
+            min-width: 0 !important;
+        }
+        .st-key-batch_new_file_analysis button,
+        .st-key-progressive_new_file_analysis button,
+        .st-key-open_review_dialog button {
+            width: 100%;
+            height: 2.5rem;
+            min-height: 2.5rem;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.875rem;
+        }
+
+        /* 표: 캔버스로 그려져서 색을 바꿀 수 없으므로 다크 모드에서만 반전 */
+        [data-testid="stDataFrame"] { filter: var(--df-filter); }
+
         @media (max-width: 900px) {
-            .batch-summary-grid {
+            /* 설명 가능성 + 분석 파이프라인 줄: 좁은 화면에서는 위아래로 쌓는다 */
+            .st-key-result_detail_shell [data-testid="stHorizontalBlock"]:has(.st-key-detail_pipeline_section) {
+                flex-wrap: wrap;
+            }
+            .st-key-result_detail_shell [data-testid="stHorizontalBlock"]:has(.st-key-detail_pipeline_section) > div {
+                flex: 1 1 100% !important;
+                min-width: 100% !important;
+            }
+
+            .batch-summary-grid,
+            .st-key-batch_group *:has(> button) {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
@@ -2531,15 +3858,539 @@ st.markdown(
 
             .evidence-section + .evidence-section {
                 border-left: 0;
-                border-top: 1px solid #e2e8f0;
+                border-top: 1px solid var(--border);
                 padding-left: 0;
                 padding-top: 1rem;
             }
+        }
+
+        /* 탭 색상(특히 다크모드) 개선 */
+        [data-baseweb="tab-list"] button[data-baseweb="tab"] p {
+            color: var(--text-2) !important;
+            font-weight: 500;
+        }
+        [data-baseweb="tab-list"] button[data-baseweb="tab"][aria-selected="true"] p {
+            color: var(--text) !important;
+            font-weight: 700;
         }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
+    if not items:
+        import streamlit as st
+
+        st.info(f"{title}에 해당하는 항목이 없습니다.")
+        return
+
+    import api_client
+    import pandas as pd
+    import streamlit as st
+
+    # Pagination Logic
+    total_count = len(items)
+    page_key = f"{queue_name}_{title}_page"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+
+    total_pages = max(1, (total_count + limit - 1) // limit)
+    if st.session_state[page_key] >= total_pages:
+        st.session_state[page_key] = max(0, total_pages - 1)
+
+    current_page = st.session_state[page_key]
+    offset = current_page * limit
+
+    # If it's the RETRAIN or COMPLETED queue, it's already server-side paginated before calling this function,
+    # so we don't slice it. Otherwise we slice the items.
+    if queue_name.lower() in ("retrain", "completed"):
+        page_items = items
+    else:
+        page_items = items[offset : offset + limit]
+
+    df = pd.DataFrame(page_items)
+
+    if "calibrated_probability" in df.columns:
+        df["calibrated_probability_display"] = df["calibrated_probability"].apply(
+            lambda x: f"{x * 100:.2f}%" if pd.notnull(x) else "N/A"
+        )
+
+    display_cols = {
+        "rank": "순위" if queue_name.lower() != "auto" else "순서",
+        "filename": "파일명",
+        "sha256": "SHA-256",
+        "initial_verdict": "모델 판정 결과",
+        "calibrated_probability_display": "악성 확률",
+        "queue_reason": "분류 이유",
+        "review_status": "검토 상태",
+    }
+
+    if queue_name.lower() == "auto":
+        # 역순 넘버링: 가장 밑(오래된 파일)이 1번, 가장 위(최신 파일)가 N번
+        df["rank"] = list(range(len(df), 0, -1))
+
+    if queue_name.lower() == "retrain":
+        display_cols["selection_reason"] = "판정 변경 내역"
+    elif queue_name.lower() == "completed":
+        display_cols["selection_reason"] = "판정 결과 내역"
+
+    df_display = df[[c for c in display_cols if c in df.columns]].rename(
+        columns=display_cols
+    )
+
+    st.write(f"### {title} ({total_count}건)")
+    if queue_name.lower() == "deep":
+        st.markdown(
+            "**정렬 기준**: 긴급 대응(위험도 → 관측 수준 → 악성 확률) → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 신호 미감지. 확률 불확실성 그룹은 악성 확률 내림차순, 나머지 일반 그룹은 신호 점수 내림차순으로 정렬하며, 동점이면 등록순입니다."
+        )
+        st.caption(
+            "💡 **긴급 대응 순서**: 데이터 파괴·랜섬웨어(1등급) → 복구 방해·서비스 중단(2등급) → 관측 수준(동적 관측 우선) → 악성 확률 내림차순(동점 시 FIFO)\n\n"
+            "💡 **신호 미감지**: 4대 위험 신호는 없으나 시스템 오류 시 안전 격상(Fail-Closed), 분석가의 수동 보류, 레거시 건 등 자동 처리를 피하고 사람의 확인이 필요한 건입니다."
+        )
+
+    event = st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        selection_mode="single-row",
+        on_select="rerun",
+        key=f"df_{queue_name}_{title}",
+    )
+
+    # Client-side pagination controls (only if we have more than one page and it's not RETRAIN or COMPLETED)
+    if queue_name.lower() not in ("retrain", "completed") and total_pages > 1:
+        cols = st.columns([1, 2, 1])
+        with cols[0]:
+            if st.button(
+                "이전 페이지",
+                disabled=(current_page == 0),
+                key=f"{queue_name}_{title}_prev",
+            ):
+                st.session_state[page_key] = current_page - 1
+                st.rerun()
+        with cols[1]:
+            st.write(
+                f"<div style='text-align: center;'>페이지 {current_page + 1} / {total_pages}</div>",
+                unsafe_allow_html=True,
+            )
+        with cols[2]:
+            if st.button(
+                "다음 페이지",
+                disabled=(current_page + 1 >= total_pages),
+                key=f"{queue_name}_{title}_next",
+            ):
+                st.session_state[page_key] = current_page + 1
+                st.rerun()
+
+    if (
+        event
+        and getattr(event, "selection", None)
+        and getattr(event.selection, "rows", None)
+    ):
+        row_idx = event.selection.rows[0]
+        selected_item = page_items[row_idx]
+        st.write(f"**선택됨**: {selected_item['filename']}")
+        if st.button(
+            "상세 결과 보기",
+            key=f"btn_view_{selected_item['analysis_id']}",
+            type="primary",
+        ):
+            try:
+                full_result = api_client.get_result(selected_item["analysis_id"])
+                view_data = search_result_view(full_result)
+                view_data["queue_name"] = selected_item.get("queue_name")
+                view_data["queue_reason"] = selected_item.get("queue_reason")
+                view_data["priority_score"] = selected_item.get("priority_score")
+                view_data["score_policy"] = selected_item.get("score_policy")
+                view_data["priority_reason"] = selected_item.get("priority_reason")
+                view_data["triggered_signals"] = selected_item.get("triggered_signals")
+                view_data["is_waiting"] = is_waiting
+                st.session_state.analysis_result = view_data
+                st.session_state.batch_id = None
+                st.session_state.batch_ids = []
+                st.session_state.hash_search = None
+                st.session_state.pop("batch_data", None)
+                st.session_state.pop("batch_results", None)
+                st.session_state.pop("batch_id", None)
+                st.session_state.pop("batch_ids", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"상세 결과 로드 실패: {e}")
+
+
+DEEP_POLICY_RANK = {
+    "emergency-v1": 0,
+    "uncertainty-v2": 1,
+    "disagreement-v2": 2,
+    "ood-v2": 3,
+    "difficulty-v2": 4,
+    "exception-v2": 5,
+    "probability-v1": 6,
+}
+
+
+def format_deep_queue_item(item):
+    """심층 분석 탭의 항목은 긴급 대응(EMERGENCY) 및 4대 위험 신호 체계로 표기하되,
+    기존 고위험 Evidence(CAPA, Speakeasy 등) 분류 이유는 그대로 유지한다."""
+    it = dict(item)
+    if it.get("queue_name") == "EMERGENCY" or it.get("score_policy") == "emergency-v1":
+        it["queue_name"] = "DEEP"
+        it["_is_emergency"] = True
+        signals = it.get("triggered_signals") or []
+        if "UNCERTAIN_PROBABILITY" in signals:
+            it["priority_reason"] = "확률 불확실성"
+            it["score_policy"] = "uncertainty-v2"
+        elif "DISAGREEMENT" in signals:
+            it["priority_reason"] = "모델 불일치"
+            it["score_policy"] = "disagreement-v2"
+        elif "OOD" in signals:
+            it["priority_reason"] = "분포 이탈"
+            it["score_policy"] = "ood-v2"
+        elif "DIFFICULTY" in signals:
+            it["priority_reason"] = "분석 난이도"
+            it["score_policy"] = "difficulty-v2"
+        else:
+            it["priority_reason"] = it.get("priority_reason") or "긴급 대응"
+            it["score_policy"] = "emergency-v1"
+
+        # 점수 반영: 예외 정책(exception-v2)은 항상 0.0, 긴급 대응(emergency-v1)은 악성 확률 유지, 위험 신호는 deep_priority_score 우선
+        if it["score_policy"] == "exception-v2":
+            it["priority_score"] = 0.0
+        elif it["score_policy"] == "emergency-v1":
+            if it.get("priority_score") is not None:
+                try:
+                    it["priority_score"] = float(it["priority_score"])
+                except (ValueError, TypeError):
+                    it["priority_score"] = 1.0
+            elif it.get("calibrated_probability") is not None:
+                try:
+                    it["priority_score"] = float(it["calibrated_probability"])
+                except (ValueError, TypeError):
+                    it["priority_score"] = 1.0
+        elif it.get("deep_priority_score") is not None:
+            try:
+                it["priority_score"] = float(it["deep_priority_score"])
+            except (ValueError, TypeError):
+                pass
+        elif it["score_policy"] == "uncertainty-v2":
+            prob = it.get("calibrated_probability")
+            if prob is not None:
+                try:
+                    it["priority_score"] = 1.0 - 2.0 * abs(float(prob) - 0.5)
+                except (ValueError, TypeError):
+                    pass
+
+        # 분류 이유(queue_reason): 기존 고위험 Evidence(CAPA, Speakeasy 등)가 있으면 보존
+        if not it.get("queue_reason"):
+            if "UNCERTAIN_PROBABILITY" in signals:
+                it["queue_reason"] = "JRR 확률 보류 구간"
+            elif "DISAGREEMENT" in signals:
+                it["queue_reason"] = "모델 간 확률 차이 발생"
+            elif "OOD" in signals:
+                it["queue_reason"] = "학습 분포에서 벗어남"
+            elif "DIFFICULTY" in signals:
+                it["queue_reason"] = "PE 구조 경고 발생"
+            else:
+                it["queue_reason"] = "고위험 행위 탐지 건"
+
+        # 긴급 대응 레벨 및 관측 레벨 (백엔드 제공값 우선, 누락 시 사유 기반 폴백 추론)
+        if it.get("emergency_level") is None:
+            reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+            if any(k in reason for k in ["데이터 파괴", "랜섬웨어", "T1485", "T1561", "T1486"]):
+                it["emergency_level"] = 1
+            elif any(k in reason for k in ["복구 방해", "서비스 중단", "T1490", "T1489"]):
+                it["emergency_level"] = 2
+
+        if it.get("emergency_obs_level") is None:
+            reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+            if "SPEAKEASY" in reason.upper() or "동적" in reason:
+                it["emergency_obs_level"] = 1
+            elif "CAPA" in reason.upper() or "정적" in reason:
+                it["emergency_obs_level"] = 2
+    return it
+
+
+def sort_deep_queue_items(items):
+    """통합된 DEEP 목록을 긴급 대응(0순위 최상단, 위험도·관측수준·점수 순) 및 4대 신호 우선순위, 신호 강도 기준으로 재정렬한다."""
+    def sort_key(it):
+        is_em = bool(
+            it.get("_is_emergency")
+            or it.get("score_policy") == "emergency-v1"
+            or it.get("queue_name") == "EMERGENCY"
+        )
+        em_tier = 0 if is_em else 1
+        policy = it.get("score_policy", "")
+        p_rank = DEEP_POLICY_RANK.get(policy, 99)
+        try:
+            score = float(it.get("priority_score") or 0.0)
+        except (ValueError, TypeError):
+            score = 0.0
+        created_at = it.get("created_at")
+        created_ts = 0.0
+        if created_at is not None:
+            try:
+                if hasattr(created_at, "timestamp"):
+                    created_ts = created_at.timestamp()
+                elif isinstance(created_at, str):
+                    created_ts = datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                created_ts = 0.0
+
+        if is_em:
+            em_level = it.get("emergency_level")
+            if em_level is None:
+                reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+                if any(k in reason for k in ["데이터 파괴", "랜섬웨어", "T1485", "T1561", "T1486"]):
+                    em_level = 1
+                elif any(k in reason for k in ["복구 방해", "서비스 중단", "T1490", "T1489"]):
+                    em_level = 2
+                else:
+                    em_level = 99
+            try:
+                em_level = int(em_level)
+            except (ValueError, TypeError):
+                em_level = 99
+
+            em_obs = it.get("emergency_obs_level")
+            if em_obs is None:
+                reason = str(it.get("queue_reason") or "") + " " + str(it.get("priority_reason") or "")
+                if "SPEAKEASY" in reason.upper() or "동적" in reason:
+                    em_obs = 1
+                elif "CAPA" in reason.upper() or "정적" in reason:
+                    em_obs = 2
+                else:
+                    em_obs = 99
+            try:
+                em_obs = int(em_obs)
+            except (ValueError, TypeError):
+                em_obs = 99
+
+            # 긴급 항목 악성 확률: format_deep_queue_item()이 priority_score를 위험 신호 점수로
+            # 변경할 수 있으므로, calibrated_probability를 직접 사용하여 정렬.
+            # 유효한 0.0~1.0 범위는 -prob로 내림차순 정렬하고, 누락되거나 유효하지 않은 항목은 뒤로 보냄(float('inf')).
+            prob_raw = it.get("calibrated_probability")
+            prob_val = None
+            if prob_raw is not None and prob_raw != "":
+                try:
+                    p = float(prob_raw)
+                    if not (math.isnan(p) or math.isinf(p) or p < 0.0 or p > 1.0):
+                        prob_val = p
+                except (ValueError, TypeError):
+                    prob_val = None
+
+            prob_key = -prob_val if prob_val is not None else float("inf")
+
+            # 긴급 항목 내 정렬: tier(0) -> 긴급위험도(1: 파괴/랜섬웨어, 2: 복구방해/서비스중단) -> 관측수준(1: 동적, 2: 정적) -> 악성확률(prob_key) -> FIFO(created_ts) -> analysis_id
+            return (em_tier, em_level, em_obs, prob_key, created_ts, str(it.get("analysis_id", "")))
+        else:
+            # 확률 불확실성은 악성 확률, 나머지 일반 그룹은 신호 강도로 정렬한다.
+            score_key = -score
+            if policy == "uncertainty-v2":
+                score_key = float("inf")
+                try:
+                    probability = float(it.get("calibrated_probability"))
+                    if math.isfinite(probability) and 0.0 <= probability <= 1.0:
+                        score_key = -probability
+                except (ValueError, TypeError):
+                    pass
+            return (em_tier, p_rank, 0, score_key, created_ts, str(it.get("analysis_id", "")))
+
+    sorted_items = sorted(items, key=sort_key)
+    for idx, item in enumerate(sorted_items, 1):
+        item["rank"] = idx
+    return sorted_items
+
+
+def render_analyst_priority_queue():
+    import api_client
+    import streamlit as st
+
+    st.markdown("---")
+    st.subheader("분석 이력")
+
+    # 1. 오늘 검토 완료 건수 조회
+    try:
+        budget_data = api_client.get_analyst_budget()
+        today_completed = budget_data.get("today_completed_count", 0)
+    except api_client.ApiError as e:
+        st.error(f"분석 이력 조회 실패: {e.message}")
+        return
+
+    st.metric("오늘 검토 완료", f"{today_completed}")
+
+    # 2. 추천 목록 조회
+    try:
+        recs_data = api_client.get_priority_recommendations()
+    except api_client.ApiError as e:
+        st.error(f"추천 목록 조회 실패: {e.message}")
+        return
+
+    tab_labels = [
+        "심층 분석 (DEEP)",
+        "자동 처리 (AUTO)",
+        "재학습 데이터 (RETRAIN)",
+        "검토 완료 (COMPLETED)",
+        "오류 항목 (ERROR)",
+    ]
+    tabs = st.tabs(tab_labels)
+
+    with tabs[0]:
+        st.markdown(
+            "**대상**: 고위험 행위 증거(데이터 파괴/랜섬웨어 등) 및 4대 위험 신호(확률 불확실성, 모델 불일치, 분포 이탈, 분석 난이도)가 감지되었거나, 안전 격상(Fail-Closed) 및 수동 보류된 심층 분석 대상 건"
+        )
+        raw_deep_items = (
+            recs_data.get("emergency_recommendations", [])
+            + recs_data.get("deep_recommendations", [])
+        )
+        deep_items = sort_deep_queue_items(
+            [format_deep_queue_item(it) for it in raw_deep_items]
+        )
+        render_queue_table(
+            "deep", "할당된 분석 대상", deep_items
+        )
+        raw_deep_waiting = (
+            recs_data.get("emergency_waiting", [])
+            + recs_data.get("deep_waiting", [])
+        )
+        if raw_deep_waiting:
+            deep_waiting = sort_deep_queue_items(
+                [format_deep_queue_item(it) for it in raw_deep_waiting]
+            )
+            with st.expander("대기열"):
+                render_queue_table(
+                    "deep", "대기열", deep_waiting, is_waiting=True
+                )
+
+    with tabs[1]:
+        st.markdown("**대상**: 자동 판정 조건을 충족하여 추가 검토가 필요 없는 건")
+        render_queue_table("auto", "처리 대상", recs_data.get("auto_queue", []))
+
+    with tabs[2]:
+        st.markdown(
+            "**대상**: 초기 모델 판정과 분석가의 최종 판정이 달라진 건 (오탐/미탐)"
+        )
+        try:
+            if "retrain_page" not in st.session_state:
+                st.session_state.retrain_page = 0
+            limit = 20
+            offset = st.session_state.retrain_page * limit
+            res = api_client.search_analyses(
+                overturned_only=True, limit=limit, offset=offset
+            )
+            overturned_data = res.get("analyses", []) if res else []
+            total_count = res.get("total_count", 0) if res else 0
+
+            if overturned_data:
+                cands = []
+                for d in overturned_data:
+                    cands.append(
+                        {
+                            "analysis_id": d["analysis_id"],
+                            "filename": d.get("filename", ""),
+                            "sha256": d.get("sha256", ""),
+                            "queue_name": "RETRAIN",
+                            "queue_reason": "분석가 판정으로 모델 결과가 뒤집힘",
+                            "priority_score": None,
+                            "selection_reason": f"초기 판정: {d.get('initial_verdict')} -> 최종 판정: {d.get('analyst_final_verdict')}",
+                        }
+                    )
+                render_queue_table("retrain", "오탐/미탐 내역", cands)
+
+                cols = st.columns([1, 2, 1])
+                with cols[0]:
+                    if st.button(
+                        "이전 페이지",
+                        disabled=(st.session_state.retrain_page == 0),
+                        key="retrain_prev",
+                    ):
+                        st.session_state.retrain_page -= 1
+                        st.rerun()
+                with cols[1]:
+                    st.write(
+                        f"<div style='text-align: center;'>페이지 {st.session_state.retrain_page + 1} / {max(1, (total_count + limit - 1) // limit)} (총 {total_count}건)</div>",
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    if st.button(
+                        "다음 페이지",
+                        disabled=(offset + limit >= total_count),
+                        key="retrain_next",
+                    ):
+                        st.session_state.retrain_page += 1
+                        st.rerun()
+            else:
+                st.info("조건에 해당하는 오탐/미탐 데이터가 없습니다.")
+        except api_client.ApiError as e:
+            st.error(f"오탐/미탐 내역 조회 실패: {e.message}")
+
+    with tabs[3]:
+        st.markdown(
+            "**대상**: 분석가가 상세 화면에서 검토 및 최종 판정을 완료(저장)한 건"
+        )
+        try:
+            if "completed_page" not in st.session_state:
+                st.session_state.completed_page = 0
+            limit = 20
+            offset = st.session_state.completed_page * limit
+            res = api_client.search_analyses(
+                reviewed_only=True, limit=limit, offset=offset
+            )
+            completed_data = res.get("analyses", []) if res else []
+            total_count = res.get("total_count", 0) if res else 0
+
+            if completed_data:
+                cands = []
+                for d in completed_data:
+                    cands.append(
+                        {
+                            "analysis_id": d["analysis_id"],
+                            "filename": d.get("filename", ""),
+                            "sha256": d.get("sha256", ""),
+                            "queue_name": "COMPLETED",
+                            "queue_reason": "검토 완료",
+                            "priority_score": None,
+                            "selection_reason": f"초기 판정: {d.get('initial_verdict')} -> 최종 판정: {d.get('analyst_final_verdict')}",
+                        }
+                    )
+                render_queue_table("completed", "검토 완료 내역", cands)
+
+                cols = st.columns([1, 2, 1])
+                with cols[0]:
+                    if st.button(
+                        "이전 페이지",
+                        disabled=(st.session_state.completed_page == 0),
+                        key="completed_prev",
+                    ):
+                        st.session_state.completed_page -= 1
+                        st.rerun()
+                with cols[1]:
+                    st.write(
+                        f"<div style='text-align: center;'>페이지 {st.session_state.completed_page + 1} / {max(1, (total_count + limit - 1) // limit)} (총 {total_count}건)</div>",
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    if st.button(
+                        "다음 페이지",
+                        disabled=(offset + limit >= total_count),
+                        key="completed_next",
+                    ):
+                        st.session_state.completed_page += 1
+                        st.rerun()
+            else:
+                st.info("검토 완료된 데이터가 없습니다.")
+        except api_client.ApiError as e:
+            st.error(f"검토 완료 내역 조회 실패: {e.message}")
+
+    with tabs[4]:
+        st.markdown(
+            "**대상**: 확률 값 오류, NaN, 무한대, 누락 등으로 시스템 처리가 불가능한 비정상 건"
+        )
+        render_queue_table(
+            "error", "비정상 오류 대상", recs_data.get("error_queue", [])
+        )
+
 
 if "analysis_result" not in st.session_state:
     st.session_state.analysis_result = None
@@ -2558,6 +4409,7 @@ result = st.session_state.analysis_result
 if result is None:
     render_input_view()
     render_hash_search()
+    render_analyst_priority_queue()
 
 else:
     batch_data = st.session_state.get("batch_data")

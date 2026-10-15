@@ -57,12 +57,21 @@ def require_new_output_dir(path):
 
 def fit_model(X_tr, y_tr, X_val, y_val):
     model = lgb.LGBMClassifier(
-        objective="binary", metric=["auc"], n_estimators=500,
-        learning_rate=0.05, num_leaves=31, min_child_samples=30,
-        subsample=0.8, colsample_bytree=0.8, random_state=42,
+        objective="binary",
+        metric=["auc"],
+        n_estimators=500,
+        learning_rate=0.05,
+        num_leaves=31,
+        min_child_samples=30,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
     )
     model.fit(
-        X_tr, y_tr, eval_set=[(X_val, y_val)], eval_metric="auc",
+        X_tr,
+        y_tr,
+        eval_set=[(X_val, y_val)],
+        eval_metric="auc",
         callbacks=[lgb.early_stopping(50), lgb.log_evaluation(100)],
     )
     return model
@@ -83,11 +92,18 @@ def main(argv=None):
         full_model = fit_model(X_tr, y_tr, X_val, y_val)
         importance = full_model.feature_importances_
         ranked_indices = np.argsort(importance)[::-1]
-        scores = full_model.predict_proba(X_val, num_iteration=full_model.best_iteration_)[:, 1]
+        scores = full_model.predict_proba(
+            X_val, num_iteration=full_model.best_iteration_
+        )[:, 1]
         auc, tpr, threshold = validation_metrics(y_val, scores)
-        results.append({"feature_count": X_tr.shape[1], "validation_auc": auc,
-                        "validation_tpr_at_fpr": tpr,
-                        "validation_selection_threshold": threshold})
+        results.append(
+            {
+                "feature_count": X_tr.shape[1],
+                "validation_auc": auc,
+                "validation_tpr_at_fpr": tpr,
+                "validation_selection_threshold": threshold,
+            }
+        )
 
         selected_indices = {}
         for top_n in TOP_N_LIST:
@@ -96,11 +112,18 @@ def main(argv=None):
             X_tr_top = select_columns_chunked(X_tr, indices)
             X_val_top = select_columns_chunked(X_val, indices)
             model = fit_model(X_tr_top, y_tr, X_val_top, y_val)
-            scores = model.predict_proba(X_val_top, num_iteration=model.best_iteration_)[:, 1]
+            scores = model.predict_proba(
+                X_val_top, num_iteration=model.best_iteration_
+            )[:, 1]
             auc, tpr, threshold = validation_metrics(y_val, scores)
-            results.append({"feature_count": top_n, "validation_auc": auc,
-                            "validation_tpr_at_fpr": tpr,
-                            "validation_selection_threshold": threshold})
+            results.append(
+                {
+                    "feature_count": top_n,
+                    "validation_auc": auc,
+                    "validation_tpr_at_fpr": tpr,
+                    "validation_selection_threshold": threshold,
+                }
+            )
             mlflow.log_metric(f"validation_auc_top_{top_n}", auc)
             mlflow.log_metric(f"validation_tpr_at_fpr_top_{top_n}", tpr)
 

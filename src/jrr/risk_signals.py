@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+
 import joblib
 import mlflow
 import numpy as np
@@ -32,6 +33,7 @@ TOP_N_PATH = "data/top_feature_indices_500.npy"
 # main
 # --------------------------------------------------------------------------
 
+
 def main() -> int:
     print("[train_risk_signals] JRR 다중 위험 신호 산출 모델 학습 시작\n")
 
@@ -46,7 +48,6 @@ def main() -> int:
     mlflow.set_experiment("JRR_Calibration")
 
     with mlflow.start_run(run_name="08_Risk_Signals_v2"):
-
         # 1. 학습 데이터 로드
         print("[1] OOD 탐지 모델(Isolation Forest) 학습을 위해 데이터 로드 중...")
         # 메모리 폭발 방지를 위해 mmap_mode="r" 사용
@@ -66,7 +67,9 @@ def main() -> int:
         # 2. Isolation Forest 학습 (OOD 점수 산출용)
         print(f"\n[2] Isolation Forest 학습 중... (샘플 {sample_size:,}개 사용)")
         # contamination="auto"는 데이터의 정상/비정상 비율을 모델이 자동 추정
-        ood_model = IsolationForest(n_estimators=200, contamination="auto", random_state=42, n_jobs=-1)
+        ood_model = IsolationForest(
+            n_estimators=200, contamination="auto", random_state=42, n_jobs=-1
+        )
         ood_model.fit(X_tr_sample)
 
         print("  -> OOD 탐지 모델 학습 완료")
@@ -78,15 +81,19 @@ def main() -> int:
         raw_start, raw_end = 2480, 2568
 
         # top_500_idx 배열 안에서, 값이 2480 이상 2568 미만인 원소들의 현재 '위치(Index)'만 골라냄
-        difficulty_indices_in_top500 = np.where((top_500_idx >= raw_start) & (top_500_idx < raw_end))[0]
+        difficulty_indices_in_top500 = np.where(
+            (top_500_idx >= raw_start) & (top_500_idx < raw_end)
+        )[0]
 
-        print(f"  -> Top 500 피처 중 분석 난이도 관련 피처는 총 {len(difficulty_indices_in_top500)}개로 확인됨.")
+        print(
+            f"  -> Top 500 피처 중 분석 난이도 관련 피처는 총 {len(difficulty_indices_in_top500)}개로 확인됨."
+        )
 
         # 라우터에서 꺼내 쓸 부품들을 딕셔너리로 포장
         risk_signal_components = {
-            'ood_model': ood_model,
-            'difficulty_indices': difficulty_indices_in_top500, # 버그 픽스: 500차원 기준 동적 인덱스!
-            'description': "OOD 모델 및 Top 500 내 분석 난이도 피처 인덱스 정보"
+            "ood_model": ood_model,
+            "difficulty_indices": difficulty_indices_in_top500,  # 버그 픽스: 500차원 기준 동적 인덱스!
+            "description": "OOD 모델 및 Top 500 내 분석 난이도 피처 인덱스 정보",
         }
 
         print("\n=== [위험 신호 컴포넌트 준비 완료] ===")
@@ -99,11 +106,14 @@ def main() -> int:
         print("[4] MLflow 서버 기록 및 라우터 연동용 로컬 파일 저장 중...")
         mlflow.sklearn.log_model(ood_model, "08_ood_isolation_forest")
 
-        joblib.dump(risk_signal_components, 'data/jrr_risk_signals.pkl')
+        joblib.dump(risk_signal_components, "data/jrr_risk_signals.pkl")
 
-        print("\n[train_risk_signals] 무사히 완료되었습니다. (jrr_risk_signals.pkl 생성)")
+        print(
+            "\n[train_risk_signals] 무사히 완료되었습니다. (jrr_risk_signals.pkl 생성)"
+        )
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

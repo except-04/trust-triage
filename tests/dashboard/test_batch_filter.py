@@ -1,14 +1,13 @@
 """배치 결과 안에서 파일명/SHA-256으로 찾기.
 
 백엔드를 부르지 않고 session 의 batch_data["analyses"] 만 거른다. 거른 목록이
-기존 4그룹·선택·상세 연결에 그대로 흘러가는지, 그리고 결과가 없을 때 직전에
+판정·실패 그룹의 선택·상세 연결에 그대로 흘러가는지, 그리고 결과가 없을 때 직전에
 고른 파일의 상세 화면이 남지 않는지가 관심사다.
 """
 
 from __future__ import annotations
 
 import pytest
-
 
 # 앞 12자리와 뒤 8자리가 다르게 만들어 prefix 검색과 substring 검색을 구분한다
 HASH_A = "a1b2c3d4" + "e5f60718" * 7
@@ -27,7 +26,11 @@ def analysis(analysis_id, filename, sha256, verdict="AUTO_BENIGN", status="COMPL
         "initial_verdict": verdict,
         "route": "DEEP_ANALYSIS" if verdict == "HIGH_RISK_UNCERTAIN" else "FINAL",
         "reason": "test",
-        "final_verdict": None,
+        "final_verdict": {
+            "AUTO_BENIGN": "BENIGN",
+            "AUTO_MALICIOUS": "MALICIOUS",
+            "HIGH_RISK_UNCERTAIN": "INCONCLUSIVE",
+        }.get(verdict),
         "calibrated_probability": 0.5,
         "raw_probability": 0.5,
         "disagreement": 0.1,
@@ -134,13 +137,16 @@ def test_items_without_sha256_or_filename_do_not_crash(app):
     assert app.filter_batch_analyses(items, "abc") == items
 
 
-def test_filtered_list_keeps_all_four_groups(app):
+def test_filtered_list_keeps_all_verdict_and_failure_groups(app):
     groups = app.group_batch_analyses(app.filter_batch_analyses(ANALYSES, "helper"))
-    assert list(groups) == ["needs_review", "auto_malicious", "auto_benign", "failed"]
+    assert list(groups) == [
+        "needs_review", "auto_malicious", "auto_benign", "inconclusive", "failed"
+    ]
     assert {k: len(v) for k, v in groups.items()} == {
         "needs_review": 0,
         "auto_malicious": 1,
         "auto_benign": 1,
+        "inconclusive": 0,
         "failed": 0,
     }
 
@@ -189,8 +195,14 @@ def test_no_match_hides_the_detail_view_but_keeps_the_selection(
     # 그룹 위젯까지 가지 않는다
     assert screen["group_calls"] == []
     # 직전 선택은 지우지 않는다 — 검색어를 지우면 그대로 돌아오기 위해서
-    for key in ("analysis_result", "selected_analysis_id", "batch_data", "batch_ids",
-                "poll_started_at", "poll_timed_out"):
+    for key in (
+        "analysis_result",
+        "selected_analysis_id",
+        "batch_data",
+        "batch_ids",
+        "poll_started_at",
+        "poll_timed_out",
+    ):
         assert app.st.session_state[key] == before[key], key
 
 
@@ -207,7 +219,9 @@ def test_clearing_the_query_restores_the_previous_view(
 
     assert app.st.session_state.analysis_result["analysis_id"] == "A1"
     assert screen["info"] == ["검색 조건에 맞는 파일이 없습니다."]  # 새 안내는 없음
-    assert screen["caption"] == ["검색 결과 0건 / 전체 4건"]  # 빈 검색어엔 건수 표시 없음
+    assert screen["caption"] == [
+        "검색 결과 0건 / 전체 4건"
+    ]  # 빈 검색어엔 건수 표시 없음
 
 
 def test_results_reappearing_restores_the_view(
@@ -226,17 +240,26 @@ def test_results_reappearing_restores_the_view(
 
 def test_group_counts_follow_the_query(app, typed, screen, no_backend, stop_signal):
     batch_data = seed_batch(app)
+    screen["group"] = "needs_review"
     typed("helper")
-    # 기본 그룹(needs_review)에는 매칭이 없으므로 라벨을 그린 뒤 멈춘다
+    # SUSPICIOUS 그룹에는 매칭이 없으므로 라벨을 그린 뒤 멈춘다
     with pytest.raises(stop_signal):
         app.render_batch_triage(batch_data)
 
+    # 타일 라벨은 "분류 이름\n검색 결과 / 전체" 형태다
     format_group = screen["group_calls"][0]["format_func"]
-    assert [format_group(key) for key in ("needs_review", "auto_malicious", "auto_benign", "failed")] == [
-        "Needs Review (0)",
-        "Auto Malicious (1)",
-        "Auto Benign (1)",
-        "Failed (0)",
+    assert [
+        format_group(key)
+        for key in (
+            "total", "needs_review", "auto_malicious", "auto_benign", "inconclusive", "failed"
+        )
+    ] == [
+        "Total\n2 / 4",
+        "SUSPICIOUS\n0 / 0",
+        "MALICIOUS\n1 / 1",
+        "BENIGN\n1 / 1",
+        "INCONCLUSIVE\n0 / 1",
+        "FAILED\n0 / 1",
     ]
     assert screen["caption"] == ["검색 결과 2건 / 전체 4건"]
 
@@ -254,10 +277,15 @@ def test_selecting_a_match_in_a_group_opens_its_detail(app, typed, screen, no_ba
 
 
 def two_group_batch(app):
-    """리뷰 재현용: A1(Auto Benign) 선택 중, 매칭은 Needs Review의 A2뿐."""
+    """리뷰 재현용: A1(BENIGN) 선택 중, 매칭은 INCONCLUSIVE의 A2뿐."""
     a1 = analysis("A1", "benign.exe", HASH_A, "AUTO_BENIGN")
     a2 = analysis("A2", "malware.exe", HASH_B, "HIGH_RISK_UNCERTAIN")
-    batch_data = {"batch_ids": ["B1"], "analyses": [a1, a2], "skipped": [], "errors": []}
+    batch_data = {
+        "batch_ids": ["B1"],
+        "analyses": [a1, a2],
+        "skipped": [],
+        "errors": [],
+    }
     app.st.session_state.update(
         analysis_result=a1,
         batch_data=batch_data,
@@ -291,11 +319,17 @@ def test_match_only_in_another_group_hides_the_stale_detail(
     # 그룹 위젯은 stop 전에 그려져 사용자가 옮겨 갈 수 있다
     assert len(screen["group_calls"]) == 1
     format_group = screen["group_calls"][0]["format_func"]
-    assert format_group("needs_review") == "Needs Review (1)"
-    assert format_group("auto_benign") == "Auto Benign (0)"
+    assert format_group("inconclusive") == "INCONCLUSIVE\n1 / 1"
+    assert format_group("auto_benign") == "BENIGN\n0 / 1"
     # 그룹·선택·analysis_result는 강제로 바꾸지 않는다
-    for key in ("batch_group", "selected_analysis_id", "analysis_result",
-                "group_analysis_selector", "batch_data", "batch_ids"):
+    for key in (
+        "batch_group",
+        "selected_analysis_id",
+        "analysis_result",
+        "group_analysis_selector",
+        "batch_data",
+        "batch_ids",
+    ):
         assert app.st.session_state[key] == before[key], key
     assert app.st.session_state.analysis_result["filename"] == "benign.exe"
 
@@ -309,9 +343,9 @@ def test_switching_to_the_matching_group_opens_its_detail(
     with pytest.raises(stop_signal):
         app.render_batch_triage(batch_data)
 
-    # 사용자가 Needs Review 를 고른 다음 실행
-    screen["group"] = "needs_review"
-    app.st.session_state.batch_group = "needs_review"
+    # 사용자가 INCONCLUSIVE를 고른 다음 실행
+    screen["group"] = "inconclusive"
+    app.st.session_state.batch_group = "inconclusive"
     app.render_batch_triage(batch_data)  # 멈추지 않고 끝까지 그린다
 
     assert screen["info"][-1].startswith("검색 결과 1건은 다른 그룹에")  # 새 안내 없음
@@ -337,9 +371,7 @@ def test_clearing_the_query_after_a_group_mismatch_restores_the_old_view(
     assert app.st.session_state.analysis_result["analysis_id"] == "A1"
 
 
-def test_match_in_the_current_group_does_not_stop(
-    app, typed, screen, no_backend
-):
+def test_match_in_the_current_group_does_not_stop(app, typed, screen, no_backend):
     batch_data = two_group_batch(app)
     screen["group"] = "auto_benign"
     typed("benign")
@@ -372,22 +404,66 @@ def test_summary_card_keeps_whole_batch_counts(app, typed, screen, no_backend):
     assert batch_data["summary"]["total"] == 4
 
 
-def test_search_leaves_hash_search_and_polling_state_alone(app, typed, screen, no_backend):
+def test_search_leaves_hash_search_and_polling_state_alone(
+    app, typed, screen, no_backend
+):
     batch_data = seed_batch(app)
-    app.st.session_state.hash_search = {"query": HASH_A, "total_count": 1, "analyses": []}
+    app.st.session_state.hash_search = {
+        "query": HASH_A,
+        "total_count": 1,
+        "analyses": [],
+    }
     app.st.session_state.hash_search_error = None
     screen["group"] = "auto_malicious"
     typed("helper")
     app.render_batch_triage(batch_data)
 
-    assert app.st.session_state.hash_search == {"query": HASH_A, "total_count": 1, "analyses": []}
+    assert app.st.session_state.hash_search == {
+        "query": HASH_A,
+        "total_count": 1,
+        "analyses": [],
+    }
     assert app.st.session_state.batch_data is batch_data
     assert app.st.session_state.batch_ids == ["B1"]
     assert app.st.session_state.poll_started_at == 1.0
-    assert [a["analysis_id"] for a in batch_data["analyses"]] == ["A1", "A2", "A3", "A4"]
+    assert [a["analysis_id"] for a in batch_data["analyses"]] == [
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+    ]
 
 
 def test_new_intake_clears_the_query(app):
     app.st.session_state.batch_filter_query = "helper"
     app.reset_analysis_result()
     assert "batch_filter_query" not in app.st.session_state
+
+
+def test_tile_labels_show_only_totals_without_a_query(app, typed, screen, no_backend):
+    batch_data = seed_batch(app, selected="A1")
+    typed("")
+    app.render_batch_triage(batch_data)
+
+    format_group = screen["group_calls"][0]["format_func"]
+    assert [
+        format_group(key)
+        for key in ("needs_review", "auto_malicious", "auto_benign", "inconclusive", "failed")
+    ] == [
+        "SUSPICIOUS\n0",
+        "MALICIOUS\n1",
+        "BENIGN\n1",
+        "INCONCLUSIVE\n1",
+        "FAILED\n1",
+    ]
+
+
+def test_batch_view_opens_on_total_by_default(app, typed, screen, no_backend):
+    batch_data = seed_batch(app)
+    typed("")
+    app.render_batch_triage(batch_data)  # 그룹을 고르지 않아도 멈추지 않는다
+
+    call = screen["group_calls"][0]
+    assert call["default"] == "total"
+    assert call["options"][0] == "total"
+    assert call["format_func"]("total") == "Total\n4"

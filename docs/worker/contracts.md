@@ -8,18 +8,25 @@ Backend와 Worker는 같은 PostgreSQL의 `speakeasy_jobs` 테이블을 사용�
 
 ```python
 from trust_triage.speakeasy_worker import (
-    SpeakeasyJob, WorkerConfig, create_publisher, utc_now,
+    SpeakeasyJob,
+    WorkerConfig,
+    create_publisher,
+    utc_now,
 )
 
 publisher = create_publisher(WorkerConfig.from_env())
 
+
 def request_speakeasy(analysis_id, sha256, file_location):
-    return publisher.submit(SpeakeasyJob(
-        analysis_id=analysis_id,
-        sha256=sha256,
-        file_location=file_location,
-        requested_at=utc_now(),
-    )).to_dict()
+    return publisher.submit(
+        SpeakeasyJob(
+            analysis_id=analysis_id,
+            sha256=sha256,
+            file_location=file_location,
+            requested_at=utc_now(),
+        )
+    ).to_dict()
+
 
 def get_speakeasy_result(analysis_id):
     record = publisher.repository.get(analysis_id)

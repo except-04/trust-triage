@@ -25,8 +25,9 @@ import 특징을 API 이름으로 되돌린 것처럼 보이게 하면 안 된�
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Literal
 
 # 이 표가 유효한 thrember 커밋과 Feature Schema 버전. 둘 다 requirements.txt /
 # docs/feature-extraction/ember-v3-schema.json 과 같아야 한다.
@@ -408,7 +409,9 @@ _LAYOUT: dict[str, tuple[_Segment, ...]] = {
         (
             256,
             "exact",
-            lambda i: f"Byte-Entropy Bin (entropy {i // 16}/16, byte nibble 0x{i % 16:X})",
+            lambda i: (
+                f"Byte-Entropy Bin (entropy {i // 16}/16, byte nibble 0x{i % 16:X})"
+            ),
         ),
     ),
     # StringExtractor.process_raw_features hstack 순서 (docstring 의 5+96+76 과

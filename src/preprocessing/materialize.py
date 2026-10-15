@@ -33,9 +33,19 @@ import numpy as np
 from numpy.lib.format import open_memmap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (  # noqa: E402
-    DEFAULT_CHUNK, DEV_SPLITS, Layout, Timer, add_root_arg, fmt_bytes, get_dim,
-    iter_chunks, load_y, open_dat, setup_logging, write_json,
+from common import (
+    DEFAULT_CHUNK,
+    DEV_SPLITS,
+    Layout,
+    Timer,
+    add_root_arg,
+    fmt_bytes,
+    get_dim,
+    iter_chunks,
+    load_y,
+    open_dat,
+    setup_logging,
+    write_json,
 )
 
 LOCKBOX_SUBSETS = ("test", "challenge")
@@ -45,15 +55,14 @@ def ensure_writable(path: Path) -> None:
     """06단계에서 0o444로 봉인된 파일을 다시 쓰기 전에 권한을 푼다."""
     import os
     import stat
+
     if path.exists() and not os.access(path, os.W_OK):
         path.chmod(path.stat().st_mode | stat.S_IWUSR)
 
 
-
-
-
-def copy_rows(X_src, idx: np.ndarray, out_path: Path, dim: int,
-              chunk: int, log) -> None:
+def copy_rows(
+    X_src, idx: np.ndarray, out_path: Path, dim: int, chunk: int, log
+) -> None:
     """소스 memmap에서 idx가 가리키는 행만 골라 새 .npy로 복사한다."""
     n = int(idx.size)
     out = open_memmap(out_path, mode="w+", dtype=np.float32, shape=(n, dim))
@@ -80,7 +89,9 @@ def copy_all(X_src, n: int, out_path: Path, dim: int, chunk: int, log) -> None:
         del out
 
 
-def verify_sample(X_src, idx: np.ndarray, out_path: Path, rng, n_check: int, log) -> bool:
+def verify_sample(
+    X_src, idx: np.ndarray, out_path: Path, rng, n_check: int, log
+) -> bool:
     """
     무작위 표본 행을 골라 원본과 산출물이 정확히 일치하는지 확인한다.
     '인덱스만 남겨도 X를 복원할 수 있다'를 실제로 보증하기 위한 검사.
@@ -106,12 +117,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="최종 .npy 산출물 생성")
     add_root_arg(ap)
     ap.add_argument("--chunk", type=int, default=DEFAULT_CHUNK)
-    ap.add_argument("--verify", action="store_true",
-                    help="무작위 표본으로 원본과의 일치를 검증")
-    ap.add_argument("--verify-n", type=int, default=200,
-                    help="검증할 표본 행 수 (기본 200)")
-    ap.add_argument("--skip-lockbox", action="store_true",
-                    help="lockbox(test/challenge) 복사를 건너뜀")
+    ap.add_argument(
+        "--verify", action="store_true", help="무작위 표본으로 원본과의 일치를 검증"
+    )
+    ap.add_argument(
+        "--verify-n", type=int, default=200, help="검증할 표본 행 수 (기본 200)"
+    )
+    ap.add_argument(
+        "--skip-lockbox",
+        action="store_true",
+        help="lockbox(test/challenge) 복사를 건너뜀",
+    )
     args = ap.parse_args()
 
     layout = Layout(args.root)
@@ -132,9 +148,13 @@ def main() -> int:
     for split in DEV_SPLITS:
         idx_path = layout.split_idx_path(split)
         if not idx_path.is_file():
-            log.error("%s 없음 — split_qc.py를 먼저 실행하세요. "
-                      "(분할 경계를 바꿨다면 04를 --force로 다시 돌려야 "
-                      "idx_%s.npy가 생깁니다.)", idx_path, split)
+            log.error(
+                "%s 없음 — split_qc.py를 먼저 실행하세요. "
+                "(분할 경계를 바꿨다면 04를 --force로 다시 돌려야 "
+                "idx_%s.npy가 생깁니다.)",
+                idx_path,
+                split,
+            )
             return 1
         idx = np.load(idx_path)
 
@@ -158,7 +178,9 @@ def main() -> int:
             log.info("  검증 통과 — 인덱스만으로 복원 가능함이 확인되었습니다.")
 
         manifest_rows[f"X_{split}"] = {
-            "path": str(x_out), "shape": [int(idx.size), dim], "dtype": "float32",
+            "path": str(x_out),
+            "shape": [int(idx.size), dim],
+            "dtype": "float32",
         }
 
     del X_train
@@ -190,13 +212,19 @@ def main() -> int:
             if mask_path.is_file():
                 np.save(m_out, np.load(mask_path))
 
-            log.info("%s: %d행 → 예상 %s (필터링 없이 전체 복사)",
-                     x_out.name, n, fmt_bytes(n * dim * 4))
+            log.info(
+                "%s: %d행 → 예상 %s (필터링 없이 전체 복사)",
+                x_out.name,
+                n,
+                fmt_bytes(n * dim * 4),
+            )
             with Timer(log, f"X_{subset}.npy 생성"):
                 copy_all(X_src, n, x_out, dim, args.chunk, log)
 
             manifest_rows[f"X_{subset}"] = {
-                "path": str(x_out), "shape": [int(n), dim], "dtype": "float32",
+                "path": str(x_out),
+                "shape": [int(n), dim],
+                "dtype": "float32",
                 "lockbox": True,
             }
             del X_src, y_src

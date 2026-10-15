@@ -9,13 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from speakeasy_worker.fakes import (
+from tests.speakeasy_worker.fakes import (
     SAMPLE,
     SAMPLE_SHA256,
     FakeSamples,
     MemoryQueue,
 )
-from speakeasy_worker.fakes import (
+from tests.speakeasy_worker.fakes import (
     MemoryRepository as WorkerMemoryRepository,
 )
 

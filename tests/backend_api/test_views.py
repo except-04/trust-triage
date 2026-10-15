@@ -274,19 +274,25 @@ def test_archived_static_result_preview_discloses_truncation_without_leaking_loc
     assert "s3://private" not in value.model_dump_json()
 
 
-def test_public_static_detail_diagnostics_keep_codes_and_sizes_without_private_text(snapshot):
+def test_public_static_detail_diagnostics_keep_codes_and_sizes_without_private_text(
+    snapshot,
+):
     snapshot["static_results"]["CAPA"].update(
         details_status="OMITTED_TOO_LARGE",
         details_error={
-            "code": "RESULT_TOO_LARGE", "actual_bytes": 9_000_000,
-            "limit_bytes": 8_388_608, "message": PRIVATE_PATH,
+            "code": "RESULT_TOO_LARGE",
+            "actual_bytes": 9_000_000,
+            "limit_bytes": 8_388_608,
+            "message": PRIVATE_PATH,
         },
     )
     snapshot["static_results"]["FLOSS"].update(
         details_status="ARCHIVE_FAILED",
         details_error={
-            "code": "S3_WRITE_FAILED", "actual_bytes": 300_000,
-            "limit_bytes": 8_388_608, "message": PRIVATE_PATH,
+            "code": "S3_WRITE_FAILED",
+            "actual_bytes": 300_000,
+            "limit_bytes": 8_388_608,
+            "message": PRIVATE_PATH,
         },
     )
 
@@ -294,7 +300,8 @@ def test_public_static_detail_diagnostics_keep_codes_and_sizes_without_private_t
 
     assert value.capa["details_status"] == "OMITTED_TOO_LARGE"
     assert value.capa["details_error"] == {
-        "code": "RESULT_TOO_LARGE", "actual_bytes": 9_000_000,
+        "code": "RESULT_TOO_LARGE",
+        "actual_bytes": 9_000_000,
         "limit_bytes": 8_388_608,
     }
     assert value.floss["details_status"] == "ARCHIVE_FAILED"
@@ -304,14 +311,19 @@ def test_public_static_detail_diagnostics_keep_codes_and_sizes_without_private_t
 
 def test_large_worker_preview_count_reaches_public_projection(snapshot):
     request = DeepAnalysisRequest(
-        "analysis-view", SHA256,
-        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+        "analysis-view",
+        SHA256,
+        "s3://worker-test-bucket/raw/fixture.bin",
+        "DEEP_ANALYSIS",
     )
     event = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
     analysis = DynamicAnalysisResult(
-        evidence_id="large-worker", sha256=SHA256,
-        source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
-        status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
+        evidence_id="large-worker",
+        sha256=SHA256,
+        source="SPEAKEASY",
+        category="DYNAMIC_ANALYSIS",
+        status=DynamicAnalysisStatus.SUCCESS,
+        summary="synthetic observations",
         observed_apis=("CreateFileW",),
         events={"api_calls": tuple(dict(event) for _ in range(100))},
         metadata={
@@ -329,20 +341,27 @@ def test_large_worker_preview_count_reaches_public_projection(snapshot):
     assert value.speakeasy["behavior_truncated"] is True
     assert value.speakeasy["event_counts"]["api_calls"] == 110
     assert value.speakeasy["adapter_events_truncated"] is True
-    assert value.speakeasy["original_result_bytes"] > value.speakeasy["result_limit_bytes"]
+    assert (
+        value.speakeasy["original_result_bytes"] > value.speakeasy["result_limit_bytes"]
+    )
     assert "service_creation_calls" not in value.model_dump_json()
 
 
 def test_adapter_and_worker_omissions_reach_public_projection(snapshot):
     request = DeepAnalysisRequest(
-        "analysis-view", SHA256,
-        "s3://worker-test-bucket/raw/fixture.bin", "DEEP_ANALYSIS",
+        "analysis-view",
+        SHA256,
+        "s3://worker-test-bucket/raw/fixture.bin",
+        "DEEP_ANALYSIS",
     )
     event = {"api_name": "CreateFileW", "args": ["x" * 4096] * 6}
     analysis = DynamicAnalysisResult(
-        evidence_id="adapter-worker", sha256=SHA256,
-        source="SPEAKEASY", category="DYNAMIC_ANALYSIS",
-        status=DynamicAnalysisStatus.SUCCESS, summary="synthetic observations",
+        evidence_id="adapter-worker",
+        sha256=SHA256,
+        source="SPEAKEASY",
+        category="DYNAMIC_ANALYSIS",
+        status=DynamicAnalysisStatus.SUCCESS,
+        summary="synthetic observations",
         observed_apis=("CreateFileW", "CreateServiceW"),
         events={
             "api_calls": tuple(dict(event) for _ in range(100)),
@@ -353,8 +372,11 @@ def test_adapter_and_worker_omissions_reach_public_projection(snapshot):
             "events_truncated": True,
             "adapter_events_truncated": True,
             "service_creation_calls": {
-                "calls": [{"api_name": "createservicew", "event_index": 105, "ret_val": "0x0"}],
-                "total": 1, "complete": True,
+                "calls": [
+                    {"api_name": "createservicew", "event_index": 105, "ret_val": "0x0"}
+                ],
+                "total": 1,
+                "complete": True,
             },
         },
     )

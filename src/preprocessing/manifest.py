@@ -35,9 +35,18 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (  # noqa: E402
-    Layout, Timer, add_root_arg, env_versions, fmt_bytes, get_dim,
-    read_json, setup_logging, sha256_file, split_contract, thrember_commit,
+from common import (
+    Layout,
+    Timer,
+    add_root_arg,
+    env_versions,
+    fmt_bytes,
+    get_dim,
+    read_json,
+    setup_logging,
+    sha256_file,
+    split_contract,
+    thrember_commit,
     write_json,
 )
 
@@ -143,12 +152,21 @@ y_val = np.load("out/dev/y_val.npy")
 def main() -> int:
     ap = argparse.ArgumentParser(description="manifest 생성 및 lockbox 봉인")
     add_root_arg(ap)
-    ap.add_argument("--thrember-repo", default=None,
-                    help="thrember git 저장소 경로 (커밋 해시 기록용)")
-    ap.add_argument("--no-seal", action="store_true",
-                    help="lockbox 파일을 읽기 전용으로 만들지 않음")
-    ap.add_argument("--hash-dat", action="store_true",
-                    help="dataset/*.dat도 해시 (26GB 읽기, 인덱스 공유 시 필요)")
+    ap.add_argument(
+        "--thrember-repo",
+        default=None,
+        help="thrember git 저장소 경로 (커밋 해시 기록용)",
+    )
+    ap.add_argument(
+        "--no-seal",
+        action="store_true",
+        help="lockbox 파일을 읽기 전용으로 만들지 않음",
+    )
+    ap.add_argument(
+        "--hash-dat",
+        action="store_true",
+        help="dataset/*.dat도 해시 (26GB 읽기, 인덱스 공유 시 필요)",
+    )
     args = ap.parse_args()
 
     layout = Layout(args.root)
@@ -176,9 +194,11 @@ def main() -> int:
         # 안에 두 번 실린다. 분포 항목은 label_stats()가 만든 dict이므로
         # n_total 유무로 판별한다.
         "class_distribution": {
-            k: v for k, v in qc.items()
+            k: v
+            for k, v in qc.items()
             if k.startswith(("split_", "lockbox_", "train_raw"))
-            and isinstance(v, dict) and "n_total" in v
+            and isinstance(v, dict)
+            and "n_total" in v
         },
         "weekly_malicious_ratio": qc.get("weekly_malicious_ratio"),
     }

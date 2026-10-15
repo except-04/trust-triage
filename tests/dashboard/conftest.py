@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-
 DASHBOARD_DIR = Path(__file__).parents[2] / "dashboard"
 
 # app.py 가 `import api_client` 로 형제 모듈을 부른다. 테스트 모듈도 ApiError 를
@@ -112,7 +111,12 @@ def _streamlit_stub():
     def stop(*args, **kwargs):
         raise Stop()
 
+    def dialog(*args, **kwargs):
+        # @st.dialog("제목", width=...) 형태. 함수는 그대로 두어 직접 호출할 수 있게 한다
+        return lambda fn: fn
+
     module.fragment = fragment
+    module.dialog = dialog
     module.rerun = rerun
     module.stop = stop
     module.set_page_config = lambda *a, **k: None

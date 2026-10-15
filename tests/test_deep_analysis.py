@@ -223,7 +223,9 @@ def test_capa_and_floss_run_as_one_static_phase_and_reach_llm(
     assert result.deep_analysis_status is DeepAnalysisStatus.COMPLETE
     assert result.executed_tiers == (AnalysisTier.CAPA, AnalysisTier.FLOSS)
     assert result.last_tier is AnalysisTier.FLOSS
-    assert result.final_verdict == "MALICIOUS"
+    assert result.final_verdict == "SUSPICIOUS"
+    assert result.disposition is DeepAnalysisDisposition.MANUAL_REVIEW
+    assert result.requires_human_review is True
     assert capa.calls == 1
     assert floss.calls == 1
     assert speakeasy.calls == 0
@@ -231,6 +233,7 @@ def test_capa_and_floss_run_as_one_static_phase_and_reach_llm(
     assert {item.source for item in llm.evidence} == {"CAPA", "FLOSS"}
     assert result.llm_interpretation is not None
     assert result.llm_interpretation.status is LLMInterpretationStatus.SUCCESS
+    assert result.llm_interpretation.verdict == "MALICIOUS"
 
 
 def test_floss_failure_does_not_discard_successful_capa_evidence(

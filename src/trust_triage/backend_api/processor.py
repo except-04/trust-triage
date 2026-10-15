@@ -13,6 +13,7 @@ from trust_triage.storage.artifacts import ArtifactError, ArtifactIdentity
 from .config import BackendConfig
 from .deep_gateway import DeepGateway, current_deep_stage, validate_snapshot
 from .errors import BackendError
+from .notifications import DiscordNotifier
 from .repository import AnalysisRecord, AnalysisRepository
 from .schemas import FinalAssessment, InitialResult
 from .service import stored_sample
@@ -79,12 +80,12 @@ class _Lease:
 
 
 def assess(record: AnalysisRecord, *, failure: bool = False) -> dict[str, Any]:
-    """최종 자동판정 규칙은 팀 확정 전이므로 심층분석 대상은 전문가에게 보낸다."""
+    """초기 자동 판정 또는 근거에 기반한 심층 판정을 검토 상태와 함께 저장한다."""
     initial = record.initial_result or {}
     verdict = initial.get("initial_verdict")
     if failure:
         value = FinalAssessment(
-            final_verdict="UNCERTAIN",
+            final_verdict="INCONCLUSIVE",
             disposition="ANALYSIS_FAILED",
             requires_human_review=True,
             reason="분석을 완료하지 못했습니다. 실패를 악성 증거로 사용하지 않고 전문가 검토로 넘깁니다.",
@@ -104,11 +105,39 @@ def assess(record: AnalysisRecord, *, failure: bool = False) -> dict[str, Any]:
             reason="초기 JRR이 악성 경보를 제안했습니다. 전문가가 증거를 확인해야 합니다.",
         )
     else:
+        deep = record.deep_result or {}
+        result = deep.get("result") or {}
+        llm = result.get("llm_interpretation") or {}
+        deep_verdict = (
+            result.get("final_verdict")
+            if deep.get("status") == "COMPLETED" and llm.get("status") == "SUCCESS"
+            else None
+        )
+        reasons = {
+            "MALICIOUS": "심층 분석의 관찰 근거와 LLM 해석이 악성 판정을 제안합니다. 전문가 검토가 필요합니다.",
+            "SUSPICIOUS": "악성 정황이 있으나 실행 근거가 부족하거나 증거가 상충하여 추가 검토가 필요합니다.",
+            "BENIGN": "심층 분석 근거와 LLM 해석이 정상 판정을 제안합니다. 전문가 검토가 필요합니다.",
+        }
+        reason = reasons.get(deep_verdict)
+        if reason is None:
+            deep_verdict = "INCONCLUSIVE"
+            if verdict == "AUTO_BENIGN" and initial.get("xai_status") == "FAILED":
+                reason = "초기 모델은 정상으로 분류했으나 XAI 설명을 확보하지 못하여 전문가 검토가 필요합니다."
+            elif llm.get("status") and llm["status"] != "SUCCESS":
+                reason = f"LLM 해석을 확보하지 못했습니다 ({llm['status']}). 확보된 근거를 전문가가 검토해야 합니다."
+            elif "BENIGN_EVIDENCE_INCOMPLETE_OR_CONFLICTING" in result.get(
+                "reason_codes", []
+            ):
+                reason = "정상 판정을 제안하는 해석이 있으나 분석 오류 또는 상충하는 근거가 남아 있어 판정을 보류합니다."
+            else:
+                reason = "확보된 근거로 악성 여부를 판단하기 어렵습니다. 추가 증거 또는 전문가 검토가 필요합니다."
         value = FinalAssessment(
-            final_verdict="UNCERTAIN",
-            disposition="MANUAL_REVIEW",
+            final_verdict=deep_verdict,
+            disposition=(
+                "ALERT_RECOMMENDED" if deep_verdict == "MALICIOUS" else "MANUAL_REVIEW"
+            ),
             requires_human_review=True,
-            reason="누적 증거와 LLM 해석을 전문가에게 제공합니다. 최종 자동 재판정 정책은 팀 합의 후 교체합니다.",
+            reason=reason,
         )
     return value.model_dump(mode="json")
 
@@ -130,8 +159,10 @@ class BackendProcessor:
             config,
         )
         self.artifacts = storage.artifact_store(max_bytes=config.max_artifact_bytes)
+        self.notifications = DiscordNotifier(config)
 
     def close(self) -> None:
+        self.notifications.close()
         close = getattr(self.initial, "close", None)
         if close is not None:
             close()
@@ -157,6 +188,52 @@ class BackendProcessor:
             ):
                 raise LeaseLost("Artifact/checkpoint ownership expired")
         return True
+
+    def _finalize(self, record, token, lease) -> AnalysisRecord:
+        """FINALIZING 단계의 최종 판정을 기록한다. DB 쓰기 한 번이라 즉시 끝난다."""
+        analysis_id = record.analysis_id
+        failed = (record.deep_result or {}).get("status") == "FAILED"
+        error = (
+            BackendError(
+                "DEEP_ANALYSIS_FAILED",
+                "심층 분석이 실패하여 전문가 검토가 필요합니다.",
+                stage="FINAL_ASSESSMENT",
+            ).to_dict()
+            if failed
+            else None
+        )
+        lease.check()
+        assessment = assess(record, failure=failed)
+        lease.saved(
+            self._checkpoint(
+                record,
+                token,
+                "FINAL_ASSESSMENT",
+                {"final_assessment": assessment, "error": error},
+                lambda transaction: transaction.finish(
+                    analysis_id,
+                    token,
+                    assessment,
+                    error=error,
+                ),
+                check=lease.check,
+            )
+        )
+        self.notifications.finished(
+            record,
+            self.repository,
+            assessment=assessment,
+            error=error,
+        )
+        return self.repository.get(analysis_id)
+
+    def _finalize_now(self, analysis_id, token, lease) -> AnalysisRecord:
+        """방금 저장한 체크포인트를 다시 읽어 같은 lease 안에서 마무리한다."""
+        lease.check()
+        record = self.repository.get(analysis_id)
+        if record is None or record.phase != "FINALIZING":
+            raise LeaseLost("Analysis left the finalizing phase")
+        return self._finalize(record, token, lease)
 
     def resume(self, analysis_id: str) -> AnalysisRecord:
         claim = self.repository.claim(analysis_id, self.config.lease_seconds)
@@ -203,6 +280,12 @@ class BackendProcessor:
                             check=lease.check,
                         )
                     )
+                    self.notifications.emit("RISK_ALERT", record, initial=value)
+                    if value["route"] != "DEEP_ANALYSIS":
+                        # 심층 분석이 필요 없는 건은 같은 lease로 바로 마무리한다.
+                        # 다음 루프 바퀴로 미루면 앞선 건의 CAPA/FLOSS가 끝날 때까지
+                        # 초기 판정이 끝난 건도 RUNNING으로 남는다.
+                        return self._finalize_now(analysis_id, token, lease)
                 elif record.phase == "WAITING_DEEP":
                     created = datetime.fromisoformat(record.created_at)
                     value = None
@@ -251,35 +334,11 @@ class BackendProcessor:
                         if value["status"] in {"COMPLETED", "FAILED"}
                         else save_deep(self.repository)
                     )
+                    if value["status"] in {"COMPLETED", "FAILED"}:
+                        # 심층 분석 종료 직후에도 다음 바퀴를 기다리지 않고 마무리한다.
+                        return self._finalize_now(analysis_id, token, lease)
                 elif record.phase == "FINALIZING":
-                    failed = (record.deep_result or {}).get("status") == "FAILED"
-                    error = (
-                        BackendError(
-                            "DEEP_ANALYSIS_FAILED",
-                            "심층 분석이 실패하여 전문가 검토가 필요합니다.",
-                            stage="FINAL_ASSESSMENT",
-                        ).to_dict()
-                        if failed
-                        else None
-                    )
-                    lease.check()
-                    assessment = assess(record, failure=failed)
-                    lease.saved(
-                        self._checkpoint(
-                            record,
-                            token,
-                            "FINAL_ASSESSMENT",
-                            {"final_assessment": assessment, "error": error},
-                            lambda transaction: transaction.finish(
-                                analysis_id,
-                                token,
-                                assessment,
-                                error=error,
-                            ),
-                            check=lease.check,
-                        )
-                    )
-                    return self.repository.get(analysis_id)
+                    return self._finalize(record, token, lease)
                 else:
                     raise BackendError(
                         "INVALID_PROCESSING_PHASE",
@@ -326,8 +385,9 @@ class BackendProcessor:
                                 analysis_id, token, assessment, error=failure
                             )
 
+                        saved = False
                         try:
-                            self._checkpoint(
+                            saved = self._checkpoint(
                                 record,
                                 token,
                                 "FINAL_ASSESSMENT",
@@ -343,10 +403,14 @@ class BackendProcessor:
                                 "failure_artifact_unavailable analysis_id=%s",
                                 analysis_id,
                             )
-                            finish_failure(self.repository)
+                            saved = finish_failure(self.repository)
                         except LeaseLost:
                             LOGGER.warning(
                                 "analysis_lease_lost analysis_id=%s", analysis_id
+                            )
+                        if saved:
+                            self.notifications.finished(
+                                record, self.repository, error=failure
                             )
                 except BackendError:
                     # 연결 복구 후 lease 만료로 재개한다. DB 오류 본문에 DSN은 남기지 않는다.

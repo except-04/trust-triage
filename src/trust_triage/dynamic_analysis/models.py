@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping
-
+from typing import Any
 
 DYNAMIC_ANALYSIS_SCHEMA_VERSION = "dynamic-analysis-v1"
 
@@ -74,7 +74,9 @@ class DynamicAnalysisResult:
             "analysis_time_ms": self.analysis_time_ms,
             "warnings": list(self.warnings),
             "errors": list(self.errors),
-            "raw_report": dict(self.raw_report) if self.raw_report is not None else None,
+            "raw_report": dict(self.raw_report)
+            if self.raw_report is not None
+            else None,
             "tool_version": self.tool_version,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
