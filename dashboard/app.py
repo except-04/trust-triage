@@ -2251,7 +2251,7 @@ def render_hash_search_results(target):
 
 
 def render_recent_analyses(limit=5):
-    """업로드 패널 바로 아래의 최근 분석 이력(최신 5건) 퀵뷰 패널."""
+    """분석 이력 검색 바로 아래의 최근 분석 이력(최신 5건) 접이식 패널."""
     try:
         res = api_client.search_analyses(limit=limit, sort="newest")
         analyses = res.get("analyses", []) if res else []
@@ -2261,17 +2261,12 @@ def render_recent_analyses(limit=5):
     if not analyses:
         return
 
-    panel = st.container(border=True, key="recent_analyses_panel")
-    header_col, count_col = panel.columns([5, 1], vertical_alignment="center")
-    header_col.markdown(
-        '<div class="batch-panel-title">최근 분석 이력 (최신 5건)</div>',
-        unsafe_allow_html=True,
-    )
     total_count = res.get("total_count", len(analyses))
-    count_col.caption(f"총 {total_count}건 등록됨")
-
-    panel.caption(
-        "최근 접수 및 분석된 5개 파일 목록입니다. 상세 결과가 필요한 경우 아래 '분석 이력 검색'에 SHA-256을 입력하여 확인하실 수 있습니다."
+    expander = st.expander(
+        f"🕒 최근 분석 이력 확인 (최신 5건 / 전체 {total_count}건)", expanded=False
+    )
+    expander.caption(
+        "최근 접수 및 분석된 5개 파일 목록입니다. 상세 결과가 필요한 경우 위 '분석 이력 검색'에 SHA-256을 입력하여 조회하실 수 있습니다."
     )
 
     rows = []
@@ -2305,7 +2300,7 @@ def render_recent_analyses(limit=5):
     import pandas as pd
 
     df = pd.DataFrame(rows)
-    panel.dataframe(
+    expander.dataframe(
         df,
         use_container_width=True,
         hide_index=True,
@@ -4472,8 +4467,8 @@ result = st.session_state.analysis_result
 
 if result is None:
     render_input_view()
-    render_recent_analyses(limit=5)
     render_hash_search()
+    render_recent_analyses(limit=5)
     render_analyst_priority_queue()
 
 else:
