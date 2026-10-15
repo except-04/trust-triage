@@ -381,15 +381,18 @@ def _iso(value: Any) -> str | None:
 
 
 def _record(row: Mapping[str, Any]) -> DeepAnalysisRecord:
+    kwargs = {
+        "analysis_id": row["analysis_id"],
+        "sha256": row["sha256"],
+        "file_location": row["file_location"],
+        "initial_route": row["initial_route"],
+        "initial_verdict": row["initial_verdict"],
+        "requested_at": _iso(row["requested_at"]),
+    }
+    if "priority" in row and row["priority"]:
+        kwargs["priority"] = row["priority"]
     return DeepAnalysisRecord(
-        request=DeepAnalysisRequest(
-            analysis_id=row["analysis_id"],
-            sha256=row["sha256"],
-            file_location=row["file_location"],
-            initial_route=row["initial_route"],
-            initial_verdict=row["initial_verdict"],
-            requested_at=_iso(row["requested_at"]),
-        ),
+        request=DeepAnalysisRequest(**kwargs),
         config_fingerprint=row["config_fingerprint"],
         phase=DeepAnalysisPhase(row["phase"]),
         checkpoint=row["checkpoint"],

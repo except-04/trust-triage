@@ -74,7 +74,6 @@ class DeepAnalysisRequest:
             self.worker_job.same_input(other.worker_job)
             and self.initial_route == other.initial_route
             and self.initial_verdict == other.initial_verdict
-            and self.priority == other.priority
         )
 
     def to_dict(self) -> dict[str, str]:

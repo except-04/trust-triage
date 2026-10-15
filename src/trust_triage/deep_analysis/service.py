@@ -160,7 +160,11 @@ class DeepAnalysisService:
     def start(self, request: DeepAnalysisRequest) -> DeepAnalysisRecord:
         self._validate_route(request)
         record = self.repository.register(request, self.config_fingerprint)
-        return record if record.phase.terminal else self.resume(request.analysis_id)
+        return (
+            record
+            if record.phase.terminal
+            else self.resume(request.analysis_id, priority=request.priority)
+        )
 
     def register(self, request: DeepAnalysisRequest) -> DeepAnalysisRecord:
         """API가 즉시 응답해야 할 때 등록만 하고 run 프로세스에 정적 분석을 맡긴다."""
@@ -196,10 +200,28 @@ class DeepAnalysisService:
         elif not self.orchestrator.config.requires_deep_analysis(request.initial_route):
             raise InvalidJob("Unsupported initial deep-analysis route")
 
-    def resume(self, analysis_id: str) -> DeepAnalysisRecord:
+    def resume(
+        self, analysis_id: str, *, priority: str | None = None
+    ) -> DeepAnalysisRecord:
         record = self.repository.get(analysis_id)
         if record is None:
             raise ValueError("Deep-analysis request was not found")
+        if priority is not None and getattr(record.request, "priority", None) != priority:
+            record = replace(
+                record,
+                request=replace(record.request, priority=priority),
+            )
+        elif (
+            record.checkpoint
+            and isinstance(record.checkpoint, Mapping)
+            and record.checkpoint.get("priority")
+        ):
+            record = replace(
+                record,
+                request=replace(
+                    record.request, priority=record.checkpoint["priority"]
+                ),
+            )
         if record.phase.terminal or not _retry_due(record):
             return record
         claim = self.repository.claim(analysis_id, self.limits.lease_seconds)
@@ -308,6 +330,7 @@ class DeepAnalysisService:
                 "static": prepared.to_dict(),
                 "worker_result": None,
                 "waiting_since": utc_now(),
+                "priority": getattr(request, "priority", "NORMAL"),
             }
             phase = (
                 DeepAnalysisPhase.WAITING_SPEAKEASY

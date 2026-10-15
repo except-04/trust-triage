@@ -129,7 +129,9 @@ class ExistingDeepGateway:
                 _assert_same_input(stored.request, request)
                 # Resume owns the immutable-config check and persists its failure.
                 # Re-registering would reject changed config before that can run.
-            service.resume(record.analysis_id)
+            service.resume(
+                record.analysis_id, priority=getattr(record, "priority", "NORMAL")
+            )
             payload = service.get(record.analysis_id)
         except Exception as exc:
             if isinstance(exc, BackendError):
