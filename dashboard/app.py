@@ -2627,7 +2627,7 @@ def render_polling_panel(batch_data, auto_refresh):
                 <div class="batch-summary-label">Total</div>
                 <div class="batch-summary-value">{total}</div>
             </div>
-            <div class="batch-summary-item batch-summary-priority">
+            <div class="batch-summary-item">
                 <div class="batch-summary-label">Queued</div>
                 <div class="batch-summary-value">{counts["QUEUED"]}</div>
             </div>
