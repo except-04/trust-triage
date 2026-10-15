@@ -595,3 +595,8 @@ Swagger UI는 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)에서 제
 | `/openapi.json` | OpenAPI 3.1 JSON 명세 |
 
 실행 중인 서버의 `/openapi.json`이 API 계약의 기준이다. 저장소의 [openapi.json](openapi.json)은 배포 또는 검토용 스냅샷이며 코드 변경 시 함께 다시 생성한다. operation 설명과 예시는 [api_docs.py](../../src/trust_triage/backend_api/api_docs.py), 필드 설명은 [schemas.py](../../src/trust_triage/backend_api/schemas.py)에서 관리한다. Swagger UI 설정은 FastAPI의 [Swagger UI 구성 방식](https://fastapi.tiangolo.com/how-to/configure-swagger-ui/)을 사용한다.
+
+
+### 동일 파일의 큐 대표 항목 및 분석 이력
+
+DEEP(긴급 대응 포함)과 ERROR는 각각 SHA-256별 대표 한 행을 반환합니다. DEEP 대표는 긴급 대응 증거, 4대 위험 신호, Fail-Closed/JRR 오류 순으로 기존 정책과 점수를 적용하며 동점은 최신 분석을 선택합니다. ERROR 대표는 최신 오류 항목입니다. 두 큐의 대표는 독립적입니다. `analysis_count`, `failure_count`, `jrr_error_count`, `analysis_history`로 해당 해시의 전체 접수 이력과 개별 analysis_id·시각·상태·오류를 제공합니다. 검토 완료 여부는 analysis_id별로 적용하며 동일 해시의 다른 분석을 일괄 검토 처리하지 않습니다. DB 마이그레이션은 없습니다.

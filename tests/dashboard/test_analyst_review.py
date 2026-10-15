@@ -75,6 +75,46 @@ def test_fail_closed_queue_uses_fifo_after_risk_signals(app):
     assert [it["analysis_id"] for it in app.sort_deep_queue_items(items)] == ["risk", "old", "new"]
 
 
+def test_queue_history_loads_all_pages_and_preserves_failures(app, monkeypatch):
+    calls = []
+
+    def search(**kwargs):
+        calls.append(kwargs)
+        if kwargs["offset"] == 0:
+            return {"total_count": 2, "analyses": [{"analysis_id": "failed", "status": "FAILED", "initial_verdict": None, "error": {"code": "PROCESSING_FAILED"}}]}
+        return {"total_count": 2, "analyses": [{"analysis_id": "reviewed", "status": "COMPLETED", "initial_verdict": "AUTO_BENIGN", "analyst_final_verdict": "BENIGN"}]}
+
+    monkeypatch.setattr(api_client, "search_analyses", search)
+    rows = app.load_queue_analysis_history("a" * 64)
+    assert [call["offset"] for call in calls] == [0, 1]
+    assert rows[0]["has_initial_result"] is False
+    assert rows[0]["error"]["code"] == "PROCESSING_FAILED"
+    assert rows[1]["has_initial_result"] is True
+    assert rows[1]["review_status"] == "검토 완료"
+
+
+@pytest.mark.parametrize("queue", ["deep", "auto", "retrain", "completed", "error"])
+@pytest.mark.parametrize("selected", [False, True])
+def test_queue_detail_requires_history_row_selection(app, monkeypatch, queue, selected):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "streamlit", app.st)
+    events = iter([[0], [0] if selected else []])
+    monkeypatch.setattr(app.st, "dataframe", lambda *args, **kwargs:
+                        SimpleNamespace(selection=SimpleNamespace(rows=next(events))))
+    buttons = []
+    monkeypatch.setattr(app.st, "button", lambda label, **kwargs:
+                        buttons.append((label, kwargs.get("disabled", False))) or False)
+    app.render_queue_table(queue, "목록", [{
+        "analysis_id": "one", "filename": "sample.exe", "sha256": "a" * 64,
+        "has_initial_result": True,
+        "analysis_history": [{"analysis_id": "one", "status": "COMPLETED",
+                              "has_initial_result": True}],
+    }])
+    assert ("상세 결과 보기", not selected) in buttons
+
+
 def test_error_without_initial_result_has_no_detail_button(app, monkeypatch):
     import sys
     from types import SimpleNamespace

@@ -7,6 +7,36 @@ from trust_triage.backend_api.repository import AnalysisRecord
 
 
 @pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
+@pytest.mark.parametrize("status", ["FAILED", "COMPLETED"])
+def test_reviewed_errors_remain_in_error_queue(repository_kind, status):
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    row = dict(analysis_id="reviewed-error", filename="error.exe", sha256="e" * 64,
+               created_at=datetime.now(timezone.utc), status=status,
+               initial_result={"initial_verdict": "AUTO_BENIGN", "prediction": {}},
+               error={"code": "PROCESSING_FAILED"}, is_reviewed=True)
+    if repository_kind == "postgres":
+        connection = MagicMock()
+        connection.cursor.return_value.__enter__.return_value.fetchall.return_value = [row]
+        repo = object.__new__(PostgresAnalysisRepository)
+        repo._connection = MagicMock()
+        repo._connection.return_value.__enter__.return_value = connection
+    else:
+        repo = MemoryAnalysisRepository()
+        repo.rows[row["analysis_id"]] = AnalysisRecord(
+            **{key: row[key] for key in ("analysis_id", "filename", "sha256", "status", "initial_result", "error")},
+            file_location="local", size_bytes=100, created_at=row["created_at"].isoformat())
+        repo.reviews["review"] = {"analysis_id": row["analysis_id"], "review_status": "COMPLETED"}
+    errors = [item for item in repo.get_priority_recommendations() if item["queue_name"] == "ERROR"]
+    assert len(errors) == 1
+    assert errors[0]["analysis_id"] == "reviewed-error"
+    assert errors[0]["review_status"] == "검토 완료"
+    assert errors[0]["analysis_history"][0]["error"]["code"] == "PROCESSING_FAILED"
+
+
+@pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
 @pytest.mark.parametrize("reviewed", [False, True])
 def test_failed_analyses_are_not_hidden_by_same_hash_success(repository_kind, reviewed):
     from datetime import datetime, timezone
@@ -23,7 +53,7 @@ def test_failed_analyses_are_not_hidden_by_same_hash_success(repository_kind, re
     if repository_kind == "postgres":
         connection = MagicMock()
         cursor = connection.cursor.return_value.__enter__.return_value
-        cursor.fetchall.return_value = rows[1:] if reviewed else rows
+        cursor.fetchall.return_value = [dict(row, is_reviewed=reviewed and row["analysis_id"] == "success") for row in rows]
         repo = object.__new__(PostgresAnalysisRepository)
         repo._connection = MagicMock()
         repo._connection.return_value.__enter__.return_value = connection
@@ -37,11 +67,15 @@ def test_failed_analyses_are_not_hidden_by_same_hash_success(repository_kind, re
         if reviewed:
             repo.reviews["success-review"] = {"analysis_id": "success", "review_status": "COMPLETED"}
     result = repo.get_priority_recommendations()
-    assert {item["analysis_id"] for item in result if item["queue_name"] == "ERROR"} == {"failure-one", "failure-two"}
+    assert {item["analysis_id"] for item in result if item["queue_name"] == "ERROR"} == {"failure-two"}
+    grouped = next(item for item in result if item["queue_name"] == "ERROR")
+    assert {h["analysis_id"] for h in grouped["analysis_history"]} == {"success", "failure-one", "failure-two"}
+    assert grouped["analysis_count"] == 3
+    assert grouped["failure_count"] == 2
     if not reviewed:
         assert {item["analysis_id"] for item in result if item["queue_name"] == "AUTO"} == {"success"}
     if repository_kind == "postgres":
-        assert cursor.execute.call_args.args[0].count("a.status = 'FAILED' OR NOT EXISTS") == 2
+        assert "WHERE (a.initial_result" not in cursor.execute.call_args.args[0]
 
 
 def test_deep_failure_is_present_in_both_deep_and_error():
@@ -145,7 +179,7 @@ def test_postgres_query_includes_failed_rows_without_initial_result():
     repo._connection = MagicMock()
     repo._connection.return_value.__enter__.return_value = connection
     candidates = repo.get_priority_recommendations()
-    assert "OR a.status = 'FAILED'" in cursor.execute.call_args.args[0]
+    assert "WHERE (a.initial_result" not in cursor.execute.call_args.args[0]
     assert candidates[0]["queue_name"] == "ERROR"
     assert candidates[0]["initial_verdict"] is None
     assert candidates[0]["error"]["code"] == "JRR_OUTPUT_INVALID"

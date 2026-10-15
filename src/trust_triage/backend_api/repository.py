@@ -580,28 +580,28 @@ class PostgresAnalysisRepository:
                         WHERE r.analysis_id = a.analysis_id AND r.review_status = 'COMPLETED'
                     ) AS is_reviewed
                 FROM api_analyses a
-                WHERE (a.initial_result IS NOT NULL OR a.status = 'FAILED')
-                AND (a.status = 'FAILED' OR NOT EXISTS (
-                    SELECT 1 FROM api_reviews r
-                    WHERE r.analysis_id = a.analysis_id AND r.review_status = 'COMPLETED'
-                ))
-                AND (a.status = 'FAILED' OR NOT EXISTS (
-                    SELECT 1 FROM api_reviews r2
-                    JOIN api_analyses a2 ON r2.analysis_id = a2.analysis_id
-                    WHERE a2.sha256 = a.sha256 AND r2.review_status = 'COMPLETED'
-                ))
                 ORDER BY a.created_at DESC
             """)
             rows = cur.fetchall()
 
             candidates = []
-            seen_sha256 = set()
+            from .queue_grouping import group_candidates
+
+            history = {}
+            for row in rows:
+                initial = row.get("initial_result") or {}
+                history.setdefault(row["sha256"], []).append({
+                    "analysis_id": row["analysis_id"], "created_at": row["created_at"],
+                    "status": row.get("status"), "error": row.get("error"),
+                    "reason_code": initial.get("reason_code"), "jrr_error": initial.get("jrr_error"),
+                    "initial_verdict": initial.get("initial_verdict"),
+                    "has_initial_result": bool(initial),
+                    "review_status": "검토 완료" if row.get("is_reviewed") else "검토 중" if row.get("is_pending") else "검토 필요",
+                })
             for row in rows:
                 failed = row.get("status") == "FAILED"
-                if not failed and row["sha256"] in seen_sha256:
+                if not failed and not row.get("initial_result"):
                     continue
-                if not failed:
-                    seen_sha256.add(row["sha256"])
 
                 initial_result = row["initial_result"] or {}
                 deep_result = row.get("deep_result") or {}
@@ -639,6 +639,8 @@ class PostgresAnalysisRepository:
                     status=row.get("status"), error=row.get("error"),
                 )
                 if q["queue_name"] == "UNKNOWN" and not failed:
+                    continue
+                if row.get("is_reviewed") and not failed and q["queue_name"] != "ERROR":
                     continue
 
                 candidates.append(
@@ -726,6 +728,7 @@ class PostgresAnalysisRepository:
                         x["analysis_id"],
                     )
 
+            candidates = group_candidates(candidates, history)
             candidates.sort(key=get_sort_key)
             for i, c in enumerate(candidates):
                 c["rank"] = i + 1

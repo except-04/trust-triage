@@ -351,10 +351,6 @@ class MemoryAnalysisRepository:
 
         for record in sorted_rows:
             failed = record.status == "FAILED"
-            if not failed and record.sha256 in seen_sha256:
-                continue
-            if not failed and record.sha256 in completed_hashes:
-                continue
             if record.initial_result is None and record.status != "FAILED":
                 continue
 
@@ -364,8 +360,6 @@ class MemoryAnalysisRepository:
                 for rev_list in self.reviews.values()
                 for r in (rev_list if isinstance(rev_list, list) else [rev_list])
             )
-            if completed and not failed:
-                continue
 
             is_pending = any(
                 r.get("analysis_id") == record.analysis_id
@@ -414,6 +408,8 @@ class MemoryAnalysisRepository:
             )
             if q["queue_name"] == "UNKNOWN" and not failed:
                 continue
+            if completed and not failed and q["queue_name"] != "ERROR":
+                continue
 
             candidates.append(
                 {
@@ -447,6 +443,19 @@ class MemoryAnalysisRepository:
                 from trust_triage.backend_api.failure_queue import expose_failed_candidate
 
                 candidates.extend(expose_failed_candidate(candidates.pop()))
+
+        from trust_triage.backend_api.queue_grouping import group_candidates
+
+        history = {}
+        for record in sorted_rows:
+            initial = record.initial_result or {}
+            history.setdefault(record.sha256, []).append({
+                "analysis_id": record.analysis_id, "created_at": record.created_at,
+                "status": record.status, "error": record.error,
+                "reason_code": initial.get("reason_code"), "jrr_error": initial.get("jrr_error"),
+                "has_initial_result": bool(initial),
+            })
+        candidates = group_candidates(candidates, history)
 
         def policy_rank(policy):
             order = {

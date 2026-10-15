@@ -3882,6 +3882,27 @@ def error_queue_reason_text(item):
     return f"{reason.split(':', 1)[0]}: {label}"
 
 
+def load_queue_analysis_history(sha256):
+    """Load every page for queues whose list response has no embedded history."""
+    import api_client
+
+    records = []
+    offset = 0
+    while True:
+        response = api_client.search_analyses(sha256=sha256, limit=100, offset=offset)
+        page = response.get("analyses") or []
+        for entry in page:
+            records.append({
+                **entry,
+                "has_initial_result": bool(entry.get("initial_verdict")),
+                "review_status": "검토 완료" if entry.get("analyst_final_verdict") else
+                    "검토 중" if entry.get("review_revision") else "미검토",
+            })
+        offset += len(page)
+        if not page or offset >= response.get("total_count", offset):
+            return records
+
+
 def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     if not items:
         import streamlit as st
@@ -3914,6 +3935,8 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         page_items = items[offset : offset + limit]
 
     df = pd.DataFrame(page_items)
+    if "review_status" in df.columns:
+        df["review_status"] = df["review_status"].replace({"검토 필요": "미검토"})
     if queue_name.lower() == "error" and "queue_reason" in df.columns:
         df["queue_reason"] = [error_queue_reason_text(item) for item in page_items]
 
@@ -3921,6 +3944,12 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         df["calibrated_probability_display"] = df["calibrated_probability"].apply(
             lambda x: f"{x * 100:.2f}%" if pd.notnull(x) else "계산 불가"
         )
+
+    if "analysis_history" in df.columns:
+        df["history_summary"] = [
+            f"분석 {item.get('analysis_count', 1)}회 · 실패 {item.get('failure_count', 0)}회 · JRR 오류 {item.get('jrr_error_count', 0)}회"
+            for item in page_items
+        ]
 
     display_cols = {
         "rank": "순서" if queue_name.lower() in {"auto", "error"} else "순위",
@@ -3930,6 +3959,7 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         "calibrated_probability_display": "악성 확률",
         "queue_reason": "분류 이유",
         "review_status": "검토 상태",
+        "history_summary": "분석 이력",
     }
 
     if queue_name.lower() == "auto":
@@ -3942,6 +3972,8 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         display_cols["selection_reason"] = "판정 변경 내역"
     elif queue_name.lower() == "completed":
         display_cols["selection_reason"] = "판정 결과 내역"
+    elif queue_name.lower() == "error":
+        display_cols.pop("review_status", None)
 
     df_display = df[[c for c in display_cols if c in df.columns]].rename(
         columns=display_cols
@@ -3950,7 +3982,7 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
     st.write(f"### {title} ({total_count}건)")
     if queue_name.lower() == "deep":
         st.markdown(
-            "**정렬 기준**: 긴급 대응 → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 점수 계산 오류 → 초기 판정 불일치 순으로 표시합니다. 확률 불확실성 그룹은 악성 확률 내림차순, 나머지 위험 신호 그룹은 신호 점수 내림차순으로 정렬합니다. 점수 계산 오류·초기 판정 불일치 그룹과 각 그룹 내 동점은 등록순입니다."
+            "**정렬 기준**: 긴급 대응 → 확률 불확실성 → 모델 불일치 → 분포 이탈 → 분석 난이도 → 점수 계산 오류 → 초기 판정 불일치 순으로 표시합니다. 확률 불확실성 그룹은 악성 확률 내림차순, 나머지 위험 신호 그룹은 신호 점수 내림차순으로 정렬합니다. 동일 SHA-256은 우선순위가 높은 분석을 대표로 표시하며, 우선순위가 같으면 최신 분석을 선택합니다. 개별 분석 기록은 행을 선택해 확인할 수 있습니다."
         )
         st.caption(
             "💡 **긴급 대응 순서**: 데이터 파괴·랜섬웨어(1등급) → 복구 방해·서비스 중단(2등급) 순으로 우선합니다. 같은 등급에서는 동적 관측을 우선하고, 이후 악성 확률 내림차순으로 정렬하며, 동점이면 등록순입니다."
@@ -4004,23 +4036,89 @@ def render_queue_table(queue_name, title, items, is_waiting=False, limit=20):
         row_idx = event.selection.rows[0]
         selected_item = page_items[row_idx]
         st.write(f"**선택됨**: {selected_item['filename']}")
-        if queue_name.lower() == "error" and not selected_item.get("has_initial_result", True):
+        representative_id = selected_item["analysis_id"]
+        history_id = None
+        history = selected_item.get("analysis_history") or []
+        if not history and selected_item.get("sha256"):
+            try:
+                history = load_queue_analysis_history(selected_item["sha256"])
+            except api_client.ApiError as exc:
+                st.error(f"개별 분석 이력 조회 실패: {exc.message}")
+        if history:
+            with st.expander("개별 분석 이력 확인", expanded=True):
+                st.caption("대표 항목의 검토는 다른 analysis_id의 검토 상태를 변경하지 않습니다.")
+                st.caption(
+                    f"분석 {len(history)}회 · 실패 {sum(entry.get('status') == 'FAILED' for entry in history)}회 · "
+                    f"JRR 오류 {sum(bool(entry.get('jrr_error')) or entry.get('reason_code') == 'JRR_RESULT_INCONSISTENT' for entry in history)}회"
+                )
+                history_rows = []
+                for entry in history:
+                    error = entry.get("error") or {}
+                    history_rows.append({
+                        "analysis_id": entry["analysis_id"],
+                        "분석 시각": entry.get("created_at"), "상태": entry.get("status"),
+                        "검토 상태": "재분석 필요" if entry.get("status") == "FAILED" else
+                            "미검토" if entry.get("review_status") == "검토 필요" else entry.get("review_status"),
+                        "실패 원인": error.get("message") or error.get("code") or "-",
+                        "JRR 오류": (entry.get("jrr_error") or {}).get("message") or entry.get("reason_code") or "-",
+                    })
+                history_event = st.dataframe(
+                    pd.DataFrame(history_rows), hide_index=True, width="stretch",
+                    selection_mode="single-row", on_select="rerun",
+                    key=f"history_rows_{queue_name}_{selected_item['sha256']}_{representative_id}",
+                )
+                history_by_id = {entry["analysis_id"]: entry for entry in history}
+                def history_option_label(identity):
+                    entry = history_by_id[identity]
+                    labels = {
+                        "QUEUED": "분석 대기", "RUNNING": "분석 중",
+                        "COMPLETED": "분석 완료", "FAILED": "분석 실패",
+                    }
+                    status = labels.get(entry.get("status"), entry.get("status") or "상태 미확인")
+                    if entry.get("status") == "FAILED":
+                        code = (entry.get("error") or {}).get("code", "")
+                        if code.startswith("DEEP_"):
+                            status = "심층 분석 실패"
+                        elif not entry.get("has_initial_result", True):
+                            status = "초기 분석 실패"
+                    return f"{format_review_time(entry.get('created_at'))} · {status}"
+
+                if (
+                    history_event
+                    and getattr(history_event, "selection", None)
+                    and getattr(history_event.selection, "rows", None)
+                ):
+                    history_index = history_event.selection.rows[0]
+                    if 0 <= history_index < len(history):
+                        history_id = history[history_index]["analysis_id"]
+                st.caption("상세 결과를 볼 분석 기록")
+                st.write(history_option_label(history_id) if history_id else "위 표에서 상세 결과를 확인할 분석 기록을 선택해 주세요.")
+                if history_id:
+                    selected_item = {**selected_item, **history_by_id[history_id]}
+        if not selected_item.get("has_initial_result", True):
             st.caption("초기 분석 결과가 저장되지 않아 상세 결과를 제공할 수 없습니다. 목록의 실패 사유를 확인해 주세요.")
+            return
+        if history_id is None:
+            st.button(
+                "상세 결과 보기", disabled=True,
+                key=f"btn_view_{queue_name}_{representative_id}", type="primary",
+            )
             return
         if st.button(
             "상세 결과 보기",
-            key=f"btn_view_{selected_item['analysis_id']}",
+            key=f"btn_view_{queue_name}_{selected_item['analysis_id']}",
             type="primary",
         ):
             try:
                 full_result = api_client.get_result(selected_item["analysis_id"])
                 view_data = search_result_view(full_result)
-                view_data["queue_name"] = selected_item.get("queue_name")
-                view_data["queue_reason"] = selected_item.get("queue_reason")
-                view_data["priority_score"] = selected_item.get("priority_score")
-                view_data["score_policy"] = selected_item.get("score_policy")
-                view_data["priority_reason"] = selected_item.get("priority_reason")
-                view_data["triggered_signals"] = selected_item.get("triggered_signals")
+                if selected_item["analysis_id"] == representative_id:
+                    view_data["queue_name"] = selected_item.get("queue_name")
+                    view_data["queue_reason"] = selected_item.get("queue_reason")
+                    view_data["priority_score"] = selected_item.get("priority_score")
+                    view_data["score_policy"] = selected_item.get("score_policy")
+                    view_data["priority_reason"] = selected_item.get("priority_reason")
+                    view_data["triggered_signals"] = selected_item.get("triggered_signals")
                 view_data["is_waiting"] = is_waiting
                 st.session_state.analysis_result = view_data
                 st.session_state.batch_id = None

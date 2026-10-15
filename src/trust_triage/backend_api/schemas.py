@@ -703,6 +703,11 @@ class PriorityCandidate(APIModel):
     created_at: AwareDatetime | None = None
     status: AnalysisStatus | None = None
     has_initial_result: bool = True
+    analysis_count: int = 1
+    failure_count: int = 0
+    jrr_error_count: int = 0
+    analysis_history: list[dict[str, Any]] = Field(default_factory=list)
+
 
 
 class PriorityRecommendationResponse(APIModel):

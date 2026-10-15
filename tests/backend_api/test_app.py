@@ -143,7 +143,11 @@ def test_failures_survive_same_hash_success_and_review_in_http(api, reviewed):
     response = client.get("/analyst/recommendations")
     assert response.status_code == 200, response.text
     result = response.json()
-    assert {item["analysis_id"] for item in result["error_queue"]} == set(ids[:2])
+    assert len(result["error_queue"]) == 1
+    grouped = result["error_queue"][0]
+    assert grouped["failure_count"] == 2
+    assert grouped["analysis_count"] == 3
+    assert {h["analysis_id"] for h in grouped["analysis_history"]} == set(ids)
     assert all(not item["has_initial_result"] for item in result["error_queue"])
     if not reviewed:
         assert any(item["analysis_id"] == success for item in result["auto_queue"])
