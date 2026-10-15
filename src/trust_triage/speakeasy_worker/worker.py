@@ -149,22 +149,35 @@ class SpeakeasyWorker:
         self,
         *,
         queue: JobQueue,
+        urgent_queue: JobQueue | None = None,
         repository: JobRepository,
         samples: SampleStore,
         analyzer: Analyzer,
         limits: WorkerLimits | None = None,
         reports: ReportWriter | None = None,
     ) -> None:
-        self.queue, self.repository = queue, repository
+        self.queue, self.urgent_queue = queue, urgent_queue
+        self.repository = repository
         self.samples, self.analyzer = samples, analyzer
         self.limits = limits or WorkerLimits()
         self.reports = reports
 
     def run_once(self) -> Outcome:
+        if self.urgent_queue is not None:
+            delivery = self.urgent_queue.receive()
+            if delivery is not None:
+                return self.process(delivery, queue=self.urgent_queue)
         delivery = self.queue.receive()
-        return self.process(delivery) if delivery is not None else Outcome.IDLE
+        return (
+            self.process(delivery, queue=self.queue)
+            if delivery is not None
+            else Outcome.IDLE
+        )
 
-    def process(self, delivery: Delivery) -> Outcome:
+    def process(
+        self, delivery: Delivery, queue: JobQueue | None = None
+    ) -> Outcome:
+        active_queue = queue or self.queue
         job: SpeakeasyJob | None = None
         token: str | None = None
         started_at = utc_now()
@@ -173,13 +186,13 @@ class SpeakeasyWorker:
             claim = self.repository.claim(job, self.limits.visibility_seconds)
             token = claim.token
             if claim.record.status.terminal:
-                self.queue.acknowledge(delivery)
+                active_queue.acknowledge(delivery)
                 log_event(
                     "duplicate_completed_job", job=job, message_id=delivery.message_id
                 )
                 return Outcome.DUPLICATE
             if token is None:
-                self.queue.defer(delivery, self.limits.visibility_seconds)
+                active_queue.defer(delivery, self.limits.visibility_seconds)
                 log_event(
                     "job_already_running", job=job, message_id=delivery.message_id
                 )
@@ -192,7 +205,7 @@ class SpeakeasyWorker:
                 receive_count=delivery.receive_count,
             )
             with LeaseGuard(
-                self.repository, self.queue, job, delivery, token, self.limits
+                self.repository, active_queue, job, delivery, token, self.limits
             ) as guard:
                 result = None
                 try:
@@ -254,7 +267,7 @@ class SpeakeasyWorker:
                         )
                 result = self._save_result(job, token, result, guard)
 
-            self.queue.acknowledge(delivery)
+            active_queue.acknowledge(delivery)
             log_event(
                 "job_finished",
                 job=job,
@@ -269,14 +282,14 @@ class SpeakeasyWorker:
                 message_id=delivery.message_id,
                 error_type=type(exc).__name__,
             )
-            self._defer(delivery)
+            self._defer(delivery, queue=active_queue)
             return Outcome.REJECTED
         except LeaseLost:
             log_event("job_lease_lost", job=job, message_id=delivery.message_id)
             # 다른 Worker의 DB 상태나 메시지 점유 시간을 덮어쓰지 않는다.
             return Outcome.RETRY
         except RetryableError as exc:
-            self._retry(job, token, delivery, exc)
+            self._retry(job, token, delivery, exc, queue=active_queue)
             return Outcome.RETRY
         except Exception as exc:  # noqa: BLE001 - 메시지 유실 방지를 위한 Worker 최외곽 경계
             # 예기치 않은 도구/로컬 오류도 숨기지 않고 제한된 SQS 재전달 정책으로 보낸다.
@@ -286,6 +299,7 @@ class SpeakeasyWorker:
                 token,
                 delivery,
                 RetryableError("WORKER_ERROR", "Unexpected worker error"),
+                queue=active_queue,
             )
             return Outcome.RETRY
 
@@ -323,6 +337,8 @@ class SpeakeasyWorker:
         token: str | None,
         delivery: Delivery,
         error: RetryableError,
+        *,
+        queue: JobQueue | None = None,
     ) -> None:
         log_event("job_retry", job=job, message_id=delivery.message_id, code=error.code)
         if job is not None and token is not None:
@@ -338,15 +354,16 @@ class SpeakeasyWorker:
             except RetryableError:
                 log_event("retry_status_not_saved", job=job, code="DATABASE_ERROR")
                 return
-        self._defer(delivery)
+        self._defer(delivery, queue=queue)
 
-    def _defer(self, delivery: Delivery) -> None:
+    def _defer(self, delivery: Delivery, *, queue: JobQueue | None = None) -> None:
         delay = min(
             300,
             self.limits.retry_delay_seconds * (2 ** min(delivery.receive_count - 1, 4)),
         )
+        target = queue or self.queue
         try:
-            self.queue.defer(delivery, delay)
+            target.defer(delivery, delay)
         except RetryableError:
             log_event(
                 "message_defer_failed", message_id=delivery.message_id, code="SQS_ERROR"

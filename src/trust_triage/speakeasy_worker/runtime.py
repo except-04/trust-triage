@@ -56,6 +56,7 @@ class WorkerRuntime:
     repository: PostgresJobRepository
     queue: SqsQueue
     dlq: SqsQueue
+    urgent_queue: SqsQueue | None = None
 
     def check(self, max_receives: int) -> None:
         self.repository.check()
@@ -70,6 +71,16 @@ def create_runtime(config: WorkerConfig) -> WorkerRuntime:
         config.queue_url,
         wait_seconds=config.poll_seconds,
         visibility_seconds=config.limits.visibility_seconds,
+    )
+    urgent_queue = (
+        SqsQueue(
+            client,
+            config.urgent_queue_url,
+            wait_seconds=0,
+            visibility_seconds=config.limits.visibility_seconds,
+        )
+        if config.urgent_queue_url
+        else None
     )
     dlq = SqsQueue(
         client,
@@ -107,6 +118,7 @@ def create_runtime(config: WorkerConfig) -> WorkerRuntime:
     ).hexdigest()
     worker = SpeakeasyWorker(
         queue=queue,
+        urgent_queue=urgent_queue,
         repository=repository,
         samples=S3SampleStore(
             s3,
@@ -130,5 +142,10 @@ def create_runtime(config: WorkerConfig) -> WorkerRuntime:
         ),
     )
     return WorkerRuntime(
-        worker, JobPublisher(repository, queue), repository, queue, dlq
+        worker,
+        JobPublisher(repository, queue, urgent_queue=urgent_queue),
+        repository,
+        queue,
+        dlq,
+        urgent_queue=urgent_queue,
     )

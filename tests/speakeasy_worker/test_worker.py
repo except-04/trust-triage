@@ -343,3 +343,20 @@ def test_retry_after_lease_replacement_does_not_shorten_new_delivery(
     assert rig.repository.get(job.analysis_id).status == JobStatus.RUNNING
     assert not rig.queue.deferred
     assert not rig.queue.acknowledged
+
+
+def test_worker_polls_urgent_queue_first(rig, job):
+    urgent_queue = MemoryQueue()
+    rig.worker.urgent_queue = urgent_queue
+    publisher = JobPublisher(rig.repository, rig.queue, urgent_queue=urgent_queue)
+    publisher.submit(job, urgent=True)
+
+    assert len(urgent_queue.messages) == 1
+    assert len(rig.queue.messages) == 0
+
+    assert rig.worker.run_once() == Outcome.COMPLETED
+    assert len(urgent_queue.acknowledged) == 1
+    assert len(rig.queue.acknowledged) == 0
+    record = rig.repository.get(job.analysis_id)
+    assert record.status == JobStatus.COMPLETED
+
