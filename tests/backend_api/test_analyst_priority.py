@@ -1,7 +1,188 @@
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from tests.backend_api.fake_repository import MemoryAnalysisRepository
 from trust_triage.backend_api.repository import AnalysisRecord
+
+
+@pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
+@pytest.mark.parametrize("status", ["FAILED", "COMPLETED"])
+def test_reviewed_errors_remain_in_error_queue(repository_kind, status):
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    row = dict(analysis_id="reviewed-error", filename="error.exe", sha256="e" * 64,
+               created_at=datetime.now(timezone.utc), status=status,
+               initial_result={"initial_verdict": "AUTO_BENIGN", "prediction": {}},
+               error={"code": "PROCESSING_FAILED"}, is_reviewed=True)
+    if repository_kind == "postgres":
+        connection = MagicMock()
+        connection.cursor.return_value.__enter__.return_value.fetchall.return_value = [row]
+        repo = object.__new__(PostgresAnalysisRepository)
+        repo._connection = MagicMock()
+        repo._connection.return_value.__enter__.return_value = connection
+    else:
+        repo = MemoryAnalysisRepository()
+        repo.rows[row["analysis_id"]] = AnalysisRecord(
+            **{key: row[key] for key in ("analysis_id", "filename", "sha256", "status", "initial_result", "error")},
+            file_location="local", size_bytes=100, created_at=row["created_at"].isoformat())
+        repo.reviews["review"] = {"analysis_id": row["analysis_id"], "review_status": "COMPLETED"}
+    errors = [item for item in repo.get_priority_recommendations() if item["queue_name"] == "ERROR"]
+    assert len(errors) == 1
+    assert errors[0]["analysis_id"] == "reviewed-error"
+    assert errors[0]["review_status"] == "검토 완료"
+    assert errors[0]["analysis_history"][0]["error"]["code"] == "PROCESSING_FAILED"
+
+
+@pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_failed_analyses_are_not_hidden_by_same_hash_success(repository_kind, reviewed):
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    rows = [{
+        "analysis_id": identity, "filename": "same.exe", "sha256": "a" * 64,
+        "created_at": datetime(2026, 10, 15, hour, tzinfo=timezone.utc),
+        "status": "COMPLETED" if identity == "success" else "FAILED",
+        "initial_result": {"prediction": {"calibrated_probability": 0.1}, "initial_verdict": "AUTO_BENIGN"} if identity == "success" else None,
+        "error": None if identity == "success" else {"code": "PROCESSING_FAILED"},
+    } for identity, hour in [("success", 3), ("failure-two", 2), ("failure-one", 1)]]
+    if repository_kind == "postgres":
+        connection = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [dict(row, is_reviewed=reviewed and row["analysis_id"] == "success") for row in rows]
+        repo = object.__new__(PostgresAnalysisRepository)
+        repo._connection = MagicMock()
+        repo._connection.return_value.__enter__.return_value = connection
+    else:
+        repo = MemoryAnalysisRepository()
+        for row in rows:
+            repo.rows[row["analysis_id"]] = AnalysisRecord(
+                **{key: row[key] for key in ("analysis_id", "filename", "sha256", "status", "initial_result", "error")},
+                file_location="local", size_bytes=100, created_at=row["created_at"].isoformat(),
+            )
+        if reviewed:
+            repo.reviews["success-review"] = {"analysis_id": "success", "review_status": "COMPLETED"}
+    result = repo.get_priority_recommendations()
+    assert {item["analysis_id"] for item in result if item["queue_name"] == "ERROR"} == {"failure-two"}
+    grouped = next(item for item in result if item["queue_name"] == "ERROR")
+    assert {h["analysis_id"] for h in grouped["analysis_history"]} == {"success", "failure-one", "failure-two"}
+    assert grouped["analysis_count"] == 3
+    assert grouped["failure_count"] == 2
+    if not reviewed:
+        assert {item["analysis_id"] for item in result if item["queue_name"] == "AUTO"} == {"success"}
+    if repository_kind == "postgres":
+        assert "WHERE (a.initial_result" not in cursor.execute.call_args.args[0]
+
+
+def test_deep_failure_is_present_in_both_deep_and_error():
+    repo = MemoryAnalysisRepository()
+    repo.rows["deep-failure"] = AnalysisRecord(
+        analysis_id="deep-failure", filename="deep.exe", sha256="b" * 64,
+        file_location="local", size_bytes=100, status="FAILED",
+        created_at="2026-10-15T00:00:00+09:00",
+        initial_result={"initial_verdict": "HIGH_RISK_UNCERTAIN", "prediction": {"calibrated_probability": 0.8}, "triggered_signals": ["UNCERTAIN_PROBABILITY"]},
+        error={"code": "DEEP_REQUIRES_S3"},
+    )
+    result = repo.get_priority_recommendations()
+    assert {item["queue_name"] for item in result} == {"DEEP", "ERROR"}
+    assert all(item["analysis_id"] == "deep-failure" for item in result)
+    assert all(item["has_initial_result"] for item in result)
+
+
+@pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
+def test_error_queue_is_ordered_by_latest_registration(repository_kind):
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    rows = [{
+        "analysis_id": identity, "filename": f"{identity}.exe", "sha256": str(hour) * 64,
+        "initial_result": None, "status": "FAILED", "error": {"code": "PROCESSING_FAILED"},
+        "created_at": datetime(2026, 10, 15, hour, tzinfo=timezone.utc),
+    } for identity, hour in [("old", 1), ("new", 3), ("middle", 2)]]
+    if repository_kind == "postgres":
+        connection = MagicMock()
+        connection.cursor.return_value.__enter__.return_value.fetchall.return_value = rows
+        repo = object.__new__(PostgresAnalysisRepository)
+        repo._connection = MagicMock()
+        repo._connection.return_value.__enter__.return_value = connection
+    else:
+        repo = MemoryAnalysisRepository()
+        for row in rows:
+            repo.rows[row["analysis_id"]] = AnalysisRecord(
+                **{key: row[key] for key in ("analysis_id", "filename", "sha256", "initial_result", "status", "error")},
+                file_location="local", size_bytes=100, created_at=row["created_at"].isoformat(),
+            )
+    result = repo.get_priority_recommendations()
+    assert [item["analysis_id"] for item in result] == ["new", "middle", "old"]
+    assert [item["rank"] for item in result] == [1, 2, 3]
+
+
+
+
+
+
+
+
+@pytest.mark.parametrize("signals", [None, []])
+@pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
+def test_uncertain_verdict_without_signals_is_deep(signals, repository_kind):
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    repository = (
+        object.__new__(PostgresAnalysisRepository)
+        if repository_kind == "postgres"
+        else MemoryAnalysisRepository()
+    )
+    result = repository._determine_queue(
+        0.8, "HIGH_RISK_UNCERTAIN", signals or [], {}, {}
+    )
+    assert result["queue_name"] == "DEEP"
+    assert result["score_policy"] == "jrr-inconsistent-v1"
+    assert result["priority_reason"] == "초기 판정 불일치"
+
+
+@pytest.mark.parametrize("repository_kind", ["postgres", "memory"])
+def test_explicit_fail_closed_without_probability_is_deep(repository_kind):
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    repo = (object.__new__(PostgresAnalysisRepository)
+            if repository_kind == "postgres" else MemoryAnalysisRepository())
+    result = repo._determine_queue(
+        -1.0, "HIGH_RISK_UNCERTAIN", [], {"ood_score": None}, {},
+        reason_code="SYSTEM_ERROR_FAIL_CLOSED",
+    )
+    assert result["queue_name"] == "DEEP"
+    assert result["score_policy"] == "fail-closed-v1"
+    assert result["priority_score"] == 0.0
+
+
+def test_postgres_query_includes_failed_rows_without_initial_result():
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from trust_triage.backend_api.repository import PostgresAnalysisRepository
+
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [{
+        "analysis_id": "early-failure", "filename": "failed.exe", "sha256": "a" * 64,
+        "initial_result": None, "status": "FAILED",
+        "error": {"code": "JRR_OUTPUT_INVALID", "stage": "JRR"},
+        "created_at": datetime.now(timezone.utc),
+    }]
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    repo = object.__new__(PostgresAnalysisRepository)
+    repo._connection = MagicMock()
+    repo._connection.return_value.__enter__.return_value = connection
+    candidates = repo.get_priority_recommendations()
+    assert "WHERE (a.initial_result" not in cursor.execute.call_args.args[0]
+    assert candidates[0]["queue_name"] == "ERROR"
+    assert candidates[0]["initial_verdict"] is None
+    assert candidates[0]["error"]["code"] == "JRR_OUTPUT_INVALID"
 
 
 def test_uncertainty_queue_orders_by_malicious_probability_then_fifo():
@@ -118,17 +299,20 @@ def test_analyst_priority_recommendations():
     recs = repo.get_priority_recommendations()
     assert len(recs) == 4
 
-    # Check sorting: exception-v2 policy, priority_score is 0.0 for all, created_at ASC
+    # Inconsistent JRR records are deep candidates; missing probability is ERROR.
     assert recs[0]["analysis_id"] == "test-1"  # 00:00
     assert recs[1]["analysis_id"] == "test-3"  # 00:30
     assert recs[2]["analysis_id"] == "test-2"  # 01:00
     assert (
         recs[3]["analysis_id"] == "test-5"
-    )  # 00:30 but missing probability -> ERROR queue (error-v1, rank 99)
+    )
 
     assert recs[0]["rank"] == 1
     assert recs[1]["rank"] == 2
     assert recs[2]["rank"] == 3
+    assert all(item["queue_name"] == "DEEP" for item in recs[:3])
+    assert all(item["score_policy"] == "jrr-inconsistent-v1" for item in recs[:3])
+    assert recs[3]["queue_name"] == "ERROR"
 
 
 def test_budget_logic():
@@ -293,6 +477,7 @@ def test_auto_review_does_not_deduct_budget_and_no_waiting_restriction():
         initial_result={
             "prediction": {"calibrated_probability": 0.75},
             "initial_verdict": "HIGH_RISK_UNCERTAIN",
+            "triggered_signals": ["UNCERTAIN_PROBABILITY"],
         },
         created_at="2026-10-04T00:00:00+00:00",
     )

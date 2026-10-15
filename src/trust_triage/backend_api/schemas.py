@@ -17,6 +17,7 @@ from pydantic import (
 AnalysisId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+JrrReasonCode = Literal["SYSTEM_ERROR_FAIL_CLOSED", "JRR_RESULT_INCONSISTENT"]
 
 TriggeredSignal = Literal["OOD", "DISAGREEMENT", "DIFFICULTY", "UNCERTAIN_PROBABILITY"]
 
@@ -159,15 +160,15 @@ class AnalysisProgress(AnalysisIdentity):
 
 
 class Prediction(APIModel):
-    """악성 확률은 0~1 범위입니다. 예를 들어 0.72는 72%입니다."""
+    """악성 확률은 0~1 범위입니다. Fail-Closed의 신뢰할 수 없는 점수는 null입니다."""
 
-    lgbm_raw_probability: Probability = Field(
+    lgbm_raw_probability: Probability | None = Field(
         description="LightGBM 모델이 산출한 보정 전 악성 확률입니다."
     )
-    xgb_raw_probability: Probability = Field(
+    xgb_raw_probability: Probability | None = Field(
         description="비교용 XGBoost 모델이 계산한 악성 확률입니다."
     )
-    calibrated_probability: Probability = Field(
+    calibrated_probability: Probability | None = Field(
         description="LightGBM의 확률을 Calibration으로 보정한 값입니다."
     )
 
@@ -175,14 +176,14 @@ class Prediction(APIModel):
 class RiskSignals(APIModel):
     """추가 분석 필요성을 판단하는 신호입니다. 각 점수가 모두 악성 확률인 것은 아닙니다."""
 
-    disagreement: Probability = Field(
+    disagreement: Probability | None = Field(
         description="두 모델의 악성 확률 차이입니다. 클수록 두 모델의 의견 차이가 큽니다."
     )
-    ood_score: float = Field(
+    ood_score: float | None = Field(
         allow_inf_nan=False,
         description="Isolation Forest decision_function 원값. 음수도 정상적인 값입니다.",
     )
-    difficulty_score: float = Field(
+    difficulty_score: float | None = Field(
         ge=0,
         allow_inf_nan=False,
         description="정적 Feature에서 계산한 분석 난이도 신호입니다. 악성 확률이 아닙니다.",
@@ -216,12 +217,23 @@ class TopFeature(APIModel):
     )
 
 
+class JrrError(APIModel):
+    code: Literal["JRR_RESULT_INCONSISTENT"]
+    message: str
+    original_verdict: InitialVerdict
+    original_route: Literal["FINAL", "DEEP_ANALYSIS"]
+    original_triggered_signals: TriggeredSignals | None
+    original_reason: str
+
+
 class InitialResult(APIModel):
     prediction: Prediction
     risk_signals: RiskSignals
     initial_verdict: InitialVerdict
     route: Literal["FINAL", "DEEP_ANALYSIS"]
     reason: str
+    reason_code: JrrReasonCode | None = None
+    jrr_error: JrrError | None = None
     triggered_signals: TriggeredSignals | None = Field(
         default=None, description=_SIGNALS_DESCRIPTION
     )
@@ -229,6 +241,33 @@ class InitialResult(APIModel):
     feature_metadata: dict[str, Any] = Field(default_factory=dict)
     xai_status: Literal["SUCCESS", "FAILED", "NOT_REQUIRED"] = "NOT_REQUIRED"
     xai_error: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_score_availability(self):
+        if self.reason_code == "JRR_RESULT_INCONSISTENT" or self.jrr_error is not None:
+            if (
+                self.reason_code != "JRR_RESULT_INCONSISTENT"
+                or self.jrr_error is None
+                or self.initial_verdict != "HIGH_RISK_UNCERTAIN"
+                or self.route != "DEEP_ANALYSIS"
+                or self.triggered_signals != []
+            ):
+                raise ValueError("Invalid JRR recovery result")
+        if self.reason_code == "SYSTEM_ERROR_FAIL_CLOSED":
+            if (
+                self.initial_verdict != "HIGH_RISK_UNCERTAIN"
+                or self.route != "DEEP_ANALYSIS"
+                or self.triggered_signals != []
+                or self.prediction.calibrated_probability is not None
+            ):
+                raise ValueError("Invalid Fail-Closed result")
+        elif any(
+            value is None
+            for scores in (self.prediction, self.risk_signals)
+            for value in scores.model_dump().values()
+        ):
+            raise ValueError("Missing scores require an explicit Fail-Closed reason")
+        return self
 
 
 class TriageResponse(AnalysisIdentity):
@@ -254,6 +293,8 @@ class TriageResponse(AnalysisIdentity):
     reason: str | None = Field(
         default=None, description="JRR이 이 경로를 선택한 이유입니다."
     )
+    reason_code: JrrReasonCode | None = None
+    jrr_error: JrrError | None = None
     triggered_signals: TriggeredSignals | None = Field(
         default=None, description=_SIGNALS_DESCRIPTION
     )
@@ -405,6 +446,8 @@ class AnalysisResponse(AnalysisProgress):
     initial_verdict: InitialVerdict | None = None
     route: Literal["FINAL", "DEEP_ANALYSIS"] | None = None
     reason: str | None = None
+    reason_code: JrrReasonCode | None = None
+    jrr_error: JrrError | None = None
     triggered_signals: TriggeredSignals | None = Field(
         default=None, description=_SIGNALS_DESCRIPTION
     )
@@ -652,9 +695,19 @@ class PriorityCandidate(APIModel):
         default=None, description="긴급 대응 관측 확실성 레벨 (1: Speakeasy 동적, 2: CAPA 정적)"
     )
     initial_verdict: InitialVerdict | None = None
+    reason_code: JrrReasonCode | None = None
+    jrr_error: JrrError | None = None
+    error: dict[str, Any] | None = None
     triggered_signals: TriggeredSignals | None = None
     review_status: str | None = Field(default=None, description="검토 상태")
     created_at: AwareDatetime | None = None
+    status: AnalysisStatus | None = None
+    has_initial_result: bool = True
+    analysis_count: int = 1
+    failure_count: int = 0
+    jrr_error_count: int = 0
+    analysis_history: list[dict[str, Any]] = Field(default_factory=list)
+
 
 
 class PriorityRecommendationResponse(APIModel):

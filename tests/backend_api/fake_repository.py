@@ -146,10 +146,27 @@ class MemoryAnalysisRepository:
         self.is_unlimited = is_unlimited
 
     def _determine_queue(
-        self, prob_float, initial_verdict, triggered_signals, risk_signals, deep_result
+        self, prob_float, initial_verdict, triggered_signals, risk_signals, deep_result,
+        reason_code=None, status=None, error=None,
     ):
         # We copy exactly the logic from repository.py
-        if prob_float < 0.0:
+        if status == "FAILED" and initial_verdict is None:
+            error = error or {}
+            return {
+                "queue_name": "ERROR",
+                "queue_reason": f"초기 분석 실패: {error.get('code', 'UNKNOWN_ERROR')}",
+                "priority_score": -1.0,
+                "score_policy": "error-v1",
+                "priority_reason": "초기 분석 실패",
+                "selection_reason": "초기 결과 저장 전 실패한 분석 확인 필요",
+            }
+        fail_closed = (
+            reason_code == "SYSTEM_ERROR_FAIL_CLOSED"
+            and initial_verdict == "HIGH_RISK_UNCERTAIN"
+            and not triggered_signals
+            and prob_float < 0.0
+        )
+        if prob_float < 0.0 and not fail_closed:
             return {
                 "queue_name": "ERROR",
                 "queue_reason": "비정상/누락된 악성 확률 값",
@@ -183,13 +200,38 @@ class MemoryAnalysisRepository:
         is_deep = False
         deep_reasons = []
         deep_priority_score = 0.0
-        deep_score_policy = "exception-v2"
-        deep_priority_reason = "신호 미감지"
+        deep_score_policy = "none"
+        deep_priority_reason = ""
         deep_queue_reason = ""
 
-        raw_ood = float(risk_signals.get("ood_score", 0))
-        disagreement = float(risk_signals.get("disagreement", 0))
-        difficulty = float(risk_signals.get("difficulty_score", 0))
+        if fail_closed and not is_emergency:
+            return {
+                "queue_name": "DEEP",
+                "queue_reason": "모델 확률이나 위험 점수가 유효하지 않아 심층 분석 필요",
+                "priority_score": 0.0,
+                "deep_priority_score": 0.0,
+                "score_policy": "fail-closed-v1",
+                "priority_reason": "점수 계산 오류",
+                "selection_reason": "점수 계산 오류로 심층 분석 필요",
+            }
+        inconsistent = (
+            reason_code == "JRR_RESULT_INCONSISTENT"
+            or (initial_verdict == "HIGH_RISK_UNCERTAIN" and not triggered_signals and not fail_closed)
+            or (initial_verdict in {"AUTO_BENIGN", "AUTO_MALICIOUS"} and bool(triggered_signals))
+        )
+        if inconsistent and not is_emergency:
+            return {
+                "queue_name": "DEEP",
+                "queue_reason": "초기 판정과 위험 신호 또는 처리 경로 불일치",
+                "priority_score": 0.0,
+                "deep_priority_score": 0.0,
+                "score_policy": "jrr-inconsistent-v1",
+                "priority_reason": "초기 판정 불일치",
+                "selection_reason": "JRR 오류 이력 확인 및 분석가 검토 필요",
+            }
+        raw_ood = float(risk_signals.get("ood_score") or 0)
+        disagreement = float(risk_signals.get("disagreement") or 0)
+        difficulty = float(risk_signals.get("difficulty_score") or 0)
 
         has_uncertainty = "UNCERTAIN_PROBABILITY" in triggered_signals
         has_disagreement = "DISAGREEMENT" in triggered_signals
@@ -227,12 +269,15 @@ class MemoryAnalysisRepository:
                 deep_score_policy = "difficulty-v2"
                 deep_priority_reason = "분석 난이도"
                 deep_queue_reason = f"PE 구조 경고 점수 {int(difficulty)}"
-        elif initial_verdict == "HIGH_RISK_UNCERTAIN":
-            is_deep = True
-            deep_priority_score = 0.0
-            deep_score_policy = "exception-v2"
-            deep_priority_reason = "신호 미감지"
-            deep_queue_reason = "위험 신호 없는 불확실 파일"
+        elif initial_verdict == "HIGH_RISK_UNCERTAIN" and not is_emergency:
+            return {
+                "queue_name": "ERROR",
+                "queue_reason": "불확실 판정의 위험 신호 기록이 없거나 비어 있음",
+                "priority_score": -1.0,
+                "score_policy": "error-v1",
+                "priority_reason": "초기 판정과 위험 신호 불일치",
+                "selection_reason": "판정 데이터 오류 확인 필요",
+            }
 
         queue_name = "UNKNOWN"
         queue_reason = ""
@@ -305,12 +350,8 @@ class MemoryAnalysisRepository:
         )
 
         for record in sorted_rows:
-            if record.sha256 in seen_sha256:
-                continue
-            if record.sha256 in completed_hashes:
-                continue
-
-            if record.initial_result is None:
+            failed = record.status == "FAILED"
+            if record.initial_result is None and record.status != "FAILED":
                 continue
 
             completed = any(
@@ -319,8 +360,6 @@ class MemoryAnalysisRepository:
                 for rev_list in self.reviews.values()
                 for r in (rev_list if isinstance(rev_list, list) else [rev_list])
             )
-            if completed:
-                continue
 
             is_pending = any(
                 r.get("analysis_id") == record.analysis_id
@@ -329,16 +368,18 @@ class MemoryAnalysisRepository:
                 for r in (rev_list if isinstance(rev_list, list) else [rev_list])
             )
 
-            seen_sha256.add(record.sha256)
 
-            initial_result = record.initial_result
+            if not failed:
+                seen_sha256.add(record.sha256)
+
+            initial_result = record.initial_result or {}
             deep_result = record.deep_result or {}
 
             initial_verdict = initial_result.get("initial_verdict")
             triggered_signals = initial_result.get("triggered_signals") or []
             risk_signals = initial_result.get("risk_signals") or {}
 
-            pred = record.initial_result.get("prediction", {})
+            pred = initial_result.get("prediction", {})
             prob = pred.get("calibrated_probability")
             try:
                 if prob is None or prob == "":
@@ -362,8 +403,12 @@ class MemoryAnalysisRepository:
                 triggered_signals,
                 risk_signals,
                 deep_result,
+                reason_code=initial_result.get("reason_code"),
+                status=record.status, error=record.error,
             )
-            if q["queue_name"] == "UNKNOWN":
+            if q["queue_name"] == "UNKNOWN" and not failed:
+                continue
+            if completed and not failed and q["queue_name"] != "ERROR":
                 continue
 
             candidates.append(
@@ -383,12 +428,34 @@ class MemoryAnalysisRepository:
                     "emergency_obs_level": q.get("emergency_obs_level"),
                     "_emergency_level": q.get("_emergency_level", 99),
                     "_emergency_obs_level": q.get("_emergency_obs_level", 99),
-                    "initial_verdict": record.initial_result.get("initial_verdict"),
-                    "triggered_signals": record.initial_result.get("triggered_signals"),
-                    "review_status": "검토 중" if is_pending else "검토 필요",
+                    "initial_verdict": initial_result.get("initial_verdict"),
+                    "reason_code": initial_result.get("reason_code"),
+                    "triggered_signals": initial_result.get("triggered_signals"),
+                    "jrr_error": initial_result.get("jrr_error"),
+                    "error": record.error,
+                    "status": record.status,
+                    "has_initial_result": bool(initial_result),
+                    "review_status": "검토 완료" if completed else "검토 중" if is_pending else "검토 필요",
                     "created_at": record.created_at,
                 }
             )
+            if failed:
+                from trust_triage.backend_api.failure_queue import expose_failed_candidate
+
+                candidates.extend(expose_failed_candidate(candidates.pop()))
+
+        from trust_triage.backend_api.queue_grouping import group_candidates
+
+        history = {}
+        for record in sorted_rows:
+            initial = record.initial_result or {}
+            history.setdefault(record.sha256, []).append({
+                "analysis_id": record.analysis_id, "created_at": record.created_at,
+                "status": record.status, "error": record.error,
+                "reason_code": initial.get("reason_code"), "jrr_error": initial.get("jrr_error"),
+                "has_initial_result": bool(initial),
+            })
+        candidates = group_candidates(candidates, history)
 
         def policy_rank(policy):
             order = {
@@ -396,7 +463,8 @@ class MemoryAnalysisRepository:
                 "disagreement-v2": 1,
                 "ood-v2": 2,
                 "difficulty-v2": 3,
-                "exception-v2": 4,
+                "fail-closed-v1": 4,
+                "jrr-inconsistent-v1": 5,
                 "probability-v1": 5,
                 "error-v1": 99,
             }
@@ -409,7 +477,7 @@ class MemoryAnalysisRepository:
 
                 created_dt = datetime.fromisoformat(created_dt)
 
-            if x["queue_name"] == "AUTO":
+            if x["queue_name"] in {"AUTO", "ERROR"}:
                 return (
                     x["queue_name"],
                     0,

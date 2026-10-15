@@ -52,6 +52,125 @@ def upload(client, **kwargs):
     )
 
 
+def test_fail_closed_scores_and_reason_survive_http_and_queue(api):
+    client, service = api
+    identity = upload(client).json()["analysis_id"]
+    value = initial_result("HIGH_RISK_UNCERTAIN")
+    value.update(reason_code="SYSTEM_ERROR_FAIL_CLOSED", triggered_signals=[])
+    value["prediction"] = {key: None for key in value["prediction"]}
+    value["risk_signals"] = {key: None for key in value["risk_signals"]}
+    service.repository.rows[identity] = replace(
+        service.repository.rows[identity], initial_result=value
+    )
+    for suffix in ("", "/triage"):
+        response = client.get(f"/analyses/{identity}{suffix}")
+        assert response.status_code == 200, response.text
+        assert response.json()["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+        assert response.json()["prediction"]["calibrated_probability"] is None
+    response = client.get("/analyst/recommendations")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["error_queue"] == []
+    item = (payload["deep_recommendations"] + payload["deep_waiting"])[0]
+    assert item["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+    assert item["score_policy"] == "fail-closed-v1"
+    assert item["calibrated_probability"] is None
+
+
+def test_failed_without_initial_result_is_exposed_by_error_queue_http(api):
+    client, service = api
+    identity = upload(client).json()["analysis_id"]
+    service.repository.rows[identity] = replace(
+        service.repository.rows[identity], status="FAILED", phase="DONE",
+        error={"code": "JRR_OUTPUT_INVALID", "stage": "INITIAL_JRR", "message": "Invalid JRR output"},
+    )
+    response = client.get("/analyst/recommendations")
+    assert response.status_code == 200, response.text
+    item = response.json()["error_queue"][0]
+    assert item["analysis_id"] == identity
+    assert item["initial_verdict"] is None
+    assert item["error"]["code"] == "JRR_OUTPUT_INVALID"
+    detail = client.get(f"/analyses/{identity}")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "FAILED"
+    assert detail.json()["prediction"] is None
+
+
+def test_jrr_inconsistency_history_survives_http_and_deep_queue(api):
+    from trust_triage.backend_api.jrr_contract import recover_jrr_inconsistency
+
+    client, service = api
+    identity = upload(client).json()["analysis_id"]
+    original = initial_result("AUTO_BENIGN")
+    original["triggered_signals"] = ["OOD"]
+    recovered = recover_jrr_inconsistency(original)
+    service.repository.rows[identity] = replace(
+        service.repository.rows[identity], initial_result=recovered
+    )
+    for suffix in ("", "/triage"):
+        response = client.get(f"/analyses/{identity}{suffix}")
+        assert response.status_code == 200, response.text
+        assert response.json()["jrr_error"]["original_verdict"] == "AUTO_BENIGN"
+        assert response.json()["jrr_error"]["original_triggered_signals"] == ["OOD"]
+    response = client.get("/analyst/recommendations")
+    assert response.status_code == 200
+    item = response.json()["deep_recommendations"][0]
+    assert item["score_policy"] == "jrr-inconsistent-v1"
+    assert item["jrr_error"] == recovered["jrr_error"]
+
+
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_failures_survive_same_hash_success_and_review_in_http(api, reviewed):
+    client, service = api
+    ids = [upload(client).json()["analysis_id"] for _ in range(3)]
+    for identity in ids[:2]:
+        service.repository.rows[identity] = replace(
+            service.repository.rows[identity], status="FAILED", phase="DONE",
+            error={"code": "PROCESSING_FAILED", "stage": "INITIAL_ANALYSIS"},
+        )
+    success = ids[2]
+    service.repository.rows[success] = replace(
+        service.repository.rows[success], status="COMPLETED", phase="DONE",
+        initial_result=initial_result("AUTO_BENIGN"),
+    )
+    if reviewed:
+        review = client.patch(f"/analyses/{success}/verdict", json={
+            "analyst_final_verdict": "BENIGN", "reviewer_id": "tester", "expected_revision": 0
+        })
+        assert review.status_code == 200, review.text
+        completed = client.get("/analyses", params={"reviewed_only": True}).json()
+        assert any(item["analysis_id"] == success for item in completed["analyses"])
+    response = client.get("/analyst/recommendations")
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(result["error_queue"]) == 1
+    grouped = result["error_queue"][0]
+    assert grouped["failure_count"] == 2
+    assert grouped["analysis_count"] == 3
+    assert {h["analysis_id"] for h in grouped["analysis_history"]} == set(ids)
+    assert all(not item["has_initial_result"] for item in result["error_queue"])
+    if not reviewed:
+        assert any(item["analysis_id"] == success for item in result["auto_queue"])
+
+
+def test_deep_failure_http_is_visible_in_both_tabs(api):
+    client, service = api
+    identity = upload(client).json()["analysis_id"]
+    service.repository.rows[identity] = replace(
+        service.repository.rows[identity], status="FAILED", phase="DONE",
+        initial_result=initial_result("HIGH_RISK_UNCERTAIN"),
+        error={"code": "DEEP_REQUIRES_S3", "stage": "CAPA_FLOSS"},
+    )
+    response = client.get("/analyst/recommendations")
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["deep_recommendations"][0]["analysis_id"] == identity
+    assert result["error_queue"][0]["analysis_id"] == identity
+    assert result["error_queue"][0]["has_initial_result"] is True
+
+
+
+
 def test_upload_and_all_read_routes_are_read_only(api):
     client, service = api
     response = upload(client)

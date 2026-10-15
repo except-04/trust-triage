@@ -230,8 +230,11 @@ def test_emergency_queue_logic():
 
     # emergency: test-both, test-tie-2, test-tie-1, test-ransom-dyn, test-data-dest-static
     assert len(emergency) == 5
-    # deep: test-impact-only, test-inhibit-attempt, test-candidate-encrypt
+    # Inconsistent verdicts still receive deep analysis without emergency rank.
     assert len(deep) == 3
+    assert {r["analysis_id"] for r in deep} == {
+        "test-impact-only", "test-inhibit-attempt", "test-candidate-encrypt"
+    }
 
     assert emergency[0]["analysis_id"] == "test-both"
     assert emergency[1]["analysis_id"] == "test-tie-2"

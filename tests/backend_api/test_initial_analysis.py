@@ -29,6 +29,30 @@ from trust_triage.feature_extraction import (
 SHA256 = "b" * 64
 
 
+@pytest.mark.parametrize("position", range(4))
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_router_fail_closed_has_explicit_reason_and_json_safe_scores(position, value):
+    import json
+
+    scores = [0.1, 0.0, 0.1, 0.0]
+    scores[position] = value
+    output = JointRiskRouter().route_sample(*scores)
+    assert output["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+    assert output["route"] == "DEEP_ANALYSIS"
+    assert output["triggered_signals"] == []
+    assert output["calibrated_probability"] is None
+    json.dumps(output, allow_nan=False)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_invalid_ood_output_fails_closed(components, value):
+    result, bundle = components
+    bundle = replace(bundle, ood_model=SimpleNamespace(decision_function=lambda matrix: [value]))
+    output, _ = module._predict_initial(result, bundle, SHA256)
+    assert output["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+    assert output["risk_signals"]["ood_score"] is None
+
+
 class ProbabilityDouble:
     def __init__(self, probability):
         self.probability = probability
@@ -156,8 +180,6 @@ def test_jrr_preserves_all_triggered_signals_and_first_reason(components):
 @pytest.mark.parametrize(
     "fields",
     [
-        {},
-        {"triggered_signals": None},
         {"triggered_signals": "OOD"},
         {"triggered_signals": ("OOD",)},
         {"triggered_signals": ["SYSTEM_ERROR"]},
@@ -188,9 +210,24 @@ def test_automatic_jrr_verdict_cannot_discard_triggered_risk(
     routed = bundle.router.route_sample(probability, 0.0, 0.1, 0.0)
     routed["triggered_signals"] = ["OOD"]
     monkeypatch.setattr(bundle.router, "route_sample", lambda *args: routed)
-    with pytest.raises(BackendError) as error:
-        module._predict_initial(result, bundle, SHA256)
-    assert error.value.code == "JRR_OUTPUT_INVALID"
+    output, _ = module._predict_initial(result, bundle, SHA256)
+    assert output["route"] == "DEEP_ANALYSIS"
+    assert output["reason_code"] == "JRR_RESULT_INCONSISTENT"
+    assert output["jrr_error"]["original_verdict"] == routed["initial_verdict"]
+    assert output["jrr_error"]["original_triggered_signals"] == ["OOD"]
+
+
+@pytest.mark.parametrize("signals", [None, []])
+def test_uncertain_jrr_without_signals_preserves_error_and_routes_deep(components, monkeypatch, signals):
+    result, bundle = components
+    routed = bundle.router.route_sample(0.8, 0.0, 0.1, 0.0)
+    routed["triggered_signals"] = signals
+    monkeypatch.setattr(bundle.router, "route_sample", lambda *args: routed)
+    output, _ = module._predict_initial(result, bundle, SHA256)
+    assert output["reason_code"] == "JRR_RESULT_INCONSISTENT"
+    assert output["route"] == "DEEP_ANALYSIS"
+    assert output["jrr_error"]["original_triggered_signals"] == signals
+    InitialResult.model_validate({**output, "xai_status": "NOT_REQUIRED"})
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
@@ -231,23 +268,29 @@ def test_extraction_contract_failures_prevent_model_calls(
 @pytest.mark.parametrize(
     "prediction", [[[0.2, np.nan]], [[-0.1, 1.1]], [[0.2, 0.2]], [0.2, 0.8], [[0.5]]]
 )
-def test_invalid_model_probabilities_are_not_routed(components, prediction):
+def test_invalid_model_probabilities_fail_closed(components, prediction):
     result, bundle = components
     bundle = replace(
         bundle, lgbm=SimpleNamespace(predict_proba=lambda matrix: prediction)
     )
-    with pytest.raises(BackendError) as error:
-        module._predict_initial(result, bundle, SHA256)
-    assert error.value.code == "MODEL_OUTPUT_INVALID"
+    output, _ = module._predict_initial(result, bundle, SHA256)
+    assert output["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+    assert output["route"] == "DEEP_ANALYSIS"
+    assert output["triggered_signals"] == []
+    assert output["prediction"]["calibrated_probability"] is None
+    InitialResult.model_validate({**output, "xai_status": "NOT_REQUIRED"})
 
 
 @pytest.mark.parametrize("probability", [np.nan, np.inf, -0.1, 1.1])
-def test_invalid_calibration_output_is_explicit(components, probability):
+def test_invalid_calibration_output_fails_closed(components, probability):
     result, bundle = components
     bundle.calibrator.probability = probability
-    with pytest.raises(BackendError) as error:
-        module._predict_initial(result, bundle, SHA256)
-    assert error.value.code == "CALIBRATION_OUTPUT_INVALID"
+    output, _ = module._predict_initial(result, bundle, SHA256)
+    assert output["reason_code"] == "SYSTEM_ERROR_FAIL_CLOSED"
+    assert output["initial_verdict"] == "HIGH_RISK_UNCERTAIN"
+    assert output["triggered_signals"] == []
+    assert all(v is None for v in output["prediction"].values())
+    InitialResult.model_validate({**output, "xai_status": "NOT_REQUIRED"})
 
 
 def test_component_exception_is_sanitized_and_has_stage(components):
