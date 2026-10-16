@@ -2340,17 +2340,19 @@ def render_input_view():
     if blocking:
         input_panel.error(blocking)
 
-    btn_col1, btn_col2 = input_panel.columns([1, 1])
+    btn_col1, btn_col2 = input_panel.columns([2, 1])
     normal_clicked = btn_col1.button(
         "일반 분석 시작",
+        type="primary",
         use_container_width=True,
         disabled=not file_descriptors or bool(blocking),
     )
     urgent_clicked = btn_col2.button(
         "긴급 우선 분석",
-        type="primary",
+        type="secondary",
         use_container_width=True,
         disabled=not file_descriptors or bool(blocking),
+        help="침해사고 의심 등 즉각 조치가 필요한 고위험 파일 전용",
     )
 
     if normal_clicked or urgent_clicked:
