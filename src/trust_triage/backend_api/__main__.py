@@ -49,6 +49,12 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--limit", type=int, default=10, help="한 회차에 처리할 작업 수 (1~100)"
     )
+    run.add_argument(
+        "--priority",
+        choices=["NORMAL", "URGENT"],
+        default=None,
+        help="특정 우선순위 작업만 전담 처리 (생략 시 URGENT 우선 후 NORMAL 처리)",
+    )
     cleanup = commands.add_parser(
         "cleanup", help="보관 기간이 지난 종료 작업의 원본 정리"
     )
@@ -160,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
                 while not stop.is_set():
                     try:
                         rows = processor.resume_ready(
-                            args.limit, should_stop=stop.is_set
+                            args.limit,
+                            priority=args.priority,
+                            should_stop=stop.is_set,
                         )
                         if args.once:
                             print(

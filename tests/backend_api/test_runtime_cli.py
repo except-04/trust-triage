@@ -217,8 +217,8 @@ def test_run_once_and_cleanup_modes(monkeypatch, capsys):
     )
     processor = SimpleNamespace(
         close=lambda: calls.append("close"),
-        resume_ready=lambda limit, *, should_stop: (
-            calls.append((limit, should_stop())) or []
+        resume_ready=lambda limit, *, priority=None, should_stop: (
+            calls.append((limit, priority, should_stop())) or []
         ),
     )
     monkeypatch.setattr(runtime, "create_service", lambda config: service)
@@ -226,8 +226,10 @@ def test_run_once_and_cleanup_modes(monkeypatch, capsys):
     previous = signal.getsignal(signal.SIGINT)
     assert cli.main(["run", "--once", "--limit", "2"]) == 0
     assert signal.getsignal(signal.SIGINT) == previous
-    assert (2, False) in calls
-    assert calls.count("close") == 1
+    assert (2, None, False) in calls
+    assert cli.main(["run", "--once", "--limit", "2", "--priority", "URGENT"]) == 0
+    assert (2, "URGENT", False) in calls
+    assert calls.count("close") == 2
     assert cli.main(["cleanup"]) == 0
     assert calls[-1] == {"limit": 100, "delete": False, "after": None}
     cursor = {"completed_at": "2026-09-08T00:00:00+00:00", "analysis_id": "run_1"}
@@ -254,7 +256,7 @@ def test_run_stops_and_restores_signal_handlers(monkeypatch, sig):
             restored.append((sig, handler))
         return "original"
 
-    def process(limit, *, should_stop):
+    def process(limit, *, priority=None, should_stop):
         callbacks[sig](sig, None)
         assert should_stop()
         return []

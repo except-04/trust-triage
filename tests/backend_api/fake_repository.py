@@ -699,20 +699,27 @@ class MemoryAnalysisRepository:
             and (retry is None or retry <= self.now)
         )
 
-    def pending_ids(self, limit=10):
+    def pending_ids(self, limit=10, *, priority=None):
         self._fault("pending_ids")
+        if priority is not None and priority not in {"NORMAL", "URGENT"}:
+            raise ValueError("priority must be NORMAL or URGENT")
         with self._lock:
             return [
                 row.analysis_id
                 for row in sorted(
                     self.rows.values(),
                     key=lambda row: (
+                        getattr(row, "priority", "NORMAL") != "URGENT",
                         row.phase == "WAITING_DEEP",
                         row.updated_at,
                         row.analysis_id,
                     ),
                 )
                 if self._ready(row)
+                and (
+                    priority is None
+                    or getattr(row, "priority", "NORMAL") == priority
+                )
             ][:limit]
 
     def claim(self, analysis_id, lease_seconds):

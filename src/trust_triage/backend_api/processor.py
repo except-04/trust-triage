@@ -420,13 +420,13 @@ class BackendProcessor:
         return self.repository.get(analysis_id)
 
     def resume_ready(
-        self, limit: int = 10, *, should_stop=None
+        self, limit: int = 10, *, priority: str | None = None, should_stop=None
     ) -> list[AnalysisRecord]:
         values = []
-        for analysis_id in self.repository.pending_ids(limit):
+        for analysis_id in self.repository.pending_ids(limit, priority=priority):
             if should_stop is not None and should_stop():
                 break
             values.append(self.resume(analysis_id))
-        if should_stop is None or not should_stop():
+        if priority is None and (should_stop is None or not should_stop()):
             self.deep.reconcile(limit, should_stop=should_stop)
         return values
